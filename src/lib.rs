@@ -7,9 +7,11 @@
 //! string-based responses from LLM APIs.
 
 pub mod extract;
+pub mod intent;
 pub mod prompt;
 
 pub use extract::FlexibleExtractor;
+pub use intent::{IntentError, IntentExtractor, PromptBasedExtractor};
 pub use prompt::ToPrompt;
 
 use extract::ParseError;

@@ -23,6 +23,7 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 |---|---|---|---|
 | **Content Extraction** | Safely extracting structured data (like JSON) from unstructured LLM responses. | `extract` module (`FlexibleExtractor`, `extract_json`) | Implemented |
 | **Prompt Generation** | Building complex and type-safe prompts from Rust data structures. | `prompt` module (`ToPrompt` trait) | Implemented |
+| **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentExtractor`, `PromptBasedExtractor`) | Implemented |
 | **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
 
 3.  **Minimal Dependencies:**

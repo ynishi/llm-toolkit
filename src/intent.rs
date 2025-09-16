@@ -1,5 +1,6 @@
 //! Traits and implementations for extracting structured intents from LLM responses.
 
+use crate::extract::core::ContentExtractor;
 use crate::extract::FlexibleExtractor;
 use std::str::FromStr;
 use thiserror::Error;
@@ -65,5 +66,64 @@ where
         T::from_str(&extracted_str).map_err(|_| IntentError::ParseFailed {
             value: extracted_str.to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, PartialEq)]
+    enum TestIntent {
+        Login,
+        Logout,
+    }
+
+    impl FromStr for TestIntent {
+        type Err = String;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s {
+                "Login" => Ok(TestIntent::Login),
+                "Logout" => Ok(TestIntent::Logout),
+                _ => Err(format!("Unknown intent: {}", s)),
+            }
+        }
+    }
+
+    #[test]
+    fn test_extract_intent_success() {
+        let extractor = PromptBasedExtractor::new("intent");
+        let text = "<intent>Login</intent>";
+        let result: Result<TestIntent, _> = IntentExtractor::extract_intent(&extractor, text);
+        assert_eq!(result.unwrap(), TestIntent::Login);
+    }
+
+    #[test]
+    fn test_extract_intent_tag_not_found() {
+        let extractor = PromptBasedExtractor::new("intent");
+        let text = "No intent tag here";
+        let result: Result<TestIntent, _> = IntentExtractor::extract_intent(&extractor, text);
+        
+        match result {
+            Err(IntentError::TagNotFound { tag }) => {
+                assert_eq!(tag, "intent");
+            }
+            _ => panic!("Expected TagNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_extract_intent_parse_failed() {
+        let extractor = PromptBasedExtractor::new("intent");
+        let text = "<intent>Invalid</intent>";
+        let result: Result<TestIntent, _> = IntentExtractor::extract_intent(&extractor, text);
+        
+        match result {
+            Err(IntentError::ParseFailed { value }) => {
+                assert_eq!(value, "Invalid");
+            }
+            _ => panic!("Expected ParseFailed error"),
+        }
     }
 }
