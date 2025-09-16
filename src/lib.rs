@@ -6,6 +6,9 @@
 //! strongly-typed Rust application and the unstructured, often unpredictable
 //! string-based responses from LLM APIs.
 
+#[cfg(feature = "derive")]
+pub use llm_toolkit_macros::ToPrompt;
+
 pub mod extract;
 pub mod intent;
 pub mod prompt;
@@ -95,14 +98,16 @@ mod tests {
         assert_eq!(result1.unwrap(), "let x = 42;");
 
         // Test code block with specific language (rust)
-        let text2 = "Here's Rust code:\n```rust\nfn main() {\n    println!(\"Hello\");\n}\n```";
+        let text2 = "Here's Rust code:\n```rust\nfn main() {
+    println!(\"Hello\");
+}
+```";
         let result2 = extract_markdown_block_with_lang(text2, "rust");
         assert!(result2.is_ok());
         assert_eq!(result2.unwrap(), "fn main() {\n    println!(\"Hello\");\n}");
 
         // Test extracting rust block when json block is also present
-        let text3 = r#"
-First a JSON block:
+        let text3 = r#"\nFirst a JSON block:
 ```json
 {"key": "value"}
 ```
@@ -122,8 +127,7 @@ let data = vec![1, 2, 3];
         assert!(result4.is_err());
 
         // Test with messy surrounding text and newlines
-        let text5 = r#"
-Lots of text before...
+        let text5 = r#"\nLots of text before...
 
 
    ```python
@@ -137,6 +141,9 @@ And more text after with various spacing.
 "#;
         let result5 = extract_markdown_block_with_lang(text5, "python");
         assert!(result5.is_ok());
-        assert_eq!(result5.unwrap(), "def hello():\n    print(\"world\")\n    return True");
+        assert_eq!(
+            result5.unwrap(),
+            "def hello():\n    print(\"world\")\n    return True"
+        );
     }
 }

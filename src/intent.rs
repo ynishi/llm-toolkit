@@ -1,7 +1,7 @@
 //! Traits and implementations for extracting structured intents from LLM responses.
 
-use crate::extract::core::ContentExtractor;
 use crate::extract::FlexibleExtractor;
+use crate::extract::core::ContentExtractor;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -104,7 +104,7 @@ mod tests {
         let extractor = PromptBasedExtractor::new("intent");
         let text = "No intent tag here";
         let result: Result<TestIntent, _> = IntentExtractor::extract_intent(&extractor, text);
-        
+
         match result {
             Err(IntentError::TagNotFound { tag }) => {
                 assert_eq!(tag, "intent");
@@ -118,7 +118,7 @@ mod tests {
         let extractor = PromptBasedExtractor::new("intent");
         let text = "<intent>Invalid</intent>";
         let result: Result<TestIntent, _> = IntentExtractor::extract_intent(&extractor, text);
-        
+
         match result {
             Err(IntentError::ParseFailed { value }) => {
                 assert_eq!(value, "Invalid");

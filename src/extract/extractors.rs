@@ -198,6 +198,12 @@ pub struct MarkdownCodeBlockExtractor {
     pub language: Option<String>,
 }
 
+impl Default for MarkdownCodeBlockExtractor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MarkdownCodeBlockExtractor {
     /// Create a new extractor for any code block
     pub fn new() -> Self {
@@ -224,9 +230,8 @@ impl MarkdownCodeBlockExtractor {
             r"(?m)^\s*```[^\n]*\n((?:.*\n)*?)^\s*```\s*$".to_string()
         };
 
-        let regex = Regex::new(&pattern).map_err(|e| {
-            ParseError::InvalidFormat(format!("Failed to compile regex: {}", e))
-        })?;
+        let regex = Regex::new(&pattern)
+            .map_err(|e| ParseError::InvalidFormat(format!("Failed to compile regex: {}", e)))?;
 
         if let Some(captures) = regex.captures(text) {
             if let Some(content) = captures.get(1) {

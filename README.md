@@ -17,24 +17,89 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 2.  **Focused on the "Last Mile Problem":**
     The toolkit focuses on solving the most common and frustrating problems that occur at the boundary between a strongly-typed Rust application and the unstructured, often unpredictable string-based responses from LLM APIs.
 
+3.  **Minimal Dependencies:**
+    The toolkit will have minimal dependencies (primarily `serde` and `minijinja`) to ensure it can be added to any Rust project with negligible overhead and maximum compatibility.
+
 ## Features
 
 | Feature Area | Description | Key Components | Status |
 |---|---|---|---|
 | **Content Extraction** | Safely extracting structured data (like JSON) from unstructured LLM responses. | `extract` module (`FlexibleExtractor`, `extract_json`) | Implemented |
-| **Prompt Generation** | Building complex and type-safe prompts from Rust data structures. | `prompt` module (`ToPrompt` trait) | Implemented |
+| **Prompt Generation** | Building complex prompts from Rust data structures with a powerful templating engine. | `prompt!` macro, `#[derive(ToPrompt)]` | Implemented |
 | **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentExtractor`, `PromptBasedExtractor`) | Implemented |
 | **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
 
-3.  **Minimal Dependencies:**
-    The toolkit will have minimal dependencies (likely only `serde` and `serde_json`) to ensure it can be added to any Rust project with negligible overhead and maximum compatibility.
+## Prompt Generation
+
+`llm-toolkit` offers two powerful and convenient ways to generate prompts, powered by the `minijinja` templating engine.
+
+### 1. Ad-hoc Prompts with `prompt!` macro
+
+For quick prototyping and flexible prompt creation, the `prompt!` macro provides a `println!`-like experience. You can pass any `serde::Serialize`-able data as context.
+
+```rust
+use llm_toolkit::prompt::prompt;
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct User {
+    name: &'static str,
+    role: &'static str,
+}
+
+let user = User { name: "Mai", role: "UX Engineer" };
+let task = "designing a new macro";
+
+let p = prompt!(
+    "User {{user.name}} ({{user.role}}) is currently {{task}}.",
+    user = user,
+    task = task
+).unwrap();
+
+assert_eq!(p, "User Mai (UX Engineer) is currently designing a new macro.");
+```
+
+### 2. Structured Prompts with `#[derive(ToPrompt)]`
+
+For core application logic, you can derive the `ToPrompt` trait on your structs to generate prompts in a type-safe way.
+
+**Setup:**
+
+First, enable the `derive` feature in your `Cargo.toml`:
+```toml
+[dependencies]
+llm-toolkit = { version = "0.1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+```
+
+**Usage:**
+
+Then, use the `#[derive(ToPrompt)]` and `#[prompt(...)]` attributes on your struct. The struct must also derive `serde::Serialize`.
+
+```rust
+use llm_toolkit::ToPrompt;
+use serde::Serialize;
+
+#[derive(ToPrompt, Serialize)]
+#[prompt(template = "USER PROFILE:\nName: {{name}}\nRole: {{role}}")]
+struct UserProfile {
+    name: &'static str,
+    role: &'static str,
+}
+
+let user = UserProfile {
+    name: "Yui",
+    role: "World-Class Pro Engineer",
+};
+
+let p = user.to_prompt();
+// The following would be printed:
+// USER PROFILE:
+// Name: Yui
+// Role: World-Class Pro Engineer
+```
 
 ## Future Directions
-
-### Type-Safe Prompt Builder
-A key planned feature is a `#[derive(ToPrompt)]` procedural macro. This will allow developers to define their prompt's structure using a Rust struct and generate a type-safe `to_prompt()` method from a template file automatically. This approach provides compile-time guarantees that all necessary data is provided.
-
-For maximum flexibility, developers will still be able to write a manual `impl ToPrompt` for structs that require complex, custom logic that goes beyond simple templating. This dual approach will offer both convenience for common cases and power for advanced scenarios.
 
 ### Image Handling Abstraction
 A planned feature is to introduce a unified interface for handling image inputs across different LLM providers. This would abstract away the complexities of dealing with various data formats (e.g., Base64, URLs, local file paths) and model-specific requirements, providing a simple and consistent API for multimodal applications.
