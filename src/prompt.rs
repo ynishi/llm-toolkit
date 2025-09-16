@@ -1,4 +1,4 @@
-//! A trait and macro for converting types into prompt strings.
+//! A trait and macros for powerful, type-safe prompt generation.
 
 use minijinja::Environment;
 use serde::Serialize;

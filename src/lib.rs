@@ -6,6 +6,10 @@
 //! strongly-typed Rust application and the unstructured, often unpredictable
 //! string-based responses from LLM APIs.
 
+/// A derive macro to implement the `ToPrompt` trait for structs.
+///
+/// This macro is available only when the `derive` feature is enabled.
+/// See the [crate-level documentation](index.html#2-structured-prompts-with-derivetoprompt) for usage examples.
 #[cfg(feature = "derive")]
 pub use llm_toolkit_macros::ToPrompt;
 
