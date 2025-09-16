@@ -1,38 +1,23 @@
-[package]
-name = "llm-toolkit"
-version = "0.2.0"
-edition = "2024"
-authors = ["Yutaka Nishimura <ytk.nishimura@gmail.com>"]
-description = "A low-level, unopinionated Rust toolkit for the LLM last mile problem."
-repository = "https://github.com/ynishi/llm-toolkit" # TODO: Replace with actual URL
-license = "MIT"
-keywords = ["llm", "ai", "json", "parser", "prompt"]
-categories = ["text-processing", "parsing"]
-readme = "README.md"
+[workspace]
+resolver = "2"
+members = [
+    "crates/llm-toolkit",
+    "crates/llm-toolkit-macros",
+]
 
-[dependencies]
+[workspace.package]
+version = "0.2.0"
+authors = ["Yutaka Nishimura <ytk.nishimura@gmail.com>"]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/ynishi/llm-toolkit"
+
+[workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 regex = "1.10"
 log = "0.4"
 anyhow = "1.0"
 minijinja = { version = "2.12.0", features = ["serde_json"] }
-
-# Add the optional dependency on the macros crate
-llm-toolkit-macros = { path = "llm-toolkit-macros", version = "0.2.0", optional = true }
-
-[dev-dependencies]
 strum = { version = "0.26", features = ["derive"] }
 strum_macros = "0.26"
-
-[workspace]
-members = ["llm-toolkit-macros"]
-
-# Add the features section
-[features]
-default = []
-derive = ["llm-toolkit-macros"]
-
-[[example]]
-name = "derive_prompt"
-required-features = ["derive"]
