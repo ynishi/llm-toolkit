@@ -28,3 +28,8 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 
 3.  **Minimal Dependencies:**
     The toolkit will have minimal dependencies (likely only `serde` and `serde_json`) to ensure it can be added to any Rust project with negligible overhead and maximum compatibility.
+
+## Future Directions
+
+### Image Handling Abstraction
+A planned feature is to introduce a unified interface for handling image inputs across different LLM providers. This would abstract away the complexities of dealing with various data formats (e.g., Base64, URLs, local file paths) and model-specific requirements, providing a simple and consistent API for multimodal applications.

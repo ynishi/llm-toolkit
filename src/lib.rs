@@ -10,7 +10,7 @@ pub mod extract;
 pub mod intent;
 pub mod prompt;
 
-pub use extract::FlexibleExtractor;
+pub use extract::{FlexibleExtractor, MarkdownCodeBlockExtractor};
 pub use intent::{IntentError, IntentExtractor, PromptBasedExtractor};
 pub use prompt::ToPrompt;
 
@@ -35,6 +35,39 @@ pub fn extract_json(text: &str) -> Result<String, ParseError> {
     extractor.extract(text)
 }
 
+/// Extracts content from any Markdown code block in the text.
+///
+/// This function searches for the first code block (delimited by triple backticks)
+/// and returns its content. The code block can have any language specifier or none at all.
+///
+/// # Returns
+///
+/// A `Result` containing the extracted code block content on success, or a `ParseError`
+/// if no code block is found.
+pub fn extract_markdown_block(text: &str) -> Result<String, ParseError> {
+    let extractor = MarkdownCodeBlockExtractor::new();
+    extractor.extract(text)
+}
+
+/// Extracts content from a Markdown code block with a specific language.
+///
+/// This function searches for a code block with the specified language hint
+/// (e.g., ```rust, ```python) and returns its content.
+///
+/// # Arguments
+///
+/// * `text` - The text containing the markdown code block
+/// * `lang` - The language specifier to match (e.g., "rust", "python")
+///
+/// # Returns
+///
+/// A `Result` containing the extracted code block content on success, or a `ParseError`
+/// if no code block with the specified language is found.
+pub fn extract_markdown_block_with_lang(text: &str, lang: &str) -> Result<String, ParseError> {
+    let extractor = MarkdownCodeBlockExtractor::with_language(lang.to_string());
+    extractor.extract(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,5 +84,59 @@ mod tests {
         let result = extract_json(text);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "{\"type\": \"success\"}");
+    }
+
+    #[test]
+    fn test_markdown_extraction() {
+        // Test simple code block with no language
+        let text1 = "Here is some code:\n```\nlet x = 42;\n```\nAnd some text after.";
+        let result1 = extract_markdown_block(text1);
+        assert!(result1.is_ok());
+        assert_eq!(result1.unwrap(), "let x = 42;");
+
+        // Test code block with specific language (rust)
+        let text2 = "Here's Rust code:\n```rust\nfn main() {\n    println!(\"Hello\");\n}\n```";
+        let result2 = extract_markdown_block_with_lang(text2, "rust");
+        assert!(result2.is_ok());
+        assert_eq!(result2.unwrap(), "fn main() {\n    println!(\"Hello\");\n}");
+
+        // Test extracting rust block when json block is also present
+        let text3 = r#"
+First a JSON block:
+```json
+{"key": "value"}
+```
+
+Then a Rust block:
+```rust
+let data = vec![1, 2, 3];
+```
+"#;
+        let result3 = extract_markdown_block_with_lang(text3, "rust");
+        assert!(result3.is_ok());
+        assert_eq!(result3.unwrap(), "let data = vec![1, 2, 3];");
+
+        // Test case where no code block is found
+        let text4 = "This text has no code blocks at all.";
+        let result4 = extract_markdown_block(text4);
+        assert!(result4.is_err());
+
+        // Test with messy surrounding text and newlines
+        let text5 = r#"
+Lots of text before...
+
+
+   ```python
+def hello():
+    print("world")
+    return True
+   ```   
+
+
+And more text after with various spacing.
+"#;
+        let result5 = extract_markdown_block_with_lang(text5, "python");
+        assert!(result5.is_ok());
+        assert_eq!(result5.unwrap(), "def hello():\n    print(\"world\")\n    return True");
     }
 }

@@ -192,6 +192,61 @@ impl ContentExtractor for FlexibleExtractor {
     }
 }
 
+/// Extractor for Markdown code blocks
+pub struct MarkdownCodeBlockExtractor {
+    /// Optional language to filter by (e.g., "rust", "python")
+    pub language: Option<String>,
+}
+
+impl MarkdownCodeBlockExtractor {
+    /// Create a new extractor for any code block
+    pub fn new() -> Self {
+        Self { language: None }
+    }
+
+    /// Create a new extractor for a specific language
+    pub fn with_language(language: String) -> Self {
+        Self {
+            language: Some(language),
+        }
+    }
+
+    /// Extract content from a markdown code block
+    pub fn extract(&self, text: &str) -> Result<String, ParseError> {
+        let pattern = if let Some(ref lang) = self.language {
+            // Match code block with specific language
+            format!(
+                r"(?m)^\s*```\s*{}\s*\n((?:.*\n)*?)^\s*```\s*$",
+                regex::escape(lang)
+            )
+        } else {
+            // Match any code block (with or without language specifier)
+            r"(?m)^\s*```[^\n]*\n((?:.*\n)*?)^\s*```\s*$".to_string()
+        };
+
+        let regex = Regex::new(&pattern).map_err(|e| {
+            ParseError::InvalidFormat(format!("Failed to compile regex: {}", e))
+        })?;
+
+        if let Some(captures) = regex.captures(text) {
+            if let Some(content) = captures.get(1) {
+                // Trim surrounding newlines but preserve internal formatting
+                let extracted = content.as_str().trim_end();
+                return Ok(extracted.to_string());
+            }
+        }
+
+        Err(ParseError::TagExtractionFailed(format!(
+            "No markdown code block found{}",
+            if let Some(ref lang) = self.language {
+                format!(" with language '{}'", lang)
+            } else {
+                String::new()
+            }
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
