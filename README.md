@@ -31,5 +31,10 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 
 ## Future Directions
 
+### Type-Safe Prompt Builder
+A key planned feature is a `#[derive(ToPrompt)]` procedural macro. This will allow developers to define their prompt's structure using a Rust struct and generate a type-safe `to_prompt()` method from a template file automatically. This approach provides compile-time guarantees that all necessary data is provided.
+
+For maximum flexibility, developers will still be able to write a manual `impl ToPrompt` for structs that require complex, custom logic that goes beyond simple templating. This dual approach will offer both convenience for common cases and power for advanced scenarios.
+
 ### Image Handling Abstraction
 A planned feature is to introduce a unified interface for handling image inputs across different LLM providers. This would abstract away the complexities of dealing with various data formats (e.g., Base64, URLs, local file paths) and model-specific requirements, providing a simple and consistent API for multimodal applications.
