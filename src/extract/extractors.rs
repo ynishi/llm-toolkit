@@ -1,8 +1,8 @@
 use super::core::{ContentExtractor, ExtractionStrategy};
 
 use super::error::ParseError;
-use regex::Regex;
 use log::debug;
+use regex::Regex;
 
 /// Flexible content extractor with multiple strategies
 pub struct FlexibleExtractor {
@@ -73,7 +73,7 @@ impl FlexibleExtractor {
                 errors.push(format!("Strategy {:?} failed", strategy));
             }
         }
-        
+
         Err(ParseError::AllStrategiesFailed(errors))
     }
 
@@ -138,10 +138,7 @@ impl Default for FlexibleExtractor {
 impl ContentExtractor for FlexibleExtractor {
     fn extract_tagged(&self, text: &str, tag: &str) -> Option<String> {
         // Create regex pattern for XML-like tags
-        let pattern = format!(
-            r"(?s)<{tag}>(.*?)</{tag}>",
-            tag = regex::escape(tag)
-        );
+        let pattern = format!(r"(?s)<{tag}>(.*?)</{tag}>", tag = regex::escape(tag));
 
         if let Ok(regex) = Regex::new(&pattern) {
             if let Some(captures) = regex.captures(text) {

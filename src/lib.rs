@@ -7,8 +7,12 @@
 //! string-based responses from LLM APIs.
 
 pub mod extract;
+pub mod prompt;
 
-use extract::{FlexibleExtractor, ParseError};
+pub use extract::FlexibleExtractor;
+pub use prompt::ToPrompt;
+
+use extract::ParseError;
 
 /// Extracts a JSON string from a raw LLM response string.
 ///
