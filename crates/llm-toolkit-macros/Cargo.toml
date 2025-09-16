@@ -1,13 +1,13 @@
 [package]
 name = "llm-toolkit-macros"
-version = "0.2.0"
-edition = "2024"
-authors = ["Yutaka Nishimura <ytk.nishimura@gmail.com>"]
 description = "Internal procedural macros for llm-toolkit."
-repository = "https://github.com/ynishi/llm-toolkit"
-license = "MIT"
 keywords = ["llm", "ai", "proc-macro"]
 categories = ["development-tools::procedural-macro-helpers"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [lib]
 proc-macro = true
