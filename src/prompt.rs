@@ -3,6 +3,37 @@
 use std::fmt::Display;
 
 /// A trait for converting any type into a string suitable for an LLM prompt.
+///
+/// # Example: Generating a selection prompt from an Enum
+///
+/// While `ToPrompt` is implemented for individual enum variants (via `Display`),
+/// you can use it in combination with a crate like `strum` to generate a prompt
+/// for selecting from all variants of an enum.
+///
+/// ```
+/// use llm_toolkit::prompt::ToPrompt;
+/// use strum::{EnumIter, IntoEnumIterator, Display};
+///
+/// #[derive(Debug, EnumIter, Display)]
+/// enum TaskCategory {
+///     Analysis,
+///     Refactoring,
+///     Testing,
+/// }
+///
+/// let selection_prompt = format!(
+///     "Select one of the following categories: {}",
+///     TaskCategory::iter()
+///         .map(|variant| variant.to_prompt())
+///         .collect::<Vec<_>>()
+///         .join(", ")
+/// );
+///
+/// assert_eq!(
+///     selection_prompt,
+///     "Select one of the following categories: Analysis, Refactoring, Testing"
+/// );
+/// ```
 pub trait ToPrompt {
     /// Converts the object into a prompt string.
     fn to_prompt(&self) -> String;
