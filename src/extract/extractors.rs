@@ -2,7 +2,7 @@ use super::core::{ContentExtractor, ExtractionStrategy};
 
 use super::error::ParseError;
 use regex::Regex;
-use tracing::debug;
+use log::debug;
 
 /// Flexible content extractor with multiple strategies
 pub struct FlexibleExtractor {
