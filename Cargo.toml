@@ -1,0 +1,13 @@
+[package]
+name = "llm-toolkit"
+version = "0.1.0"
+edition = "2024"
+authors = ["Yutaka Nishimura <ytk.nishimura@gmail.com>"]
+description = "A low-level, unopinionated Rust toolkit for the LLM last mile problem."
+repository = "https://github.com/ynishi/llm-toolkit" # TODO: Replace with actual URL
+license = "MIT"
+keywords = ["llm", "ai", "json", "parser", "prompt"]
+categories = ["text-processing", "parsing"]
+readme = "README.md"
+
+[dependencies]
