@@ -11,3 +11,9 @@ categories = ["text-processing", "parsing"]
 readme = "README.md"
 
 [dependencies]
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
+regex = "1.10"
+tracing = "0.1"
+
+[workspace]
