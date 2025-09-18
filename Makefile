@@ -11,6 +11,11 @@ preflight: test-example-derive-prompt-enum
 	cargo fmt --all
 	cargo clippy --all-targets -- -D warnings
 	cargo test --all-targets
+	@echo "--- Running dry-run for llm-toolkit-macros ---"
+	cargo publish -p llm-toolkit-macros --dry-run
+
+	@echo "\n--- Running dry-run for llm-toolkit ---"
+	cargo publish -p llm-toolkit --dry-run
 
 # Publish all workspace members in the correct order
 publish: preflight
