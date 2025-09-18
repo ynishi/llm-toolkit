@@ -30,3 +30,7 @@ derive = ["llm-toolkit-macros"]
 [[example]]
 name = "derive_prompt"
 required-features = ["derive"]
+
+[[example]]
+name = "derive_prompt_enum"
+required-features = ["derive"]

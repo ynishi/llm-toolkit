@@ -1,7 +1,12 @@
-.PHONY: preflight publish
+.PHONY: preflight publish test-example-derive-prompt-enum
+
+# Test derive_prompt_enum example
+test-example-derive-prompt-enum:
+	@echo "Testing derive_prompt_enum example..."
+	cargo run --example derive_prompt_enum --package llm-toolkit --features="derive"
 
 # Run checks for all workspace members
-preflight:
+preflight: test-example-derive-prompt-enum
 	@echo "Running preflight checks for the entire workspace..."
 	cargo fmt --all
 	cargo clippy --all-targets -- -D warnings

@@ -99,6 +99,41 @@ let p = user.to_prompt();
 // Role: World-Class Pro Engineer
 ```
 
+### 3. Enum Documentation with `#[derive(ToPrompt)]`
+
+For enums, the `ToPrompt` derive macro automatically generates prompts from doc comments, making it easy to document your enum variants for LLM consumption:
+
+```rust
+use llm_toolkit::ToPrompt;
+
+/// Represents different user intents for a chatbot
+#[derive(ToPrompt)]
+pub enum UserIntent {
+    /// User wants to greet or say hello
+    Greeting,
+    /// User is asking for help or assistance
+    Help,
+    /// User wants to know the current weather
+    WeatherQuery,
+    /// User wants to set a reminder for later
+    SetReminder,
+    /// User is saying goodbye
+    Farewell,
+}
+
+let intent = UserIntent::Greeting;
+let p = intent.to_prompt();
+// The following would be printed:
+// UserIntent: Represents different user intents for a chatbot
+//
+// Possible values:
+// - Greeting: User wants to greet or say hello
+// - Help: User is asking for help or assistance
+// - WeatherQuery: User wants to know the current weather
+// - SetReminder: User wants to set a reminder for later
+// - Farewell: User is saying goodbye
+```
+
 ## Future Directions
 
 ### Image Handling Abstraction
