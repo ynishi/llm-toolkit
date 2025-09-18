@@ -101,38 +101,73 @@ let p = user.to_prompt();
 
 ### 3. Enum Documentation with `#[derive(ToPrompt)]`
 
-For enums, the `ToPrompt` derive macro automatically generates prompts from doc comments, making it easy to document your enum variants for LLM consumption:
+For enums, the `ToPrompt` derive macro provides flexible ways to generate prompts that describe your enum variants for LLM consumption. You can use doc comments, custom descriptions, or exclude variants entirely.
+
+#### Basic Usage with Doc Comments
+
+By default, the macro extracts documentation from Rust doc comments (`///`) on both the enum and its variants:
 
 ```rust
 use llm_toolkit::ToPrompt;
 
 /// Represents different user intents for a chatbot
 #[derive(ToPrompt)]
-pub enum UserIntent {
+pub enum BasicIntent {
     /// User wants to greet or say hello
     Greeting,
-    /// User is asking for help or assistance
+    /// User is asking for help or assistance  
     Help,
-    /// User wants to know the current weather
-    WeatherQuery,
-    /// User wants to set a reminder for later
-    SetReminder,
-    /// User is saying goodbye
-    Farewell,
+}
+```
+
+#### Advanced Attribute Controls
+
+The `ToPrompt` derive macro supports powerful attribute-based controls for fine-tuning the generated prompts:
+
+- **`#[prompt("...")]`** - Provide a custom description that overrides the doc comment
+- **`#[prompt(skip)]`** - Exclude a variant from the prompt entirely (useful for internal-only variants)
+- **No attribute** - Variants without doc comments or attributes will show just the variant name
+
+Here's a comprehensive example showcasing all features:
+
+```rust
+use llm_toolkit::ToPrompt;
+
+/// Represents different actions a user can take in the system
+#[derive(ToPrompt)]
+pub enum UserAction {
+    /// User wants to create a new document
+    CreateDocument,
+    
+    /// User is searching for existing content
+    Search { query: String },
+    
+    #[prompt("Custom: User is updating their profile settings and preferences")]
+    UpdateProfile,
+    
+    #[prompt(skip)]
+    InternalDebugAction,
+    
+    DeleteItem,
 }
 
-let intent = UserIntent::Greeting;
-let p = intent.to_prompt();
+let action = UserAction::CreateDocument;
+let p = action.to_prompt();
 // The following would be printed:
-// UserIntent: Represents different user intents for a chatbot
+// UserAction: Represents different actions a user can take in the system
 //
 // Possible values:
-// - Greeting: User wants to greet or say hello
-// - Help: User is asking for help or assistance
-// - WeatherQuery: User wants to know the current weather
-// - SetReminder: User wants to set a reminder for later
-// - Farewell: User is saying goodbye
+// - CreateDocument: User wants to create a new document
+// - Search: User is searching for existing content
+// - UpdateProfile: Custom: User is updating their profile settings and preferences
+// - DeleteItem
 ```
+
+Note how in the output:
+- `CreateDocument` and `Search` use their doc comments
+- `UpdateProfile` uses the custom description from `#[prompt("...")]`
+- `InternalDebugAction` is completely excluded due to `#[prompt(skip)]`
+- `DeleteItem` appears with just its name since it has no documentation
 
 ## Future Directions
 
