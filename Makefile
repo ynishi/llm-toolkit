@@ -12,14 +12,6 @@ preflight: test-example-derive-prompt-enum
 	cargo clippy --all-targets -- -D warnings
 	cargo test --all-targets
 
-	@echo "\n--- Packaging llm-toolkit-macros for verification ---"
-	cargo package -p llm-toolkit-macros --allow-dirty
-
-	@echo "\n--- Packaging llm-toolkit for verification ---"
-	cargo package -p llm-toolkit --allow-dirty
-
-	@echo "\n✅ Preflight checks complete. Packages verified successfully."
-
 # Publish all workspace members in the correct order with atomic dry-run -> publish sequences
 publish: preflight
 	@echo "\n🚀 Starting sequential publish process...\n"
