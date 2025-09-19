@@ -113,44 +113,73 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
             TokenStream::from(expanded)
         }
-        Data::Struct(_) => {
-            // For structs, use the existing template-based approach
-            let attr = input
+        Data::Struct(data_struct) => {
+            // Check if there's a #[prompt(template = "...")] attribute
+            let template_attr = input
                 .attrs
                 .iter()
                 .find(|attr| attr.path().is_ident("prompt"))
-                .expect("`#[derive(ToPrompt)]` on structs requires a `#[prompt(...)]` attribute.");
-
-            // `syn::Attribute::parse_args_with` を使って属性をパースする
-            let name_value = attr
-                .parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
-                .expect("Failed to parse `prompt` attribute arguments")
-                .into_iter()
-                .find_map(|meta| match meta {
-                    Meta::NameValue(nv) if nv.path.is_ident("template") => Some(nv),
-                    _ => None,
-                })
-                .expect("`#[prompt(...)]` must contain `template = \"...\"`");
-
-            let template_str = if let syn::Expr::Lit(expr_lit) = name_value.value {
-                if let syn::Lit::Str(lit_str) = expr_lit.lit {
-                    lit_str.value()
-                } else {
-                    panic!("'template' attribute value must be a string literal.");
-                }
-            } else {
-                panic!("'template' attribute must have a literal value.");
-            };
+                .and_then(|attr| {
+                    // Try to parse the attribute arguments
+                    attr.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+                        .ok()
+                        .and_then(|metas| {
+                            metas.into_iter().find_map(|meta| match meta {
+                                Meta::NameValue(nv) if nv.path.is_ident("template") => {
+                                    if let syn::Expr::Lit(expr_lit) = nv.value {
+                                        if let syn::Lit::Str(lit_str) = expr_lit.lit {
+                                            Some(lit_str.value())
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                }
+                                _ => None,
+                            })
+                        })
+                });
 
             let name = input.ident;
             let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-            let expanded = quote! {
-                impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
-                    fn to_prompt(&self) -> String {
-                        llm_toolkit::prompt::render_prompt(#template_str, self).unwrap_or_else(|e| {
-                            format!("Failed to render prompt: {}", e)
-                        })
+            let expanded = if let Some(template_str) = template_attr {
+                // Use template-based approach if template is provided
+                quote! {
+                    impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
+                        fn to_prompt(&self) -> String {
+                            llm_toolkit::prompt::render_prompt(#template_str, self).unwrap_or_else(|e| {
+                                format!("Failed to render prompt: {}", e)
+                            })
+                        }
+                    }
+                }
+            } else {
+                // Use default key-value format if no template is provided
+                let fields = if let syn::Fields::Named(fields) = &data_struct.fields {
+                    &fields.named
+                } else {
+                    panic!("Default prompt generation is only supported for structs with named fields.");
+                };
+
+                let field_prompts = fields.iter().map(|f| {
+                    let field_name = f.ident.as_ref().unwrap();
+                    let field_name_str = field_name.to_string();
+                    quote! {
+                        format!("{}: {}", #field_name_str, self.#field_name.to_prompt())
+                    }
+                });
+
+                quote! {
+                    impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
+                        fn to_prompt(&self) -> String {
+                            let mut parts = Vec::new();
+                            #(
+                                parts.push(#field_prompts);
+                            )*
+                            parts.join("\n")
+                        }
                     }
                 }
             };

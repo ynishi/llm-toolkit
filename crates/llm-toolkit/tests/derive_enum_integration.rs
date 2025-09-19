@@ -94,4 +94,25 @@ mod tests {
         assert!(!prompt.contains("- B"));
         assert!(!prompt.contains("- C"));
     }
+
+    #[test]
+    fn test_struct_default_prompt_generation() {
+        #[derive(ToPrompt)]
+        struct TestStruct {
+            name: String,
+            age: u32,
+            active: bool,
+        }
+
+        let instance = TestStruct {
+            name: "Yui".to_string(),
+            age: 28,
+            active: true,
+        };
+
+        let prompt = instance.to_prompt();
+        let expected_prompt = "name: Yui\nage: 28\nactive: true";
+
+        assert_eq!(prompt, expected_prompt);
+    }
 }
