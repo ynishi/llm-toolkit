@@ -99,6 +99,64 @@ let p = user.to_prompt();
 // Role: World-Class Pro Engineer
 ```
 
+#### Default Formatting and Field Attributes
+
+If you omit the `#[prompt(template = "...")]` attribute on a struct, `ToPrompt` will automatically generate a key-value representation of the struct's fields. You can control this output with field-level attributes:
+
+| Attribute | Description |
+| :--- | :--- |
+| `#[prompt(rename = "new_name")]` | Overrides the key with `"new_name"`. |
+| `#[prompt(skip)]` | Excludes the field from the output. |
+| `#[prompt(format_with = "path::to::func")]`| Uses a custom function to format the field's **value**. |
+
+The **key** for each field is determined with the following priority:
+1.  `#[prompt(rename = "...")]` attribute.
+2.  Doc comment (`/// ...`) on the field.
+3.  The field's name (fallback).
+
+**Comprehensive Example:**
+
+```rust
+use llm_toolkit::ToPrompt;
+use llm_toolkit_macros::ToPrompt; // Make sure to import the derive macro
+use serde::Serialize;
+
+// A custom formatting function
+fn format_id(id: &u64) -> String {
+    format!("user-{}", id)
+}
+
+#[derive(ToPrompt, Serialize)]
+struct AdvancedUser {
+    /// The user's unique identifier
+    id: u64,
+
+    #[prompt(rename = "full_name")]
+    name: String,
+
+    // This field will not be included in the prompt
+    #[prompt(skip)]
+    internal_hash: String,
+
+    // This field will use a custom formatting function for its value
+    #[prompt(format_with = "format_id")]
+    formatted_id: u64,
+}
+
+let user = AdvancedUser {
+    id: 123,
+    name: "Mai".to_string(),
+    internal_hash: "abcdef".to_string(),
+    formatted_id: 123,
+};
+
+let p = user.to_prompt();
+// The following would be generated:
+// The user's unique identifier: 123
+// full_name: Mai
+// formatted_id: user-123
+```
+
 ### 3. Enum Documentation with `#[derive(ToPrompt)]`
 
 For enums, the `ToPrompt` derive macro provides flexible ways to generate prompts that describe your enum variants for LLM consumption. You can use doc comments, custom descriptions, or exclude variants entirely.

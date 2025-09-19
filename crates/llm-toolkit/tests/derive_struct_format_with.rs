@@ -14,7 +14,7 @@ mod tests {
     pub fn format_list(items: &Vec<String>) -> String {
         items.join(", ")
     }
-    
+
     pub fn uppercase_format(s: &String) -> String {
         s.to_uppercase()
     }
@@ -26,18 +26,18 @@ mod tests {
             /// Current temperature
             #[prompt(format_with = "super::tests::format_temperature")]
             temperature: f32,
-            
+
             /// Humidity level
             #[prompt(format_with = "super::tests::format_percentage")]
             humidity: f32,
-            
+
             /// Weather conditions
             #[prompt(rename = "conditions", format_with = "super::tests::format_list")]
             weather_conditions: Vec<String>,
-            
+
             // Normal field without custom formatting
             location: String,
-            
+
             #[prompt(skip)]
             internal_id: u32,
         }
@@ -49,15 +49,35 @@ mod tests {
             location: "Tokyo".to_string(),
             internal_id: 12345,
         };
-        
+
         let prompt = report.to_prompt();
-        
+
         // Check that custom formatters were applied
-        assert!(prompt.contains("Current temperature: 23.5°C"), "Temperature should be formatted with format_temperature: {}", prompt);
-        assert!(prompt.contains("Humidity level: 65%"), "Humidity should be formatted with format_percentage: {}", prompt);
-        assert!(prompt.contains("conditions: Partly cloudy, Light wind"), "Weather conditions should use renamed key and custom formatter: {}", prompt);
-        assert!(prompt.contains("location: Tokyo"), "Location should use default to_prompt: {}", prompt);
-        assert!(!prompt.contains("internal_id"), "internal_id should be skipped: {}", prompt);
+        assert!(
+            prompt.contains("Current temperature: 23.5°C"),
+            "Temperature should be formatted with format_temperature: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("Humidity level: 65%"),
+            "Humidity should be formatted with format_percentage: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("conditions: Partly cloudy, Light wind"),
+            "Weather conditions should use renamed key and custom formatter: {}",
+            prompt
+        );
+        assert!(
+            prompt.contains("location: Tokyo"),
+            "Location should use default to_prompt: {}",
+            prompt
+        );
+        assert!(
+            !prompt.contains("internal_id"),
+            "internal_id should be skipped: {}",
+            prompt
+        );
     }
 
     #[test]
@@ -67,26 +87,26 @@ mod tests {
         struct TestStruct {
             #[prompt(skip)]
             ignored: String,
-            
+
             #[prompt(rename = "custom_name")]
             renamed_field: String,
-            
+
             #[prompt(format_with = "super::tests::uppercase_format")]
             formatted_field: String,
-            
+
             #[prompt(rename = "special", format_with = "super::tests::uppercase_format")]
             both_rename_and_format: String,
         }
-        
+
         let test = TestStruct {
             ignored: "should not appear".to_string(),
             renamed_field: "renamed value".to_string(),
             formatted_field: "hello".to_string(),
             both_rename_and_format: "world".to_string(),
         };
-        
+
         let prompt = test.to_prompt();
-        
+
         assert!(!prompt.contains("should not appear"));
         assert!(!prompt.contains("ignored"));
         assert!(prompt.contains("custom_name: renamed value"));

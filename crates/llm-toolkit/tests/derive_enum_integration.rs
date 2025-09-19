@@ -145,20 +145,20 @@ mod tests {
         struct PriorityTestStruct {
             // Priority 3: Field name fallback
             plain_field: String,
-            
+
             // Priority 2: Doc comment
             /// User's full name
             documented_field: String,
-            
+
             // Priority 1: Rename attribute (highest priority)
             #[prompt(rename = "custom_key")]
             renamed_field: String,
-            
+
             // Combined: rename takes priority over doc comment
             /// This doc should be ignored
             #[prompt(rename = "overridden")]
             both_attrs: String,
-            
+
             // Skip attribute
             #[prompt(skip)]
             skipped_field: String,
@@ -173,23 +173,23 @@ mod tests {
         };
 
         let prompt = instance.to_prompt();
-        
+
         // Test field name fallback
         assert!(prompt.contains("plain_field: plain"));
-        
+
         // Test doc comment as key
         assert!(prompt.contains("User's full name: doc"));
         assert!(!prompt.contains("documented_field: doc"));
-        
+
         // Test rename attribute
         assert!(prompt.contains("custom_key: renamed"));
         assert!(!prompt.contains("renamed_field: renamed"));
-        
+
         // Test rename overrides doc comment
         assert!(prompt.contains("overridden: both"));
         assert!(!prompt.contains("This doc should be ignored"));
         assert!(!prompt.contains("both_attrs: both"));
-        
+
         // Test skip
         assert!(!prompt.contains("skipped_field"));
         assert!(!prompt.contains("skip"));
@@ -201,11 +201,11 @@ mod tests {
         struct ComplexStruct {
             #[prompt(rename = "id")]
             user_id: u32,
-            
+
             #[prompt(skip)]
             #[allow(dead_code)]
             _internal: String,
-            
+
             /// API endpoint URL
             #[prompt(rename = "endpoint")]
             api_url: String,
@@ -218,7 +218,7 @@ mod tests {
         };
 
         let prompt = instance.to_prompt();
-        
+
         assert!(prompt.contains("id: 42"));
         assert!(prompt.contains("endpoint: https://api.example.com"));
         assert!(!prompt.contains("user_id"));

@@ -22,19 +22,19 @@ fn format_tags(tags: &Vec<String>) -> String {
 struct Product {
     /// Product name
     name: String,
-    
+
     /// Price
     #[prompt(format_with = "format_currency")]
     price: f64,
-    
+
     /// Discount rate
     #[prompt(rename = "discount", format_with = "format_percentage")]
     discount_rate: f64,
-    
+
     /// Product tags
     #[prompt(format_with = "format_tags")]
     tags: Vec<String>,
-    
+
     #[prompt(skip)]
     internal_sku: String,
 }
@@ -44,10 +44,14 @@ fn main() {
         name: "Rust Programming Book".to_string(),
         price: 49.99,
         discount_rate: 0.15,
-        tags: vec!["programming".to_string(), "rust".to_string(), "education".to_string()],
+        tags: vec![
+            "programming".to_string(),
+            "rust".to_string(),
+            "education".to_string(),
+        ],
         internal_sku: "SKU-12345".to_string(),
     };
-    
+
     println!("{}", product.to_prompt());
     println!();
     println!("// Note: The internal_sku field was skipped");

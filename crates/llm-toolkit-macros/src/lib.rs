@@ -63,15 +63,15 @@ struct FieldPromptAttrs {
 /// Parse #[prompt(...)] attributes for struct fields
 fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
     let mut result = FieldPromptAttrs::default();
-    
+
     for attr in attrs {
         if attr.path().is_ident("prompt") {
             // Try to parse as meta list #[prompt(key = value, ...)]
             if let Ok(meta_list) = attr.meta.require_list() {
                 // Parse the tokens inside the parentheses
-                if let Ok(metas) = meta_list.parse_args_with(
-                    Punctuated::<Meta, syn::Token![,]>::parse_terminated
-                ) {
+                if let Ok(metas) =
+                    meta_list.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+                {
                     for meta in metas {
                         match meta {
                             Meta::Path(path) if path.is_ident("skip") => {
@@ -81,7 +81,8 @@ fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
                                 if let syn::Expr::Lit(syn::ExprLit {
                                     lit: syn::Lit::Str(lit_str),
                                     ..
-                                }) = nv.value {
+                                }) = nv.value
+                                {
                                     result.rename = Some(lit_str.value());
                                 }
                             }
@@ -89,7 +90,8 @@ fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
                                 if let syn::Expr::Lit(syn::ExprLit {
                                     lit: syn::Lit::Str(lit_str),
                                     ..
-                                }) = nv.value {
+                                }) = nv.value
+                                {
                                     result.format_with = Some(lit_str.value());
                                 }
                             }
@@ -103,7 +105,7 @@ fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
             }
         }
     }
-    
+
     result
 }
 
@@ -215,19 +217,22 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                 let fields = if let syn::Fields::Named(fields) = &data_struct.fields {
                     &fields.named
                 } else {
-                    panic!("Default prompt generation is only supported for structs with named fields.");
+                    panic!(
+                        "Default prompt generation is only supported for structs with named fields."
+                    );
                 };
 
-                let field_prompts: Vec<_> = fields.iter()
+                let field_prompts: Vec<_> = fields
+                    .iter()
                     .filter_map(|f| {
                         let field_name = f.ident.as_ref().unwrap();
                         let attrs = parse_field_prompt_attrs(&f.attrs);
-                        
+
                         // Skip if #[prompt(skip)] is present
                         if attrs.skip {
                             return None;
                         }
-                        
+
                         // Determine the key based on priority:
                         // 1. #[prompt(rename = "new_name")]
                         // 2. Doc comment
@@ -242,16 +247,19 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                 field_name.to_string()
                             }
                         };
-                        
+
                         // Determine the value based on format_with attribute
                         let value_expr = if let Some(format_with) = attrs.format_with {
                             // Parse the function path string into a syn::Path
-                            let func_path: syn::Path = syn::parse_str(&format_with).expect(&format!("Invalid function path: {}", format_with));
+                            let func_path: syn::Path =
+                                syn::parse_str(&format_with).unwrap_or_else(|_| {
+                                    panic!("Invalid function path: {}", format_with)
+                                });
                             quote! { #func_path(&self.#field_name) }
                         } else {
                             quote! { self.#field_name.to_prompt() }
                         };
-                        
+
                         Some(quote! {
                             format!("{}: {}", #key, #value_expr)
                         })
