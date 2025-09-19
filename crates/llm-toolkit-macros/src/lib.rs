@@ -7,16 +7,14 @@ fn extract_doc_comments(attrs: &[syn::Attribute]) -> String {
     attrs
         .iter()
         .filter_map(|attr| {
-            if attr.path().is_ident("doc") {
-                if let syn::Meta::NameValue(meta_name_value) = &attr.meta {
-                    if let syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(lit_str),
-                        ..
-                    }) = &meta_name_value.value
-                    {
-                        return Some(lit_str.value());
-                    }
-                }
+            if attr.path().is_ident("doc")
+                && let syn::Meta::NameValue(meta_name_value) = &attr.meta
+                && let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit_str),
+                    ..
+                }) = &meta_name_value.value
+            {
+                return Some(lit_str.value());
             }
             None
         })

@@ -101,10 +101,10 @@ impl FlexibleExtractor {
                 }
                 '}' if !in_string => {
                     brace_count -= 1;
-                    if brace_count == 0 {
-                        if let Some(p) = start_pos {
-                            return Some(text[p..=i].to_string());
-                        }
+                    if brace_count == 0
+                        && let Some(p) = start_pos
+                    {
+                        return Some(text[p..=i].to_string());
                     }
                 }
                 _ => {}
@@ -140,12 +140,11 @@ impl ContentExtractor for FlexibleExtractor {
         // Create regex pattern for XML-like tags
         let pattern = format!(r"(?s)<{tag}>(.*?)</{tag}>", tag = regex::escape(tag));
 
-        if let Ok(regex) = Regex::new(&pattern) {
-            if let Some(captures) = regex.captures(text) {
-                if let Some(content) = captures.get(1) {
-                    return Some(content.as_str().trim().to_string());
-                }
-            }
+        if let Ok(regex) = Regex::new(&pattern)
+            && let Some(captures) = regex.captures(text)
+            && let Some(content) = captures.get(1)
+        {
+            return Some(content.as_str().trim().to_string());
         }
 
         if self.debug_mode {
@@ -157,12 +156,11 @@ impl ContentExtractor for FlexibleExtractor {
 
     fn extract_json_like(&self, text: &str) -> Option<String> {
         // Find JSON-like content within braces
-        if let Some(start) = text.find('{') {
-            if let Some(end) = text.rfind('}') {
-                if end > start {
-                    return Some(text[start..=end].to_string());
-                }
-            }
+        if let Some(start) = text.find('{')
+            && let Some(end) = text.rfind('}')
+            && end > start
+        {
+            return Some(text[start..=end].to_string());
         }
 
         if self.debug_mode {
@@ -173,14 +171,14 @@ impl ContentExtractor for FlexibleExtractor {
     }
 
     fn extract_pattern(&self, text: &str, pattern: &str) -> Option<String> {
-        if let Ok(regex) = Regex::new(pattern) {
-            if let Some(captures) = regex.captures(text) {
-                // Return the first capture group, or the whole match if no groups
-                if captures.len() > 1 {
-                    return captures.get(1).map(|m| m.as_str().to_string());
-                } else {
-                    return captures.get(0).map(|m| m.as_str().to_string());
-                }
+        if let Ok(regex) = Regex::new(pattern)
+            && let Some(captures) = regex.captures(text)
+        {
+            // Return the first capture group, or the whole match if no groups
+            if captures.len() > 1 {
+                return captures.get(1).map(|m| m.as_str().to_string());
+            } else {
+                return captures.get(0).map(|m| m.as_str().to_string());
             }
         }
 
@@ -233,12 +231,12 @@ impl MarkdownCodeBlockExtractor {
         let regex = Regex::new(&pattern)
             .map_err(|e| ParseError::InvalidFormat(format!("Failed to compile regex: {}", e)))?;
 
-        if let Some(captures) = regex.captures(text) {
-            if let Some(content) = captures.get(1) {
-                // Trim surrounding newlines but preserve internal formatting
-                let extracted = content.as_str().trim_end();
-                return Ok(extracted.to_string());
-            }
+        if let Some(captures) = regex.captures(text)
+            && let Some(content) = captures.get(1)
+        {
+            // Trim surrounding newlines but preserve internal formatting
+            let extracted = content.as_str().trim_end();
+            return Ok(extracted.to_string());
         }
 
         Err(ParseError::TagExtractionFailed(format!(
