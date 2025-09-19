@@ -2,7 +2,6 @@
 
 use minijinja::Environment;
 use serde::Serialize;
-use std::fmt::Display;
 
 /// A trait for converting any type into a string suitable for an LLM prompt.
 ///
@@ -14,7 +13,7 @@ use std::fmt::Display;
 /// ```
 /// use llm_toolkit::prompt::ToPrompt;
 ///
-/// // Any type implementing Display automatically gets ToPrompt
+/// // Common types have ToPrompt implementations
 /// let number = 42;
 /// assert_eq!(number.to_prompt(), "42");
 ///
@@ -24,8 +23,7 @@ use std::fmt::Display;
 ///
 /// # Custom Implementation
 ///
-/// While a blanket implementation is provided for all types that implement
-/// `Display`, you can provide custom implementations for your own types:
+/// You can also implement `ToPrompt` directly for your own types:
 ///
 /// ```
 /// use llm_toolkit::prompt::ToPrompt;
@@ -41,7 +39,13 @@ use std::fmt::Display;
 ///     }
 /// }
 ///
-/// // The blanket implementation provides ToPrompt automatically
+/// // By implementing ToPrompt directly, you can control the conversion.
+/// impl ToPrompt for CustomType {
+///     fn to_prompt(&self) -> String {
+///         self.to_string()
+///     }
+/// }
+///
 /// let custom = CustomType { value: "custom".to_string() };
 /// assert_eq!(custom.to_prompt(), "custom");
 /// ```
@@ -50,15 +54,49 @@ pub trait ToPrompt {
     fn to_prompt(&self) -> String;
 }
 
-/// A blanket implementation of `ToPrompt` for any type that implements `Display`.
-///
-/// This provides automatic `ToPrompt` functionality for all standard library
-/// types and custom types that implement `Display`.
-impl<T: Display> ToPrompt for T {
+// Add implementations for common types
+
+impl ToPrompt for String {
+    fn to_prompt(&self) -> String {
+        self.clone()
+    }
+}
+
+impl ToPrompt for &str {
     fn to_prompt(&self) -> String {
         self.to_string()
     }
 }
+
+impl ToPrompt for bool {
+    fn to_prompt(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl ToPrompt for char {
+    fn to_prompt(&self) -> String {
+        self.to_string()
+    }
+}
+
+macro_rules! impl_to_prompt_for_numbers {
+    ($($t:ty),*) => {
+        $(
+            impl ToPrompt for $t {
+                fn to_prompt(&self) -> String {
+                    self.to_string()
+                }
+            }
+        )*
+    };
+}
+
+impl_to_prompt_for_numbers!(
+    i8, i16, i32, i64, i128, isize,
+    u8, u16, u32, u64, u128, usize,
+    f32, f64
+);
 
 /// Renders a prompt from a template string and a serializable context.
 ///
@@ -109,6 +147,7 @@ macro_rules! prompt {
 mod tests {
     use super::*;
     use serde::Serialize;
+    use std::fmt::Display;
 
     enum TestEnum {
         VariantA,
@@ -121,6 +160,12 @@ mod tests {
                 TestEnum::VariantA => write!(f, "Variant A"),
                 TestEnum::VariantB => write!(f, "Variant B"),
             }
+        }
+    }
+
+    impl ToPrompt for TestEnum {
+        fn to_prompt(&self) -> String {
+            self.to_string()
         }
     }
 
