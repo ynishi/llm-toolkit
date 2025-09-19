@@ -57,6 +57,7 @@ fn parse_prompt_attribute(attrs: &[syn::Attribute]) -> PromptAttribute {
 struct FieldPromptAttrs {
     skip: bool,
     rename: Option<String>,
+    format_with: Option<String>,
 }
 
 /// Parse #[prompt(...)] attributes for struct fields
@@ -82,6 +83,14 @@ fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
                                     ..
                                 }) = nv.value {
                                     result.rename = Some(lit_str.value());
+                                }
+                            }
+                            Meta::NameValue(nv) if nv.path.is_ident("format_with") => {
+                                if let syn::Expr::Lit(syn::ExprLit {
+                                    lit: syn::Lit::Str(lit_str),
+                                    ..
+                                }) = nv.value {
+                                    result.format_with = Some(lit_str.value());
                                 }
                             }
                             _ => {}
@@ -234,8 +243,17 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             }
                         };
                         
+                        // Determine the value based on format_with attribute
+                        let value_expr = if let Some(format_with) = attrs.format_with {
+                            // Parse the function path string into a syn::Path
+                            let func_path: syn::Path = syn::parse_str(&format_with).expect(&format!("Invalid function path: {}", format_with));
+                            quote! { #func_path(&self.#field_name) }
+                        } else {
+                            quote! { self.#field_name.to_prompt() }
+                        };
+                        
                         Some(quote! {
-                            format!("{}: {}", #key, self.#field_name.to_prompt())
+                            format!("{}: {}", #key, #value_expr)
                         })
                     })
                     .collect();

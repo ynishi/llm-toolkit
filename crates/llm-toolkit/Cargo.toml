@@ -34,3 +34,7 @@ required-features = ["derive"]
 [[example]]
 name = "derive_prompt_enum"
 required-features = ["derive"]
+
+[[example]]
+name = "derive_prompt_format_with"
+required-features = ["derive"]
