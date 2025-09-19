@@ -52,6 +52,52 @@ fn parse_prompt_attribute(attrs: &[syn::Attribute]) -> PromptAttribute {
     PromptAttribute::None
 }
 
+/// Parsed field-level prompt attributes
+#[derive(Debug, Default)]
+struct FieldPromptAttrs {
+    skip: bool,
+    rename: Option<String>,
+}
+
+/// Parse #[prompt(...)] attributes for struct fields
+fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
+    let mut result = FieldPromptAttrs::default();
+    
+    for attr in attrs {
+        if attr.path().is_ident("prompt") {
+            // Try to parse as meta list #[prompt(key = value, ...)]
+            if let Ok(meta_list) = attr.meta.require_list() {
+                // Parse the tokens inside the parentheses
+                if let Ok(metas) = meta_list.parse_args_with(
+                    Punctuated::<Meta, syn::Token![,]>::parse_terminated
+                ) {
+                    for meta in metas {
+                        match meta {
+                            Meta::Path(path) if path.is_ident("skip") => {
+                                result.skip = true;
+                            }
+                            Meta::NameValue(nv) if nv.path.is_ident("rename") => {
+                                if let syn::Expr::Lit(syn::ExprLit {
+                                    lit: syn::Lit::Str(lit_str),
+                                    ..
+                                }) = nv.value {
+                                    result.rename = Some(lit_str.value());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                } else if meta_list.tokens.to_string() == "skip" {
+                    // Handle simple #[prompt(skip)] case
+                    result.skip = true;
+                }
+            }
+        }
+    }
+    
+    result
+}
+
 #[proc_macro_derive(ToPrompt, attributes(prompt))]
 pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -163,13 +209,36 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     panic!("Default prompt generation is only supported for structs with named fields.");
                 };
 
-                let field_prompts = fields.iter().map(|f| {
-                    let field_name = f.ident.as_ref().unwrap();
-                    let field_name_str = field_name.to_string();
-                    quote! {
-                        format!("{}: {}", #field_name_str, self.#field_name.to_prompt())
-                    }
-                });
+                let field_prompts: Vec<_> = fields.iter()
+                    .filter_map(|f| {
+                        let field_name = f.ident.as_ref().unwrap();
+                        let attrs = parse_field_prompt_attrs(&f.attrs);
+                        
+                        // Skip if #[prompt(skip)] is present
+                        if attrs.skip {
+                            return None;
+                        }
+                        
+                        // Determine the key based on priority:
+                        // 1. #[prompt(rename = "new_name")]
+                        // 2. Doc comment
+                        // 3. Field name (fallback)
+                        let key = if let Some(rename) = attrs.rename {
+                            rename
+                        } else {
+                            let doc_comment = extract_doc_comments(&f.attrs);
+                            if !doc_comment.is_empty() {
+                                doc_comment
+                            } else {
+                                field_name.to_string()
+                            }
+                        };
+                        
+                        Some(quote! {
+                            format!("{}: {}", #key, self.#field_name.to_prompt())
+                        })
+                    })
+                    .collect();
 
                 quote! {
                     impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
