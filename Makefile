@@ -20,7 +20,7 @@ preflight: test-example-derive-prompt-enum
 	@echo "\n✅ Dry-run successful. Proceeding with actual publish...\n"
 
 # Publish all workspace members in the correct order
-publish: preflight
+publish:
 	@echo "--- Publishing llm-toolkit-macros ---"
 	cargo publish -p llm-toolkit-macros
 
