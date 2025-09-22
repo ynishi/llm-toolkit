@@ -58,6 +58,7 @@ struct FieldPromptAttrs {
     skip: bool,
     rename: Option<String>,
     format_with: Option<String>,
+    image: bool,
 }
 
 /// Parse #[prompt(...)] attributes for struct fields
@@ -95,12 +96,18 @@ fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
                                     result.format_with = Some(lit_str.value());
                                 }
                             }
+                            Meta::Path(path) if path.is_ident("image") => {
+                                result.image = true;
+                            }
                             _ => {}
                         }
                     }
                 } else if meta_list.tokens.to_string() == "skip" {
                     // Handle simple #[prompt(skip)] case
                     result.skip = true;
+                } else if meta_list.tokens.to_string() == "image" {
+                    // Handle simple #[prompt(image)] case
+                    result.image = true;
                 }
             }
         }
@@ -162,6 +169,10 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
             let expanded = quote! {
                 impl #impl_generics llm_toolkit::prompt::ToPrompt for #enum_name #ty_generics #where_clause {
+                    fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
+                        vec![llm_toolkit::prompt::PromptPart::Text(#prompt_string.to_string())]
+                    }
+
                     fn to_prompt(&self) -> String {
                         #prompt_string.to_string()
                     }
@@ -203,8 +214,47 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
             let expanded = if let Some(template_str) = template_attr {
                 // Use template-based approach if template is provided
+                // Collect image fields separately for to_prompt_parts()
+                let fields = if let syn::Fields::Named(fields) = &data_struct.fields {
+                    &fields.named
+                } else {
+                    panic!(
+                        "Template prompt generation is only supported for structs with named fields."
+                    );
+                };
+
+                let mut image_field_parts = Vec::new();
+                for f in fields.iter() {
+                    let field_name = f.ident.as_ref().unwrap();
+                    let attrs = parse_field_prompt_attrs(&f.attrs);
+
+                    if attrs.image {
+                        // This field is marked as an image
+                        image_field_parts.push(quote! {
+                            parts.extend(self.#field_name.to_prompt_parts());
+                        });
+                    }
+                }
+
                 quote! {
                     impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
+                        fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
+                            let mut parts = Vec::new();
+
+                            // Add image parts first
+                            #(#image_field_parts)*
+
+                            // Add the rendered template as text
+                            let text = llm_toolkit::prompt::render_prompt(#template_str, self).unwrap_or_else(|e| {
+                                format!("Failed to render prompt: {}", e)
+                            });
+                            if !text.is_empty() {
+                                parts.push(llm_toolkit::prompt::PromptPart::Text(text));
+                            }
+
+                            parts
+                        }
+
                         fn to_prompt(&self) -> String {
                             llm_toolkit::prompt::render_prompt(#template_str, self).unwrap_or_else(|e| {
                                 format!("Failed to render prompt: {}", e)
@@ -214,6 +264,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                 }
             } else {
                 // Use default key-value format if no template is provided
+                // Now also generate to_prompt_parts() for multimodal support
                 let fields = if let syn::Fields::Named(fields) = &data_struct.fields {
                     &fields.named
                 } else {
@@ -222,17 +273,26 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     );
                 };
 
-                let field_prompts: Vec<_> = fields
-                    .iter()
-                    .filter_map(|f| {
-                        let field_name = f.ident.as_ref().unwrap();
-                        let attrs = parse_field_prompt_attrs(&f.attrs);
+                // Separate image fields from text fields
+                let mut text_field_parts = Vec::new();
+                let mut image_field_parts = Vec::new();
 
-                        // Skip if #[prompt(skip)] is present
-                        if attrs.skip {
-                            return None;
-                        }
+                for f in fields.iter() {
+                    let field_name = f.ident.as_ref().unwrap();
+                    let attrs = parse_field_prompt_attrs(&f.attrs);
 
+                    // Skip if #[prompt(skip)] is present
+                    if attrs.skip {
+                        continue;
+                    }
+
+                    if attrs.image {
+                        // This field is marked as an image
+                        image_field_parts.push(quote! {
+                            parts.extend(self.#field_name.to_prompt_parts());
+                        });
+                    } else {
+                        // This is a regular text field
                         // Determine the key based on priority:
                         // 1. #[prompt(rename = "new_name")]
                         // 2. Doc comment
@@ -260,20 +320,36 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             quote! { self.#field_name.to_prompt() }
                         };
 
-                        Some(quote! {
-                            format!("{}: {}", #key, #value_expr)
-                        })
-                    })
-                    .collect();
+                        text_field_parts.push(quote! {
+                            text_parts.push(format!("{}: {}", #key, #value_expr));
+                        });
+                    }
+                }
 
+                // Generate the implementation with to_prompt_parts()
                 quote! {
                     impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
-                        fn to_prompt(&self) -> String {
+                        fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
                             let mut parts = Vec::new();
-                            #(
-                                parts.push(#field_prompts);
-                            )*
-                            parts.join("\n")
+
+                            // Add image parts first
+                            #(#image_field_parts)*
+
+                            // Collect text parts and add as a single text prompt part
+                            let mut text_parts = Vec::new();
+                            #(#text_field_parts)*
+
+                            if !text_parts.is_empty() {
+                                parts.push(llm_toolkit::prompt::PromptPart::Text(text_parts.join("\n")));
+                            }
+
+                            parts
+                        }
+
+                        fn to_prompt(&self) -> String {
+                            let mut text_parts = Vec::new();
+                            #(#text_field_parts)*
+                            text_parts.join("\n")
                         }
                     }
                 }

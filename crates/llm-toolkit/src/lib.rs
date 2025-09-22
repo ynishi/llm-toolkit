@@ -15,11 +15,13 @@ pub use llm_toolkit_macros::ToPrompt;
 
 pub mod extract;
 pub mod intent;
+pub mod multimodal;
 pub mod prompt;
 
 pub use extract::{FlexibleExtractor, MarkdownCodeBlockExtractor};
 pub use intent::{IntentError, IntentExtractor, PromptBasedExtractor};
-pub use prompt::ToPrompt;
+pub use multimodal::ImageData;
+pub use prompt::{PromptPart, ToPrompt};
 
 use extract::ParseError;
 

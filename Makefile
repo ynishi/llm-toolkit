@@ -9,8 +9,8 @@ test-example-derive-prompt-enum:
 preflight: test-example-derive-prompt-enum
 	@echo "Running preflight checks for the entire workspace..."
 	cargo fmt --all
-	cargo clippy --all-targets -- -D warnings
-	cargo test --all-targets
+	cargo clippy --all-targets --all-features -- -D warnings
+	cargo test --all-targets --all-features 
 
 # Publish all workspace members in the correct order with atomic dry-run -> publish sequences
 publish: preflight

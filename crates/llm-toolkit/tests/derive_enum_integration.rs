@@ -3,6 +3,7 @@ mod tests {
     use llm_toolkit::ToPrompt;
 
     #[derive(ToPrompt, Debug, PartialEq)]
+    #[allow(dead_code)]
     enum TestEnum {
         /// First variant with doc
         First,
@@ -32,6 +33,7 @@ mod tests {
     #[test]
     fn test_all_fallback_priorities() {
         #[derive(ToPrompt)]
+        #[allow(dead_code)]
         enum PriorityTest {
             #[prompt(skip)]
             SkipMe,
@@ -66,6 +68,7 @@ mod tests {
     #[test]
     fn test_empty_enum() {
         #[derive(ToPrompt)]
+        #[allow(dead_code)]
         enum EmptyEnum {}
 
         // This should compile and generate a prompt with no values
@@ -75,6 +78,7 @@ mod tests {
     #[test]
     fn test_all_variants_skipped() {
         #[derive(ToPrompt)]
+        #[allow(dead_code)]
         enum AllSkipped {
             #[prompt(skip)]
             A,
@@ -119,6 +123,7 @@ mod tests {
     #[test]
     fn test_struct_skip_attribute() {
         #[derive(ToPrompt)]
+        #[allow(dead_code)]
         struct UserProfile {
             username: String,
             display_name: String,
@@ -142,6 +147,7 @@ mod tests {
     #[test]
     fn test_struct_priority_based_keys() {
         #[derive(ToPrompt)]
+        #[allow(dead_code)]
         struct PriorityTestStruct {
             // Priority 3: Field name fallback
             plain_field: String,

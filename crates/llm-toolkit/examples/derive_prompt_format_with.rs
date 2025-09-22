@@ -1,5 +1,4 @@
 use llm_toolkit::ToPrompt;
-use llm_toolkit_macros::ToPrompt;
 
 // Custom formatting functions
 fn format_currency(amount: &f64) -> String {
@@ -10,7 +9,7 @@ fn format_percentage(value: &f64) -> String {
     format!("{:.1}%", value * 100.0)
 }
 
-fn format_tags(tags: &Vec<String>) -> String {
+fn format_tags(tags: &[String]) -> String {
     if tags.is_empty() {
         "None".to_string()
     } else {
@@ -19,6 +18,7 @@ fn format_tags(tags: &Vec<String>) -> String {
 }
 
 #[derive(ToPrompt)]
+#[allow(dead_code)]
 struct Product {
     /// Product name
     name: String,

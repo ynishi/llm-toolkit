@@ -11,17 +11,18 @@ mod tests {
         format!("{:.0}%", value * 100.0)
     }
 
-    pub fn format_list(items: &Vec<String>) -> String {
+    pub fn format_list(items: &[String]) -> String {
         items.join(", ")
     }
 
-    pub fn uppercase_format(s: &String) -> String {
+    pub fn uppercase_format(s: &str) -> String {
         s.to_uppercase()
     }
 
     #[test]
     fn test_format_with_attribute() {
         #[derive(ToPrompt)]
+        #[allow(dead_code)]
         struct WeatherReport {
             /// Current temperature
             #[prompt(format_with = "super::tests::format_temperature")]
@@ -84,6 +85,7 @@ mod tests {
     fn test_all_attributes_together() {
         // This test ensures that skip, rename, and format_with work together
         #[derive(ToPrompt)]
+        #[allow(dead_code)]
         struct TestStruct {
             #[prompt(skip)]
             ignored: String,

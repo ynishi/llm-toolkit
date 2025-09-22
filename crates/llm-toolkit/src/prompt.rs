@@ -3,6 +3,24 @@
 use minijinja::Environment;
 use serde::Serialize;
 
+/// Represents a part of a multimodal prompt.
+///
+/// This enum allows prompts to contain different types of content,
+/// such as text and images, enabling multimodal LLM interactions.
+#[derive(Debug, Clone)]
+pub enum PromptPart {
+    /// Text content in the prompt.
+    Text(String),
+    /// Image content with media type and binary data.
+    Image {
+        /// The MIME media type (e.g., "image/jpeg", "image/png").
+        media_type: String,
+        /// The raw image data.
+        data: Vec<u8>,
+    },
+    // Future variants like Audio or Video can be added here
+}
+
 /// A trait for converting any type into a string suitable for an LLM prompt.
 ///
 /// This trait provides a standard interface for converting various types
@@ -26,7 +44,7 @@ use serde::Serialize;
 /// You can also implement `ToPrompt` directly for your own types:
 ///
 /// ```
-/// use llm_toolkit::prompt::ToPrompt;
+/// use llm_toolkit::prompt::{ToPrompt, PromptPart};
 /// use std::fmt;
 ///
 /// struct CustomType {
@@ -41,6 +59,10 @@ use serde::Serialize;
 ///
 /// // By implementing ToPrompt directly, you can control the conversion.
 /// impl ToPrompt for CustomType {
+///     fn to_prompt_parts(&self) -> Vec<PromptPart> {
+///         vec![PromptPart::Text(self.to_string())]
+///     }
+///
 ///     fn to_prompt(&self) -> String {
 ///         self.to_string()
 ///     }
@@ -50,31 +72,66 @@ use serde::Serialize;
 /// assert_eq!(custom.to_prompt(), "custom");
 /// ```
 pub trait ToPrompt {
+    /// Converts the object into a vector of `PromptPart`s.
+    ///
+    /// This method enables multimodal prompt generation by returning
+    /// a collection of prompt parts that can include text, images, and
+    /// other media types.
+    fn to_prompt_parts(&self) -> Vec<PromptPart>;
+
     /// Converts the object into a prompt string.
-    fn to_prompt(&self) -> String;
+    ///
+    /// This method provides backward compatibility by extracting only
+    /// the text portions from `to_prompt_parts()` and joining them.
+    fn to_prompt(&self) -> String {
+        self.to_prompt_parts()
+            .iter()
+            .filter_map(|part| match part {
+                PromptPart::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
 }
 
 // Add implementations for common types
 
 impl ToPrompt for String {
+    fn to_prompt_parts(&self) -> Vec<PromptPart> {
+        vec![PromptPart::Text(self.clone())]
+    }
+
     fn to_prompt(&self) -> String {
         self.clone()
     }
 }
 
 impl ToPrompt for &str {
+    fn to_prompt_parts(&self) -> Vec<PromptPart> {
+        vec![PromptPart::Text(self.to_string())]
+    }
+
     fn to_prompt(&self) -> String {
         self.to_string()
     }
 }
 
 impl ToPrompt for bool {
+    fn to_prompt_parts(&self) -> Vec<PromptPart> {
+        vec![PromptPart::Text(self.to_string())]
+    }
+
     fn to_prompt(&self) -> String {
         self.to_string()
     }
 }
 
 impl ToPrompt for char {
+    fn to_prompt_parts(&self) -> Vec<PromptPart> {
+        vec![PromptPart::Text(self.to_string())]
+    }
+
     fn to_prompt(&self) -> String {
         self.to_string()
     }
@@ -84,6 +141,10 @@ macro_rules! impl_to_prompt_for_numbers {
     ($($t:ty),*) => {
         $(
             impl ToPrompt for $t {
+                fn to_prompt_parts(&self) -> Vec<PromptPart> {
+                    vec![PromptPart::Text(self.to_string())]
+                }
+
                 fn to_prompt(&self) -> String {
                     self.to_string()
                 }
@@ -162,6 +223,10 @@ mod tests {
     }
 
     impl ToPrompt for TestEnum {
+        fn to_prompt_parts(&self) -> Vec<PromptPart> {
+            vec![PromptPart::Text(self.to_string())]
+        }
+
         fn to_prompt(&self) -> String {
             self.to_string()
         }
