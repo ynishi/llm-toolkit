@@ -18,11 +18,11 @@ publish: preflight
 
 	@echo "--- Step 1: Publishing llm-toolkit-macros ---"
 	@echo "  Running dry-run for llm-toolkit-macros..."
-	cargo publish -p llm-toolkit-macros --dry-run
+	cargo publish -p llm-toolkit-macros --dry-run --allow-dirty
 
 	@echo "  ✓ Dry-run successful for llm-toolkit-macros"
 	@echo "  Publishing llm-toolkit-macros to crates.io..."
-	cargo publish -p llm-toolkit-macros
+	cargo publish -p llm-toolkit-macros --allow-dirty
 
 	@echo "\n✅ llm-toolkit-macros published successfully!"
 	@echo "\n⏳ Waiting 10 seconds for crates.io index to update..."
@@ -30,11 +30,11 @@ publish: preflight
 
 	@echo "\n--- Step 2: Publishing llm-toolkit ---"
 	@echo "  Running dry-run for llm-toolkit..."
-	cargo publish -p llm-toolkit --dry-run
+	cargo publish -p llm-toolkit --dry-run --allow-dirty
 
 	@echo "  ✓ Dry-run successful for llm-toolkit"
 	@echo "  Publishing llm-toolkit to crates.io..."
-	cargo publish -p llm-toolkit
+	cargo publish -p llm-toolkit --allow-dirty
 
 	@echo "\n✅ llm-toolkit published successfully!"
 	@echo "\n🎉 All crates have been successfully published to crates.io!"
