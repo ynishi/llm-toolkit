@@ -362,3 +362,338 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
         }
     }
 }
+
+/// Information about a prompt target
+#[derive(Debug, Clone)]
+struct TargetInfo {
+    name: String,
+    template: Option<String>,
+    field_configs: std::collections::HashMap<String, FieldTargetConfig>,
+}
+
+/// Configuration for how a field should be handled for a specific target
+#[derive(Debug, Clone, Default)]
+struct FieldTargetConfig {
+    skip: bool,
+    rename: Option<String>,
+    format_with: Option<String>,
+    image: bool,
+    include_only: bool, // true if this field is specifically included for this target
+}
+
+/// Parse #[prompt_for(...)] attributes for ToPromptSet
+fn parse_prompt_for_attrs(attrs: &[syn::Attribute]) -> Vec<(String, FieldTargetConfig)> {
+    let mut configs = Vec::new();
+
+    for attr in attrs {
+        if attr.path().is_ident("prompt_for")
+            && let Ok(meta_list) = attr.meta.require_list()
+        {
+            // Try to parse as meta list
+            if meta_list.tokens.to_string() == "skip" {
+                // Simple #[prompt_for(skip)] applies to all targets
+                let config = FieldTargetConfig {
+                    skip: true,
+                    ..Default::default()
+                };
+                configs.push(("*".to_string(), config));
+            } else if let Ok(metas) =
+                meta_list.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+            {
+                let mut target_name = None;
+                let mut config = FieldTargetConfig::default();
+
+                for meta in metas {
+                    match meta {
+                        Meta::NameValue(nv) if nv.path.is_ident("name") => {
+                            if let syn::Expr::Lit(syn::ExprLit {
+                                lit: syn::Lit::Str(lit_str),
+                                ..
+                            }) = nv.value
+                            {
+                                target_name = Some(lit_str.value());
+                            }
+                        }
+                        Meta::Path(path) if path.is_ident("skip") => {
+                            config.skip = true;
+                        }
+                        Meta::NameValue(nv) if nv.path.is_ident("rename") => {
+                            if let syn::Expr::Lit(syn::ExprLit {
+                                lit: syn::Lit::Str(lit_str),
+                                ..
+                            }) = nv.value
+                            {
+                                config.rename = Some(lit_str.value());
+                            }
+                        }
+                        Meta::NameValue(nv) if nv.path.is_ident("format_with") => {
+                            if let syn::Expr::Lit(syn::ExprLit {
+                                lit: syn::Lit::Str(lit_str),
+                                ..
+                            }) = nv.value
+                            {
+                                config.format_with = Some(lit_str.value());
+                            }
+                        }
+                        Meta::Path(path) if path.is_ident("image") => {
+                            config.image = true;
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let Some(name) = target_name {
+                    config.include_only = true;
+                    configs.push((name, config));
+                }
+            }
+        }
+    }
+
+    configs
+}
+
+/// Parse struct-level #[prompt_for(...)] attributes to find target templates
+fn parse_struct_prompt_for_attrs(attrs: &[syn::Attribute]) -> Vec<TargetInfo> {
+    let mut targets = Vec::new();
+
+    for attr in attrs {
+        if attr.path().is_ident("prompt_for")
+            && let Ok(meta_list) = attr.meta.require_list()
+            && let Ok(metas) =
+                meta_list.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+        {
+            let mut target_name = None;
+            let mut template = None;
+
+            for meta in metas {
+                match meta {
+                    Meta::NameValue(nv) if nv.path.is_ident("name") => {
+                        if let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }) = nv.value
+                        {
+                            target_name = Some(lit_str.value());
+                        }
+                    }
+                    Meta::NameValue(nv) if nv.path.is_ident("template") => {
+                        if let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }) = nv.value
+                        {
+                            template = Some(lit_str.value());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(name) = target_name {
+                targets.push(TargetInfo {
+                    name,
+                    template,
+                    field_configs: std::collections::HashMap::new(),
+                });
+            }
+        }
+    }
+
+    targets
+}
+
+#[proc_macro_derive(ToPromptSet, attributes(prompt_for))]
+pub fn to_prompt_set_derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    // Only support structs with named fields
+    let data_struct = match &input.data {
+        Data::Struct(data) => data,
+        _ => panic!("`#[derive(ToPromptSet)]` is only supported for structs"),
+    };
+
+    let fields = match &data_struct.fields {
+        syn::Fields::Named(fields) => &fields.named,
+        _ => panic!("`#[derive(ToPromptSet)]` is only supported for structs with named fields"),
+    };
+
+    // Parse struct-level attributes to find targets
+    let mut targets = parse_struct_prompt_for_attrs(&input.attrs);
+
+    // Parse field-level attributes
+    for field in fields.iter() {
+        let field_name = field.ident.as_ref().unwrap().to_string();
+        let field_configs = parse_prompt_for_attrs(&field.attrs);
+
+        for (target_name, config) in field_configs {
+            if target_name == "*" {
+                // Apply to all targets
+                for target in &mut targets {
+                    target
+                        .field_configs
+                        .entry(field_name.clone())
+                        .or_insert_with(FieldTargetConfig::default)
+                        .skip = config.skip;
+                }
+            } else {
+                // Find or create the target
+                let target_exists = targets.iter().any(|t| t.name == target_name);
+                if !target_exists {
+                    // Add implicit target if not defined at struct level
+                    targets.push(TargetInfo {
+                        name: target_name.clone(),
+                        template: None,
+                        field_configs: std::collections::HashMap::new(),
+                    });
+                }
+
+                let target = targets.iter_mut().find(|t| t.name == target_name).unwrap();
+
+                target.field_configs.insert(field_name.clone(), config);
+            }
+        }
+    }
+
+    // Generate match arms for each target
+    let mut match_arms = Vec::new();
+
+    for target in &targets {
+        let target_name = &target.name;
+
+        if let Some(template_str) = &target.template {
+            // Template-based generation
+            let mut image_parts = Vec::new();
+
+            for field in fields.iter() {
+                let field_name = field.ident.as_ref().unwrap();
+                let field_name_str = field_name.to_string();
+
+                if let Some(config) = target.field_configs.get(&field_name_str)
+                    && config.image
+                {
+                    image_parts.push(quote! {
+                        parts.extend(self.#field_name.to_prompt_parts());
+                    });
+                }
+            }
+
+            match_arms.push(quote! {
+                #target_name => {
+                    let mut parts = Vec::new();
+
+                    #(#image_parts)*
+
+                    let text = llm_toolkit::prompt::render_prompt(#template_str, self)
+                        .map_err(|e| llm_toolkit::prompt::PromptSetError::RenderFailed {
+                            target: #target_name.to_string(),
+                            source: e,
+                        })?;
+
+                    if !text.is_empty() {
+                        parts.push(llm_toolkit::prompt::PromptPart::Text(text));
+                    }
+
+                    Ok(parts)
+                }
+            });
+        } else {
+            // Key-value based generation
+            let mut text_field_parts = Vec::new();
+            let mut image_field_parts = Vec::new();
+
+            for field in fields.iter() {
+                let field_name = field.ident.as_ref().unwrap();
+                let field_name_str = field_name.to_string();
+
+                // Check if field should be included for this target
+                let config = target.field_configs.get(&field_name_str);
+
+                // Skip if explicitly marked to skip
+                if let Some(cfg) = config
+                    && cfg.skip
+                {
+                    continue;
+                }
+
+                // For non-template targets, only include fields that are:
+                // 1. Explicitly marked for this target with #[prompt_for(name = "Target")]
+                // 2. Not marked for any specific target (default fields)
+                let is_explicitly_for_this_target = config.is_some_and(|c| c.include_only);
+                let has_any_target_specific_config = parse_prompt_for_attrs(&field.attrs)
+                    .iter()
+                    .any(|(name, _)| name != "*");
+
+                if has_any_target_specific_config && !is_explicitly_for_this_target {
+                    continue;
+                }
+
+                if let Some(cfg) = config {
+                    if cfg.image {
+                        image_field_parts.push(quote! {
+                            parts.extend(self.#field_name.to_prompt_parts());
+                        });
+                    } else {
+                        let key = cfg.rename.clone().unwrap_or_else(|| field_name_str.clone());
+
+                        let value_expr = if let Some(format_with) = &cfg.format_with {
+                            let func_path: syn::Path =
+                                syn::parse_str(format_with).unwrap_or_else(|_| {
+                                    panic!("Invalid function path: {}", format_with)
+                                });
+                            quote! { #func_path(&self.#field_name) }
+                        } else {
+                            quote! { self.#field_name.to_prompt() }
+                        };
+
+                        text_field_parts.push(quote! {
+                            text_parts.push(format!("{}: {}", #key, #value_expr));
+                        });
+                    }
+                } else {
+                    // Default handling for fields without specific config
+                    text_field_parts.push(quote! {
+                        text_parts.push(format!("{}: {}", #field_name_str, self.#field_name.to_prompt()));
+                    });
+                }
+            }
+
+            match_arms.push(quote! {
+                #target_name => {
+                    let mut parts = Vec::new();
+
+                    #(#image_field_parts)*
+
+                    let mut text_parts = Vec::new();
+                    #(#text_field_parts)*
+
+                    if !text_parts.is_empty() {
+                        parts.push(llm_toolkit::prompt::PromptPart::Text(text_parts.join("\n")));
+                    }
+
+                    Ok(parts)
+                }
+            });
+        }
+    }
+
+    // Add default case for unknown targets
+    match_arms.push(quote! {
+        _ => Err(llm_toolkit::prompt::PromptSetError::TargetNotFound(target.to_string()))
+    });
+
+    let struct_name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let expanded = quote! {
+        impl #impl_generics llm_toolkit::prompt::ToPromptSet for #struct_name #ty_generics #where_clause {
+            fn to_prompt_parts_for(&self, target: &str) -> Result<Vec<llm_toolkit::prompt::PromptPart>, llm_toolkit::prompt::PromptSetError> {
+                match target {
+                    #(#match_arms)*
+                }
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}

@@ -307,3 +307,77 @@ mod tests {
         assert_eq!(prompt, "This is a static prompt.");
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum PromptSetError {
+    #[error("Target '{0}' not found")]
+    TargetNotFound(String),
+    #[error("Failed to render prompt for target '{target}': {source}")]
+    RenderFailed {
+        target: String,
+        source: minijinja::Error,
+    },
+}
+
+/// A trait for types that can generate multiple named prompt targets.
+///
+/// This trait enables a single data structure to produce different prompt formats
+/// for various use cases (e.g., human-readable vs. machine-parsable formats).
+///
+/// # Example
+///
+/// ```ignore
+/// use llm_toolkit::prompt::{ToPromptSet, PromptPart};
+/// use serde::Serialize;
+///
+/// #[derive(ToPromptSet, Serialize)]
+/// #[prompt_for(name = "Visual", template = "## {{title}}\n\n> {{description}}")]
+/// struct Task {
+///     title: String,
+///     description: String,
+///
+///     #[prompt_for(name = "Agent")]
+///     priority: u8,
+///
+///     #[prompt_for(name = "Agent", rename = "internal_id")]
+///     id: u64,
+///
+///     #[prompt_for(skip)]
+///     is_dirty: bool,
+/// }
+///
+/// let task = Task {
+///     title: "Implement feature".to_string(),
+///     description: "Add new functionality".to_string(),
+///     priority: 1,
+///     id: 42,
+///     is_dirty: false,
+/// };
+///
+/// // Generate visual prompt
+/// let visual_prompt = task.to_prompt_for("Visual")?;
+///
+/// // Generate agent prompt
+/// let agent_prompt = task.to_prompt_for("Agent")?;
+/// ```
+pub trait ToPromptSet {
+    /// Generates multimodal prompt parts for the specified target.
+    fn to_prompt_parts_for(&self, target: &str) -> Result<Vec<PromptPart>, PromptSetError>;
+
+    /// Generates a text prompt for the specified target.
+    ///
+    /// This method extracts only the text portions from `to_prompt_parts_for()`
+    /// and joins them together.
+    fn to_prompt_for(&self, target: &str) -> Result<String, PromptSetError> {
+        let parts = self.to_prompt_parts_for(target)?;
+        let text = parts
+            .iter()
+            .filter_map(|part| match part {
+                PromptPart::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(text)
+    }
+}
