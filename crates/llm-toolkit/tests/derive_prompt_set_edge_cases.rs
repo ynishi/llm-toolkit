@@ -191,3 +191,30 @@ fn test_template_with_missing_field() {
     let text = result.unwrap();
     assert!(text.contains("Name: Test"));
 }
+
+// Test: Single target works (edge case - ToPromptSet can work with just one target)
+#[derive(ToPromptSet, Serialize, Debug)]
+struct SingleTargetStruct {
+    #[prompt_for(name = "OnlyTarget")]
+    field1: String,
+    #[prompt_for(name = "OnlyTarget")]
+    field2: i32,
+}
+
+#[test]
+fn test_single_target_edge_case() {
+    let data = SingleTargetStruct {
+        field1: "test".to_string(),
+        field2: 42,
+    };
+
+    // Even with a single target, ToPromptSet should work
+    let result = data.to_prompt_for("OnlyTarget").unwrap();
+    assert!(result.contains("field1: test"));
+    assert!(result.contains("field2: 42"));
+
+    // Non-existent target should error with available targets
+    let err = data.to_prompt_for("NonExistent").unwrap_err();
+    let err_msg = err.to_string();
+    assert!(err_msg.contains("Available targets: [\"OnlyTarget\"]"));
+}

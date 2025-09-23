@@ -310,8 +310,11 @@ mod tests {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PromptSetError {
-    #[error("Target '{0}' not found")]
-    TargetNotFound(String),
+    #[error("Target '{target}' not found. Available targets: {available:?}")]
+    TargetNotFound {
+        target: String,
+        available: Vec<String>,
+    },
     #[error("Failed to render prompt for target '{target}': {source}")]
     RenderFailed {
         target: String,

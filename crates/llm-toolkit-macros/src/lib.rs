@@ -510,12 +510,26 @@ pub fn to_prompt_set_derive(input: TokenStream) -> TokenStream {
     // Only support structs with named fields
     let data_struct = match &input.data {
         Data::Struct(data) => data,
-        _ => panic!("`#[derive(ToPromptSet)]` is only supported for structs"),
+        _ => {
+            return syn::Error::new(
+                input.ident.span(),
+                "`#[derive(ToPromptSet)]` is only supported for structs",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
 
     let fields = match &data_struct.fields {
         syn::Fields::Named(fields) => &fields.named,
-        _ => panic!("`#[derive(ToPromptSet)]` is only supported for structs with named fields"),
+        _ => {
+            return syn::Error::new(
+                input.ident.span(),
+                "`#[derive(ToPromptSet)]` is only supported for structs with named fields",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
 
     // Parse struct-level attributes to find targets
@@ -637,11 +651,21 @@ pub fn to_prompt_set_derive(input: TokenStream) -> TokenStream {
                         let key = cfg.rename.clone().unwrap_or_else(|| field_name_str.clone());
 
                         let value_expr = if let Some(format_with) = &cfg.format_with {
-                            let func_path: syn::Path =
-                                syn::parse_str(format_with).unwrap_or_else(|_| {
-                                    panic!("Invalid function path: {}", format_with)
-                                });
-                            quote! { #func_path(&self.#field_name) }
+                            // Parse the function path - if it fails, generate code that will produce a compile error
+                            match syn::parse_str::<syn::Path>(format_with) {
+                                Ok(func_path) => quote! { #func_path(&self.#field_name) },
+                                Err(_) => {
+                                    // Generate a compile error by using an invalid identifier
+                                    let error_msg = format!(
+                                        "Invalid function path in format_with: '{}'",
+                                        format_with
+                                    );
+                                    quote! {
+                                        compile_error!(#error_msg);
+                                        String::new()
+                                    }
+                                }
+                            }
                         } else {
                             quote! { self.#field_name.to_prompt() }
                         };
@@ -677,9 +701,18 @@ pub fn to_prompt_set_derive(input: TokenStream) -> TokenStream {
         }
     }
 
+    // Collect all target names for error reporting
+    let target_names: Vec<String> = targets.iter().map(|t| t.name.clone()).collect();
+
     // Add default case for unknown targets
     match_arms.push(quote! {
-        _ => Err(llm_toolkit::prompt::PromptSetError::TargetNotFound(target.to_string()))
+        _ => {
+            let available = vec![#(#target_names.to_string()),*];
+            Err(llm_toolkit::prompt::PromptSetError::TargetNotFound {
+                target: target.to_string(),
+                available,
+            })
+        }
     });
 
     let struct_name = &input.ident;

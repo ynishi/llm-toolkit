@@ -64,12 +64,11 @@ fn test_unknown_target() {
 
     let result = task.to_prompt_for("Unknown");
     assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("Target 'Unknown' not found")
-    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(err_msg.contains("Target 'Unknown' not found"));
+    assert!(err_msg.contains("Available targets"));
+    assert!(err_msg.contains("Visual"));
+    assert!(err_msg.contains("Agent"));
 }
 
 // Test with format_with attribute
