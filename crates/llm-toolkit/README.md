@@ -25,13 +25,14 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | Feature Area | Description | Key Components | Status |
 |---|---|---|---|
 | **Content Extraction** | Safely extracting structured data (like JSON) from unstructured LLM responses. | `extract` module (`FlexibleExtractor`, `extract_json`) | Implemented |
-| **Prompt Generation** | Building complex prompts from Rust data structures with a powerful templating engine. | `prompt!` macro, `#[derive(ToPrompt)]` | Implemented |
+| **Prompt Generation** | Building complex prompts from Rust data structures with a powerful templating engine. | `prompt!` macro, `#[derive(ToPrompt)]`, `#[derive(ToPromptSet)]` | Implemented |
+| **Multi-Target Prompts** | Generate multiple prompt formats from a single data structure for different contexts. | `ToPromptSet` trait, `#[prompt_for(...)]` attributes | Implemented |
 | **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentExtractor`, `PromptBasedExtractor`) | Implemented |
 | **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
 
 ## Prompt Generation
 
-`llm-toolkit` offers two powerful and convenient ways to generate prompts, powered by the `minijinja` templating engine.
+`llm-toolkit` offers three powerful and convenient ways to generate prompts, powered by the `minijinja` templating engine.
 
 ### 1. Ad-hoc Prompts with `prompt!` macro
 
@@ -226,6 +227,104 @@ Note how in the output:
 - `UpdateProfile` uses the custom description from `#[prompt("...")]`
 - `InternalDebugAction` is completely excluded due to `#[prompt(skip)]`
 - `DeleteItem` appears with just its name since it has no documentation
+
+### 4. Multi-Target Prompts with `#[derive(ToPromptSet)]`
+
+For applications that need to generate different prompt formats from the same data structure for various contexts (e.g., human-readable vs. machine-parsable, or different LLM models), the `ToPromptSet` derive macro enables powerful multi-target prompt generation.
+
+#### Basic Multi-Target Setup
+
+```rust
+use llm_toolkit::ToPromptSet;
+use serde::Serialize;
+
+#[derive(ToPromptSet, Serialize)]
+#[prompt_for(name = "Visual", template = "## {{title}}\n\n> {{description}}")]
+struct Task {
+    title: String,
+    description: String,
+
+    #[prompt_for(name = "Agent")]
+    priority: u8,
+
+    #[prompt_for(name = "Agent", rename = "internal_id")]
+    id: u64,
+
+    #[prompt_for(skip)]
+    is_dirty: bool,
+}
+
+let task = Task {
+    title: "Implement feature".to_string(),
+    description: "Add new functionality".to_string(),
+    priority: 1,
+    id: 42,
+    is_dirty: false,
+};
+
+// Generate visual-friendly prompt using template
+let visual_prompt = task.to_prompt_for("Visual")?;
+// Output: "## Implement feature\n\n> Add new functionality"
+
+// Generate agent-friendly prompt with key-value format
+let agent_prompt = task.to_prompt_for("Agent")?;
+// Output: "title: Implement feature\ndescription: Add new functionality\npriority: 1\ninternal_id: 42"
+```
+
+#### Advanced Features
+
+**Custom Formatting Functions:**
+```rust
+fn format_priority(priority: &u8) -> String {
+    match priority {
+        1 => "Low".to_string(),
+        2 => "Medium".to_string(),
+        3 => "High".to_string(),
+        _ => "Unknown".to_string(),
+    }
+}
+
+#[derive(ToPromptSet, Serialize)]
+struct FormattedTask {
+    title: String,
+
+    #[prompt_for(name = "Human", format_with = "format_priority")]
+    priority: u8,
+}
+```
+
+**Multimodal Support:**
+```rust
+use llm_toolkit::prompt::{PromptPart, ToPrompt};
+
+#[derive(ToPromptSet, Serialize)]
+#[prompt_for(name = "Multimodal", template = "Analyzing image: {{caption}}")]
+struct ImageTask {
+    caption: String,
+
+    #[prompt_for(name = "Multimodal", image)]
+    image: ImageData,
+}
+
+// Generate multimodal prompt with both text and image
+let parts = task.to_prompt_parts_for("Multimodal")?;
+// Returns Vec<PromptPart> with both Image and Text parts
+```
+
+#### Target Configuration Options
+
+| Attribute | Description | Example |
+|-----------|-------------|---------|
+| `#[prompt_for(name = "TargetName")]` | Include field in specific target | `#[prompt_for(name = "Debug")]` |
+| `#[prompt_for(name = "Target", template = "...")]` | Use template for target (struct-level) | `#[prompt_for(name = "Visual", template = "{{title}}")]` |
+| `#[prompt_for(name = "Target", rename = "new_name")]` | Rename field for specific target | `#[prompt_for(name = "API", rename = "task_id")]` |
+| `#[prompt_for(name = "Target", format_with = "func")]` | Custom formatting function | `#[prompt_for(name = "Human", format_with = "format_date")]` |
+| `#[prompt_for(name = "Target", image)]` | Mark field as image content | `#[prompt_for(name = "Vision", image)]` |
+| `#[prompt_for(skip)]` | Exclude field from all targets | `#[prompt_for(skip)]` |
+
+When to use `ToPromptSet` vs `ToPrompt`:
+- **`ToPrompt`**: Single, consistent prompt format across your application
+- **`ToPromptSet`**: Multiple prompt formats needed for different contexts (human vs. machine, different LLM models, etc.)
 
 ## Future Directions
 
