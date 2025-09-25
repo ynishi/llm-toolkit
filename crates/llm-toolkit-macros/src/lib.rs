@@ -2,6 +2,76 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Meta, parse_macro_input, punctuated::Punctuated};
 
+/// Convert single brace syntax to double brace syntax for minijinja
+/// {field} -> {{field}}, but leave {{ and }} as is
+fn convert_to_minijinja_syntax(template: &str) -> String {
+    let mut result = String::new();
+    let mut chars = template.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            // Check if it's already a double brace
+            if chars.peek() == Some(&'{') {
+                result.push(ch);
+                result.push(chars.next().unwrap());
+            } else {
+                // Single brace, convert to double
+                result.push_str("{{");
+            }
+        } else if ch == '}' {
+            // Check if it's already a double brace
+            if chars.peek() == Some(&'}') {
+                result.push(ch);
+                result.push(chars.next().unwrap());
+            } else {
+                // Single brace, convert to double
+                result.push_str("}}");
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+/// Parse template placeholders and extract field names with optional modes
+/// Returns a list of (field_name, optional_mode)
+fn parse_template_placeholders(template: &str) -> Vec<(String, Option<String>)> {
+    let mut placeholders = Vec::new();
+    let mut chars = template.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            // Check if it's a double brace (escaped)
+            if chars.peek() == Some(&'{') {
+                chars.next(); // Skip the second brace
+                continue;
+            }
+
+            // Parse placeholder content
+            let mut placeholder = String::new();
+            for inner_ch in chars.by_ref() {
+                if inner_ch == '}' {
+                    break;
+                }
+                placeholder.push(inner_ch);
+            }
+
+            // Check if placeholder contains :mode syntax
+            if let Some(colon_pos) = placeholder.find(':') {
+                let field_name = placeholder[..colon_pos].trim().to_string();
+                let mode = placeholder[colon_pos + 1..].trim().to_string();
+                placeholders.push((field_name, Some(mode)));
+            } else {
+                placeholders.push((placeholder.trim().to_string(), None));
+            }
+        }
+    }
+
+    placeholders
+}
+
 /// Extract doc comments from attributes
 fn extract_doc_comments(attrs: &[syn::Attribute]) -> String {
     attrs
@@ -541,6 +611,16 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     );
                 };
 
+                // Parse template to detect mode syntax
+                let placeholders = parse_template_placeholders(&template_str);
+                // Only use custom mode processing if template actually contains :mode syntax
+                let has_mode_syntax = placeholders.iter().any(|(field_name, mode)| {
+                    mode.is_some()
+                        && fields
+                            .iter()
+                            .any(|f| f.ident.as_ref().unwrap() == field_name)
+                });
+
                 let mut image_field_parts = Vec::new();
                 for f in fields.iter() {
                     let field_name = f.ident.as_ref().unwrap();
@@ -554,29 +634,131 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                quote! {
-                    impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
-                        fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
-                            let mut parts = Vec::new();
+                // Generate appropriate code based on whether mode syntax is used
+                if has_mode_syntax {
+                    // Build custom context for fields with mode specifications
+                    let mut context_fields = Vec::new();
 
-                            // Add image parts first
-                            #(#image_field_parts)*
+                    // Convert template to minijinja syntax, but preserve mode information
+                    // We'll replace {field:mode} with unique keys for each mode
+                    let mut converted_template = template_str.clone();
 
-                            // Add the rendered template as text
-                            let text = llm_toolkit::prompt::render_prompt(#template_str, self).unwrap_or_else(|e| {
-                                format!("Failed to render prompt: {}", e)
+                    // Process each placeholder
+                    for (field_name, mode_opt) in &placeholders {
+                        // Find the corresponding field
+                        let field_ident =
+                            syn::Ident::new(field_name, proc_macro2::Span::call_site());
+
+                        if let Some(mode) = mode_opt {
+                            // Create a unique key for this field:mode combination
+                            let unique_key = format!("{}__{}", field_name, mode);
+
+                            // Replace {field:mode} with {{field__mode}} in template
+                            let pattern = format!("{{{}:{}}}", field_name, mode);
+                            let replacement = format!("{{{{{}}}}}", unique_key);
+                            converted_template = converted_template.replace(&pattern, &replacement);
+
+                            // Field with mode specification
+                            context_fields.push(quote! {
+                                context.insert(
+                                    #unique_key.to_string(),
+                                    minijinja::Value::from(self.#field_ident.to_prompt_with_mode(#mode))
+                                );
                             });
-                            if !text.is_empty() {
-                                parts.push(llm_toolkit::prompt::PromptPart::Text(text));
+                        } else {
+                            // Replace {field} with {{field}} in template
+                            let pattern = format!("{{{}}}", field_name);
+                            let replacement = format!("{{{{{}}}}}", field_name);
+                            converted_template = converted_template.replace(&pattern, &replacement);
+
+                            // Field without mode (use default)
+                            context_fields.push(quote! {
+                                context.insert(
+                                    #field_name.to_string(),
+                                    minijinja::Value::from(self.#field_ident.to_prompt())
+                                );
+                            });
+                        }
+                    }
+
+                    quote! {
+                        impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
+                            fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
+                                let mut parts = Vec::new();
+
+                                // Add image parts first
+                                #(#image_field_parts)*
+
+                                // Build custom context and render template
+                                let text = {
+                                    let mut env = minijinja::Environment::new();
+                                    env.add_template("prompt", #converted_template).unwrap_or_else(|e| {
+                                        panic!("Failed to parse template: {}", e)
+                                    });
+
+                                    let tmpl = env.get_template("prompt").unwrap();
+
+                                    let mut context = std::collections::HashMap::new();
+                                    #(#context_fields)*
+
+                                    tmpl.render(context).unwrap_or_else(|e| {
+                                        format!("Failed to render prompt: {}", e)
+                                    })
+                                };
+
+                                if !text.is_empty() {
+                                    parts.push(llm_toolkit::prompt::PromptPart::Text(text));
+                                }
+
+                                parts
                             }
 
-                            parts
-                        }
+                            fn to_prompt(&self) -> String {
+                                // Same logic for to_prompt
+                                let mut env = minijinja::Environment::new();
+                                env.add_template("prompt", #converted_template).unwrap_or_else(|e| {
+                                    panic!("Failed to parse template: {}", e)
+                                });
 
-                        fn to_prompt(&self) -> String {
-                            llm_toolkit::prompt::render_prompt(#template_str, self).unwrap_or_else(|e| {
-                                format!("Failed to render prompt: {}", e)
-                            })
+                                let tmpl = env.get_template("prompt").unwrap();
+
+                                let mut context = std::collections::HashMap::new();
+                                #(#context_fields)*
+
+                                tmpl.render(context).unwrap_or_else(|e| {
+                                    format!("Failed to render prompt: {}", e)
+                                })
+                            }
+                        }
+                    }
+                } else {
+                    // No mode syntax, convert single braces to double braces for minijinja
+                    let converted_template = convert_to_minijinja_syntax(&template_str);
+
+                    quote! {
+                        impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
+                            fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
+                                let mut parts = Vec::new();
+
+                                // Add image parts first
+                                #(#image_field_parts)*
+
+                                // Add the rendered template as text
+                                let text = llm_toolkit::prompt::render_prompt(#converted_template, self).unwrap_or_else(|e| {
+                                    format!("Failed to render prompt: {}", e)
+                                });
+                                if !text.is_empty() {
+                                    parts.push(llm_toolkit::prompt::PromptPart::Text(text));
+                                }
+
+                                parts
+                            }
+
+                            fn to_prompt(&self) -> String {
+                                llm_toolkit::prompt::render_prompt(#converted_template, self).unwrap_or_else(|e| {
+                                    format!("Failed to render prompt: {}", e)
+                                })
+                            }
                         }
                     }
                 }
