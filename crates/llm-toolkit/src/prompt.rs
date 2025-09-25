@@ -72,19 +72,27 @@ pub enum PromptPart {
 /// assert_eq!(custom.to_prompt(), "custom");
 /// ```
 pub trait ToPrompt {
-    /// Converts the object into a vector of `PromptPart`s.
+    /// Converts the object into a vector of `PromptPart`s based on a mode.
     ///
-    /// This method enables multimodal prompt generation by returning
-    /// a collection of prompt parts that can include text, images, and
-    /// other media types.
-    fn to_prompt_parts(&self) -> Vec<PromptPart>;
-
-    /// Converts the object into a prompt string.
+    /// This is the core method that `derive(ToPrompt)` will implement.
+    /// The `mode` argument allows for different prompt representations, such as:
+    /// - "full": A comprehensive prompt with schema and examples.
+    /// - "schema_only": Just the data structure's schema.
+    /// - "example_only": Just a concrete example.
     ///
-    /// This method provides backward compatibility by extracting only
-    /// the text portions from `to_prompt_parts()` and joining them.
-    fn to_prompt(&self) -> String {
+    /// The default implementation ignores the mode and calls `to_prompt_parts`
+    /// for backward compatibility with manual implementations.
+    fn to_prompt_parts_with_mode(&self, mode: &str) -> Vec<PromptPart> {
+        // Default implementation for backward compatibility
+        let _ = mode; // Unused in default impl
         self.to_prompt_parts()
+    }
+
+    /// Converts the object into a prompt string based on a mode.
+    ///
+    /// This method extracts only the text portions from `to_prompt_parts_with_mode()`.
+    fn to_prompt_with_mode(&self, mode: &str) -> String {
+        self.to_prompt_parts_with_mode(mode)
             .iter()
             .filter_map(|part| match part {
                 PromptPart::Text(text) => Some(text.as_str()),
@@ -92,6 +100,23 @@ pub trait ToPrompt {
             })
             .collect::<Vec<_>>()
             .join("")
+    }
+
+    /// Converts the object into a vector of `PromptPart`s using the default "full" mode.
+    ///
+    /// This method enables multimodal prompt generation by returning
+    /// a collection of prompt parts that can include text, images, and
+    /// other media types.
+    fn to_prompt_parts(&self) -> Vec<PromptPart> {
+        self.to_prompt_parts_with_mode("full")
+    }
+
+    /// Converts the object into a prompt string using the default "full" mode.
+    ///
+    /// This method provides backward compatibility by extracting only
+    /// the text portions from `to_prompt_parts()` and joining them.
+    fn to_prompt(&self) -> String {
+        self.to_prompt_with_mode("full")
     }
 }
 

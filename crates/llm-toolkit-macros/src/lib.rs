@@ -23,6 +23,181 @@ fn extract_doc_comments(attrs: &[syn::Attribute]) -> String {
         .join(" ")
 }
 
+/// Generate example JSON representation for a struct
+fn generate_example_only_parts(
+    fields: &syn::punctuated::Punctuated<syn::Field, syn::Token![,]>,
+    has_default: bool,
+) -> proc_macro2::TokenStream {
+    let mut field_values = Vec::new();
+
+    for field in fields.iter() {
+        let field_name = field.ident.as_ref().unwrap();
+        let field_name_str = field_name.to_string();
+        let attrs = parse_field_prompt_attrs(&field.attrs);
+
+        // Skip if marked to skip
+        if attrs.skip {
+            continue;
+        }
+
+        // Check if field has example attribute
+        if let Some(example) = attrs.example {
+            // Use the provided example value
+            field_values.push(quote! {
+                json_obj.insert(#field_name_str.to_string(), serde_json::Value::String(#example.to_string()));
+            });
+        } else if has_default {
+            // Use Default value if available
+            field_values.push(quote! {
+                let default_value = serde_json::to_value(&default_instance.#field_name)
+                    .unwrap_or(serde_json::Value::Null);
+                json_obj.insert(#field_name_str.to_string(), default_value);
+            });
+        } else {
+            // Use self's actual value
+            field_values.push(quote! {
+                let value = serde_json::to_value(&self.#field_name)
+                    .unwrap_or(serde_json::Value::Null);
+                json_obj.insert(#field_name_str.to_string(), value);
+            });
+        }
+    }
+
+    if has_default {
+        quote! {
+            {
+                let default_instance = Self::default();
+                let mut json_obj = serde_json::Map::new();
+                #(#field_values)*
+                let json_value = serde_json::Value::Object(json_obj);
+                let json_str = serde_json::to_string_pretty(&json_value)
+                    .unwrap_or_else(|_| "{}".to_string());
+                vec![llm_toolkit::prompt::PromptPart::Text(json_str)]
+            }
+        }
+    } else {
+        quote! {
+            {
+                let mut json_obj = serde_json::Map::new();
+                #(#field_values)*
+                let json_value = serde_json::Value::Object(json_obj);
+                let json_str = serde_json::to_string_pretty(&json_value)
+                    .unwrap_or_else(|_| "{}".to_string());
+                vec![llm_toolkit::prompt::PromptPart::Text(json_str)]
+            }
+        }
+    }
+}
+
+/// Generate schema-only representation for a struct
+fn generate_schema_only_parts(
+    struct_name: &str,
+    struct_docs: &str,
+    fields: &syn::punctuated::Punctuated<syn::Field, syn::Token![,]>,
+) -> proc_macro2::TokenStream {
+    let mut schema_lines = vec![];
+
+    // Add header
+    if !struct_docs.is_empty() {
+        schema_lines.push(format!("### Schema for `{}`\n{}", struct_name, struct_docs));
+    } else {
+        schema_lines.push(format!("### Schema for `{}`", struct_name));
+    }
+
+    schema_lines.push("{".to_string());
+
+    // Process fields
+    for (i, field) in fields.iter().enumerate() {
+        let field_name = field.ident.as_ref().unwrap();
+        let attrs = parse_field_prompt_attrs(&field.attrs);
+
+        // Skip if marked to skip
+        if attrs.skip {
+            continue;
+        }
+
+        // Get field documentation
+        let field_docs = extract_doc_comments(&field.attrs);
+
+        // Determine the type representation
+        let type_str = format_type_for_schema(&field.ty);
+
+        // Build field line
+        let mut field_line = format!("  \"{}\": \"{}\"", field_name, type_str);
+
+        // Add comment if there's documentation
+        if !field_docs.is_empty() {
+            field_line.push_str(&format!(", // {}", field_docs));
+        }
+
+        // Add comma if not last field (accounting for skipped fields)
+        let remaining_fields = fields
+            .iter()
+            .skip(i + 1)
+            .filter(|f| {
+                let attrs = parse_field_prompt_attrs(&f.attrs);
+                !attrs.skip
+            })
+            .count();
+
+        if remaining_fields > 0 {
+            field_line.push(',');
+        }
+
+        schema_lines.push(field_line);
+    }
+
+    schema_lines.push("}".to_string());
+
+    let schema_str = schema_lines.join("\n");
+
+    quote! {
+        vec![llm_toolkit::prompt::PromptPart::Text(#schema_str.to_string())]
+    }
+}
+
+/// Format a type for schema representation
+fn format_type_for_schema(ty: &syn::Type) -> String {
+    // Simple type formatting - can be enhanced
+    match ty {
+        syn::Type::Path(type_path) => {
+            let path = &type_path.path;
+            if let Some(last_segment) = path.segments.last() {
+                let type_name = last_segment.ident.to_string();
+
+                // Handle Option<T>
+                if type_name == "Option"
+                    && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+                    && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+                {
+                    return format!("{} | null", format_type_for_schema(inner_type));
+                }
+
+                // Map common types
+                match type_name.as_str() {
+                    "String" | "str" => "string".to_string(),
+                    "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
+                    | "u64" | "u128" | "usize" => "number".to_string(),
+                    "f32" | "f64" => "number".to_string(),
+                    "bool" => "boolean".to_string(),
+                    "Vec" => {
+                        if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+                            && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+                        {
+                            return format!("{}[]", format_type_for_schema(inner_type));
+                        }
+                        "array".to_string()
+                    }
+                    _ => type_name.to_lowercase(),
+                }
+            } else {
+                "unknown".to_string()
+            }
+        }
+        _ => "unknown".to_string(),
+    }
+}
+
 /// Result of parsing prompt attribute
 enum PromptAttribute {
     Skip,
@@ -59,6 +234,7 @@ struct FieldPromptAttrs {
     rename: Option<String>,
     format_with: Option<String>,
     image: bool,
+    example: Option<String>,
 }
 
 /// Parse #[prompt(...)] attributes for struct fields
@@ -98,6 +274,15 @@ fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
                             }
                             Meta::Path(path) if path.is_ident("image") => {
                                 result.image = true;
+                            }
+                            Meta::NameValue(nv) if nv.path.is_ident("example") => {
+                                if let syn::Expr::Lit(syn::ExprLit {
+                                    lit: syn::Lit::Str(lit_str),
+                                    ..
+                                }) = nv.value
+                                {
+                                    result.example = Some(lit_str.value());
+                                }
                             }
                             _ => {}
                         }
@@ -224,37 +409,128 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             TokenStream::from(expanded)
         }
         Data::Struct(data_struct) => {
-            // Check if there's a #[prompt(template = "...")] attribute
-            let template_attr = input
-                .attrs
-                .iter()
-                .find(|attr| attr.path().is_ident("prompt"))
-                .and_then(|attr| {
+            // Parse struct-level prompt attributes for template and mode
+            let mut template_attr = None;
+            let mut mode_attr = None;
+
+            for attr in &input.attrs {
+                if attr.path().is_ident("prompt") {
                     // Try to parse the attribute arguments
-                    attr.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
-                        .ok()
-                        .and_then(|metas| {
-                            metas.into_iter().find_map(|meta| match meta {
+                    if let Ok(metas) =
+                        attr.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+                    {
+                        for meta in metas {
+                            match meta {
                                 Meta::NameValue(nv) if nv.path.is_ident("template") => {
-                                    if let syn::Expr::Lit(expr_lit) = nv.value {
-                                        if let syn::Lit::Str(lit_str) = expr_lit.lit {
-                                            Some(lit_str.value())
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
+                                    if let syn::Expr::Lit(expr_lit) = nv.value
+                                        && let syn::Lit::Str(lit_str) = expr_lit.lit
+                                    {
+                                        template_attr = Some(lit_str.value());
                                     }
                                 }
-                                _ => None,
-                            })
-                        })
-                });
+                                Meta::NameValue(nv) if nv.path.is_ident("mode") => {
+                                    if let syn::Expr::Lit(expr_lit) = nv.value
+                                        && let syn::Lit::Str(lit_str) = expr_lit.lit
+                                    {
+                                        mode_attr = Some(lit_str.value());
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
 
             let name = input.ident;
             let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-            let expanded = if let Some(template_str) = template_attr {
+            // Extract struct name and doc comment for use in schema generation
+            let struct_docs = extract_doc_comments(&input.attrs);
+
+            // Check if this is a mode-based struct (mode attribute present)
+            let is_mode_based =
+                mode_attr.is_some() || (template_attr.is_none() && struct_docs.contains("mode"));
+
+            let expanded = if is_mode_based || mode_attr.is_some() {
+                // Mode-based generation: support schema_only, example_only, full
+                let fields = if let syn::Fields::Named(fields) = &data_struct.fields {
+                    &fields.named
+                } else {
+                    panic!(
+                        "Mode-based prompt generation is only supported for structs with named fields."
+                    );
+                };
+
+                let struct_name_str = name.to_string();
+
+                // Check if struct derives Default
+                let has_default = input.attrs.iter().any(|attr| {
+                    if attr.path().is_ident("derive") {
+                        if let Ok(meta_list) = attr.meta.require_list() {
+                            let tokens_str = meta_list.tokens.to_string();
+                            tokens_str.contains("Default")
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                });
+
+                // Generate schema-only parts
+                let schema_parts =
+                    generate_schema_only_parts(&struct_name_str, &struct_docs, fields);
+
+                // Generate example parts
+                let example_parts = generate_example_only_parts(fields, has_default);
+
+                quote! {
+                    impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
+                        fn to_prompt_parts_with_mode(&self, mode: &str) -> Vec<llm_toolkit::prompt::PromptPart> {
+                            match mode {
+                                "schema_only" => #schema_parts,
+                                "example_only" => #example_parts,
+                                "full" | _ => {
+                                    // Combine schema and example
+                                    let mut parts = Vec::new();
+
+                                    // Add schema
+                                    let schema_parts = #schema_parts;
+                                    parts.extend(schema_parts);
+
+                                    // Add separator and example header
+                                    parts.push(llm_toolkit::prompt::PromptPart::Text("\n### Example".to_string()));
+                                    parts.push(llm_toolkit::prompt::PromptPart::Text(
+                                        format!("Here is an example of a valid `{}` object:", #struct_name_str)
+                                    ));
+
+                                    // Add example
+                                    let example_parts = #example_parts;
+                                    parts.extend(example_parts);
+
+                                    parts
+                                }
+                            }
+                        }
+
+                        fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
+                            self.to_prompt_parts_with_mode("full")
+                        }
+
+                        fn to_prompt(&self) -> String {
+                            self.to_prompt_parts()
+                                .into_iter()
+                                .filter_map(|part| match part {
+                                    llm_toolkit::prompt::PromptPart::Text(text) => Some(text),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        }
+                    }
+                }
+            } else if let Some(template_str) = template_attr {
                 // Use template-based approach if template is provided
                 // Collect image fields separately for to_prompt_parts()
                 let fields = if let syn::Fields::Named(fields) = &data_struct.fields {

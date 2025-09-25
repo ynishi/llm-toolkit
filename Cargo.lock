@@ -46,6 +46,7 @@ dependencies = [
  "minijinja",
  "regex",
  "serde",
+ "serde_json",
  "strum",
  "strum_macros",
  "thiserror",
