@@ -116,6 +116,48 @@ fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
     result
 }
 
+/// Derives the `ToPrompt` trait for a struct or enum.
+///
+/// This macro provides two main functionalities depending on the type.
+///
+/// ## For Structs
+///
+/// It can generate a prompt based on a template string or by creating a key-value representation of the struct's fields.
+///
+/// ### Template-based Prompt
+///
+/// Use the `#[prompt(template = "...")]` attribute to provide a `minijinja` template. The struct fields will be available as variables in the template. The struct must also derive `serde::Serialize`.
+///
+/// ```rust,ignore
+/// #[derive(ToPrompt, Serialize)]
+/// #[prompt(template = "User {{ name }} is a {{ role }}.")]
+/// struct UserProfile {
+///     name: &'static str,
+///     role: &'static str,
+/// }
+/// ```
+///
+/// ### Tip: Handling Special Characters in Templates
+///
+/// When using raw string literals (e.g., `r#"..."#`) for your templates, be aware of a potential parsing issue if your template content includes the `#` character. To avoid this, use a different number of `#` symbols for the raw string delimiter.
+///
+/// **Problematic Example:**
+/// ```rust,ignore
+/// // This might fail to parse correctly
+/// #[prompt(template = r#"{"color": "#FFFFFF"}"#)]
+/// struct Color { /* ... */ }
+/// ```
+///
+/// **Solution:**
+/// ```rust,ignore
+/// // Use r##"..."## to avoid ambiguity with the inner '#'
+/// #[prompt(template = r##"{"color": "#FFFFFF"}"##)]
+/// struct Color { /* ... */ }
+/// ```
+///
+/// ## For Enums
+///
+/// For enums, the macro generates a descriptive prompt based on doc comments and attributes, outlining the available variants. See the documentation on the `ToPrompt` trait for more details.
 #[proc_macro_derive(ToPrompt, attributes(prompt))]
 pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

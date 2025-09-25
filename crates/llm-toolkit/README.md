@@ -158,6 +158,26 @@ let p = user.to_prompt();
 // formatted_id: user-123
 ```
 
+#### Tip: Handling Special Characters in Templates
+
+When using raw string literals (`r#"..."#`) for your templates, be aware of a potential parsing issue if your template content includes the `#` character (e.g., in a hex color code like `"#FFFFFF"`).
+
+The macro parser can sometimes get confused by the inner `#`. To avoid this, you can use a different number of `#` symbols for the raw string delimiter.
+
+**Problematic Example:**
+```rust
+// This might fail to parse correctly
+#[prompt(template = r#"{"color": "#FFFFFF"}"#)] 
+struct Color { /* ... */ }
+```
+
+**Solution:**
+```rust
+// Use r##"..."## to avoid ambiguity
+#[prompt(template = r##"{"color": "#FFFFFF"}"##)]
+struct Color { /* ... */ }
+```
+
 ### 3. Enum Documentation with `#[derive(ToPrompt)]`
 
 For enums, the `ToPrompt` derive macro provides flexible ways to generate prompts that describe your enum variants for LLM consumption. You can use doc comments, custom descriptions, or exclude variants entirely.
