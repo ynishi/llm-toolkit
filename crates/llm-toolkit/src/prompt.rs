@@ -409,3 +409,20 @@ pub trait ToPromptSet {
         Ok(text)
     }
 }
+
+/// A trait for generating a prompt for a specific target type.
+///
+/// This allows a type (e.g., a `Tool`) to define how it should be represented
+/// in a prompt when provided with a target context (e.g., an `Agent`).
+pub trait ToPromptFor<T> {
+    /// Generates a prompt for the given target, using a specific mode.
+    fn to_prompt_for_with_mode(&self, target: &T, mode: &str) -> String;
+
+    /// Generates a prompt for the given target using the default "full" mode.
+    ///
+    /// This method provides backward compatibility by calling the `_with_mode`
+    /// variant with a default mode.
+    fn to_prompt_for(&self, target: &T) -> String {
+        self.to_prompt_for_with_mode(target, "full")
+    }
+}

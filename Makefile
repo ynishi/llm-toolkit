@@ -1,12 +1,25 @@
 .PHONY: preflight publish test-example-derive-prompt-enum
 
-# Test derive_prompt_enum example
-test-example-derive-prompt-enum:
-	@echo "Testing derive_prompt_enum example..."
-	cargo run --example derive_prompt_enum --package llm-toolkit --features="derive"
+# 実行したいExampleの名前をリストとして変数に定義
+EXAMPLES := \
+	derive_prompt_enum \
+	derive_prompt_for \
+	derive_prompt_format_with \
+	derive_prompt_set \
+	derive_prompt \
+	examples_section_test \
+	multimodal_prompt \
+	to_prompt_for_test
+
+# test-examplesターゲットで、リストをループ処理する
+test-examples:
+	@for name in $(EXAMPLES); do \
+		echo "Running $$name example..."; \
+		cargo run --example $$name --package llm-toolkit --features="derive"; \
+	done
 
 # Run checks for all workspace members
-preflight: test-example-derive-prompt-enum
+preflight: test-examples
 	@echo "Running preflight checks for the entire workspace..."
 	cargo fmt --all
 	cargo clippy --all-targets --all-features -- -D warnings

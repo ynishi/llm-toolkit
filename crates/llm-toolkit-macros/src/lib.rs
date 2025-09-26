@@ -1,6 +1,11 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Meta, parse_macro_input, punctuated::Punctuated};
+use syn::{
+    Data, DeriveInput, Meta, Token,
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    punctuated::Punctuated,
+};
 
 /// Convert single brace syntax to double brace syntax for minijinja
 /// {field} -> {{field}}, but leave {{ and }} as is
@@ -1224,6 +1229,284 @@ pub fn to_prompt_set_derive(input: TokenStream) -> TokenStream {
                 match target {
                     #(#match_arms)*
                 }
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+/// Wrapper struct for parsing a comma-separated list of types
+struct TypeList {
+    types: Punctuated<syn::Type, Token![,]>,
+}
+
+impl Parse for TypeList {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(TypeList {
+            types: Punctuated::parse_terminated(input)?,
+        })
+    }
+}
+
+/// Generates a formatted Markdown examples section for the provided types.
+///
+/// This macro accepts a comma-separated list of types and generates a single
+/// formatted Markdown string containing examples of each type.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let examples = examples_section!(User, Concept);
+/// // Produces a string like:
+/// // ---
+/// // ### Examples
+/// //
+/// // Here are examples of the data structures you should use.
+/// //
+/// // ---
+/// // #### `User`
+/// // {...json...}
+/// // ---
+/// // #### `Concept`
+/// // {...json...}
+/// // ---
+/// ```
+#[proc_macro]
+pub fn examples_section(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as TypeList);
+
+    // Generate code for each type
+    let mut type_sections = Vec::new();
+
+    for ty in input.types.iter() {
+        // Extract the type name as a string
+        let type_name_str = quote!(#ty).to_string();
+
+        // Generate the section for this type
+        type_sections.push(quote! {
+            {
+                let type_name = #type_name_str;
+                let json_example = <#ty as Default>::default().to_prompt_with_mode("example_only");
+                format!("---\n#### `{}`\n{}", type_name, json_example)
+            }
+        });
+    }
+
+    // Build the complete examples string
+    let expanded = quote! {
+        {
+            let mut sections = Vec::new();
+            sections.push("---".to_string());
+            sections.push("### Examples".to_string());
+            sections.push("".to_string());
+            sections.push("Here are examples of the data structures you should use.".to_string());
+            sections.push("".to_string());
+
+            #(sections.push(#type_sections);)*
+
+            sections.push("---".to_string());
+
+            sections.join("\n")
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+/// Helper function to parse struct-level #[prompt_for(target = "...", template = "...")] attribute
+fn parse_to_prompt_for_attribute(attrs: &[syn::Attribute]) -> (syn::Type, String) {
+    for attr in attrs {
+        if attr.path().is_ident("prompt_for")
+            && let Ok(meta_list) = attr.meta.require_list()
+            && let Ok(metas) =
+                meta_list.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+        {
+            let mut target_type = None;
+            let mut template = None;
+
+            for meta in metas {
+                match meta {
+                    Meta::NameValue(nv) if nv.path.is_ident("target") => {
+                        if let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }) = nv.value
+                        {
+                            // Parse the type string into a syn::Type
+                            target_type = syn::parse_str::<syn::Type>(&lit_str.value()).ok();
+                        }
+                    }
+                    Meta::NameValue(nv) if nv.path.is_ident("template") => {
+                        if let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }) = nv.value
+                        {
+                            template = Some(lit_str.value());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let (Some(target), Some(tmpl)) = (target_type, template) {
+                return (target, tmpl);
+            }
+        }
+    }
+
+    panic!("ToPromptFor requires #[prompt_for(target = \"TargetType\", template = \"...\")]");
+}
+
+/// Derives the `ToPromptFor` trait for a struct
+#[proc_macro_derive(ToPromptFor, attributes(prompt_for))]
+pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    // Parse the struct-level prompt_for attribute
+    let (target_type, template) = parse_to_prompt_for_attribute(&input.attrs);
+
+    let struct_name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    // Parse the template to find placeholders
+    let placeholders = parse_template_placeholders(&template);
+
+    // Convert template to minijinja syntax and build context generation code
+    let mut converted_template = template.clone();
+    let mut context_fields = Vec::new();
+
+    // Get struct fields for validation
+    let fields = match &input.data {
+        Data::Struct(data_struct) => match &data_struct.fields {
+            syn::Fields::Named(fields) => &fields.named,
+            _ => panic!("ToPromptFor is only supported for structs with named fields"),
+        },
+        _ => panic!("ToPromptFor is only supported for structs"),
+    };
+
+    // Check if the struct has mode support (has #[prompt(mode = ...)] attribute)
+    let has_mode_support = input.attrs.iter().any(|attr| {
+        if attr.path().is_ident("prompt")
+            && let Ok(metas) =
+                attr.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+        {
+            for meta in metas {
+                if let Meta::NameValue(nv) = meta
+                    && nv.path.is_ident("mode")
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    });
+
+    // Process each placeholder
+    for (placeholder_name, mode_opt) in &placeholders {
+        if placeholder_name == "self" {
+            if let Some(specific_mode) = mode_opt {
+                // {self:some_mode} - use a unique key
+                let unique_key = format!("self__{}", specific_mode);
+
+                // Replace {self:mode} with {{self__mode}} in template
+                let pattern = format!("{{self:{}}}", specific_mode);
+                let replacement = format!("{{{{{}}}}}", unique_key);
+                converted_template = converted_template.replace(&pattern, &replacement);
+
+                // Add to context with the specific mode
+                context_fields.push(quote! {
+                    context.insert(
+                        #unique_key.to_string(),
+                        minijinja::Value::from(self.to_prompt_with_mode(#specific_mode))
+                    );
+                });
+            } else {
+                // {self} - behavior depends on whether the struct has mode support
+                let pattern = "{self}";
+                let replacement = "{{self}}";
+                converted_template = converted_template.replace(pattern, replacement);
+
+                if has_mode_support {
+                    // If the struct has mode support, use to_prompt_with_mode with the mode parameter
+                    context_fields.push(quote! {
+                        context.insert(
+                            "self".to_string(),
+                            minijinja::Value::from(self.to_prompt_with_mode(mode))
+                        );
+                    });
+                } else {
+                    // If the struct doesn't have mode support, use to_prompt() which gives key-value format
+                    context_fields.push(quote! {
+                        context.insert(
+                            "self".to_string(),
+                            minijinja::Value::from(self.to_prompt())
+                        );
+                    });
+                }
+            }
+        } else {
+            // It's a field placeholder
+            // Check if the field exists
+            let field_exists = fields.iter().any(|f| {
+                f.ident
+                    .as_ref()
+                    .is_some_and(|ident| ident == placeholder_name)
+            });
+
+            if field_exists {
+                let field_ident = syn::Ident::new(placeholder_name, proc_macro2::Span::call_site());
+
+                // Replace {field} with {{field}} in template
+                let pattern = format!("{{{}}}", placeholder_name);
+                let replacement = format!("{{{{{}}}}}", placeholder_name);
+                converted_template = converted_template.replace(&pattern, &replacement);
+
+                // Add field to context - serialize the field value
+                context_fields.push(quote! {
+                    context.insert(
+                        #placeholder_name.to_string(),
+                        minijinja::Value::from_serialize(&self.#field_ident)
+                    );
+                });
+            }
+            // If field doesn't exist, we'll let minijinja handle the error at runtime
+        }
+    }
+
+    let expanded = quote! {
+        impl #impl_generics llm_toolkit::prompt::ToPromptFor<#target_type> for #struct_name #ty_generics #where_clause
+        where
+            #target_type: serde::Serialize,
+        {
+            fn to_prompt_for_with_mode(&self, target: &#target_type, mode: &str) -> String {
+                // Create minijinja environment and add template
+                let mut env = minijinja::Environment::new();
+                env.add_template("prompt", #converted_template).unwrap_or_else(|e| {
+                    panic!("Failed to parse template: {}", e)
+                });
+
+                let tmpl = env.get_template("prompt").unwrap();
+
+                // Build context
+                let mut context = std::collections::HashMap::new();
+                // Add self to the context for field access in templates
+                context.insert(
+                    "self".to_string(),
+                    minijinja::Value::from_serialize(self)
+                );
+                // Add target to the context
+                context.insert(
+                    "target".to_string(),
+                    minijinja::Value::from_serialize(target)
+                );
+                #(#context_fields)*
+
+                // Render template
+                tmpl.render(context).unwrap_or_else(|e| {
+                    format!("Failed to render prompt: {}", e)
+                })
             }
         }
     };

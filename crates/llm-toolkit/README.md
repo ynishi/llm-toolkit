@@ -27,6 +27,8 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **Content Extraction** | Safely extracting structured data (like JSON) from unstructured LLM responses. | `extract` module (`FlexibleExtractor`, `extract_json`) | Implemented |
 | **Prompt Generation** | Building complex prompts from Rust data structures with a powerful templating engine. | `prompt!` macro, `#[derive(ToPrompt)]`, `#[derive(ToPromptSet)]` | Implemented |
 | **Multi-Target Prompts** | Generate multiple prompt formats from a single data structure for different contexts. | `ToPromptSet` trait, `#[prompt_for(...)]` attributes | Implemented |
+| **Context-Aware Prompts** | Generate prompts for a type within the context of another (e.g., a `Tool` for an `Agent`). | `ToPromptFor<T>` trait, `#[derive(ToPromptFor)]` | Implemented |
+| **Example Aggregation** | Combine examples from multiple data structures into a single formatted section. | `examples_section!` macro | Implemented |
 | **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentExtractor`, `PromptBasedExtractor`) | Implemented |
 | **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
 
@@ -345,6 +347,125 @@ let parts = task.to_prompt_parts_for("Multimodal")?;
 When to use `ToPromptSet` vs `ToPrompt`:
 - **`ToPrompt`**: Single, consistent prompt format across your application
 - **`ToPromptSet`**: Multiple prompt formats needed for different contexts (human vs. machine, different LLM models, etc.)
+
+### 5. Context-Aware Prompts with `#[derive(ToPromptFor)]`
+
+Sometimes, the way you want to represent a type in a prompt depends on the context. For example, a `Tool` might have a different prompt representation when being presented to an `Agent` versus a human user. The `ToPromptFor<T>` trait and its derive macro solve this problem.
+
+It allows a struct to generate a prompt *for* a specific target type, using the target's data in its template.
+
+**Usage:**
+
+The struct using `ToPromptFor` must derive `Serialize` and `ToPrompt`. The target struct passed to it must also derive `Serialize`.
+
+```rust
+use llm_toolkit::{ToPrompt, ToPromptFor};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct Agent {
+    name: String,
+    role: String,
+}
+
+#[derive(ToPrompt, ToPromptFor, Serialize, Default)]
+#[prompt(mode = "full")] // Enables schema_only, example_only modes for ToPrompt
+#[prompt_for(
+    target = "Agent",
+    template = r#"
+Hello, {{ target.name }}. As a {{ target.role }}, you can use the following tool.
+
+### Tool Schema
+{self:schema_only}
+
+### Tool Example
+{self:example_only}
+
+The tool's name is '{{ self.name }}'.
+"#
+)]
+/// A tool that can be used by an agent.
+struct Tool {
+    /// The name of the tool.
+    #[prompt(example = "file_writer")]
+    name: String,
+    /// A description of what the tool does.
+    #[prompt(example = "Writes content to a file.")]
+    description: String,
+}
+
+let agent = Agent {
+    name: "Yui".to_string(),
+    role: "Pro Engineer".to_string(),
+};
+
+let tool = Tool {
+    name: "file_writer_tool".to_string(),
+    ..Default::default()
+};
+
+let prompt = tool.to_prompt_for(&agent);
+// Generates a detailed prompt using the agent's name and role,
+// and the tool's own schema and example.
+```
+
+### 6. Aggregating Examples with `examples_section!`
+
+When providing few-shot examples to an LLM, it's often useful to show examples of all the data structures it might need to generate. The `examples_section!` macro automates this by creating a clean, formatted Markdown block from a list of types.
+
+**Usage:**
+
+All types passed to the macro must derive `ToPrompt` and `Default`, and have `#[prompt(mode = "full")]` and `#[prompt(example = "...")]` attributes to provide meaningful examples.
+
+```rust
+use llm_toolkit::{examples_section, ToPrompt};
+use serde::Serialize;
+
+#[derive(ToPrompt, Default, Serialize)]
+#[prompt(mode = "full")]
+/// Represents a user of the system.
+struct User {
+    /// A unique identifier for the user.
+    #[prompt(example = "user-12345")]
+    id: String,
+    /// The user's full name.
+    #[prompt(example = "Taro Yamada")]
+    name: String,
+}
+
+#[derive(ToPrompt, Default, Serialize)]
+#[prompt(mode = "full")]
+/// Defines a concept for image generation.
+struct Concept {
+    /// The main idea for the art.
+    #[prompt(example = "a futuristic city at night")]
+    prompt: String,
+    /// The desired style.
+    #[prompt(example = "anime")]
+    style: String,
+}
+
+let examples = examples_section!(User, Concept);
+// The macro generates the following Markdown string:
+//
+// ### Examples
+//
+// Here are examples of the data structures you should use.
+//
+// ---
+// #### `User`
+// {
+//   "id": "user-12345",
+//   "name": "Taro Yamada"
+// }
+// ---
+// #### `Concept`
+// {
+//   "prompt": "a futuristic city at night",
+//   "style": "anime"
+// }
+// ---
+```
 
 ## Future Directions
 

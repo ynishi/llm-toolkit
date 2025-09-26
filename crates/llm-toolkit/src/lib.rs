@@ -19,6 +19,18 @@ pub use llm_toolkit_macros::ToPrompt;
 #[cfg(feature = "derive")]
 pub use llm_toolkit_macros::ToPromptSet;
 
+/// A derive macro to implement the `ToPromptFor` trait for structs.
+///
+/// This macro is available only when the `derive` feature is enabled.
+#[cfg(feature = "derive")]
+pub use llm_toolkit_macros::ToPromptFor;
+
+/// A macro for creating examples sections in prompts.
+///
+/// This macro is available only when the `derive` feature is enabled.
+#[cfg(feature = "derive")]
+pub use llm_toolkit_macros::examples_section;
+
 pub mod extract;
 pub mod intent;
 pub mod multimodal;
@@ -27,7 +39,7 @@ pub mod prompt;
 pub use extract::{FlexibleExtractor, MarkdownCodeBlockExtractor};
 pub use intent::{IntentError, IntentExtractor, PromptBasedExtractor};
 pub use multimodal::ImageData;
-pub use prompt::{PromptPart, PromptSetError, ToPrompt, ToPromptSet};
+pub use prompt::{PromptPart, PromptSetError, ToPrompt, ToPromptFor, ToPromptSet};
 
 use extract::ParseError;
 
