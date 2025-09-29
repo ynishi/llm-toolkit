@@ -1,5 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
+use regex::Regex;
 use syn::{
     Data, DeriveInput, Meta, Token,
     parse::{Parse, ParseStream},
@@ -7,99 +8,28 @@ use syn::{
     punctuated::Punctuated,
 };
 
-/// Convert single brace syntax to double brace syntax for minijinja
-/// {field} -> {{field}}, but leave {{ and }} as is
-fn convert_to_minijinja_syntax(template: &str) -> String {
-    let mut result = String::new();
-    let mut chars = template.chars().peekable();
+/// Parse template placeholders using regex to find :mode patterns
+/// Returns a list of (field_name, optional_mode)
+fn parse_template_placeholders_with_mode(template: &str) -> Vec<(String, Option<String>)> {
+    let mut placeholders = Vec::new();
+    let mut seen_fields = std::collections::HashSet::new();
 
-    while let Some(ch) = chars.next() {
-        if ch == '{' {
-            // Check if it's already a double brace
-            if chars.peek() == Some(&'{') {
-                result.push(ch);
-                result.push(chars.next().unwrap());
-            } else {
-                // Single brace, convert to double
-                result.push_str("{{");
-            }
-        } else if ch == '}' {
-            // Check if it's already a double brace
-            if chars.peek() == Some(&'}') {
-                result.push(ch);
-                result.push(chars.next().unwrap());
-            } else {
-                // Single brace, convert to double
-                result.push_str("}}");
-            }
-        } else {
-            result.push(ch);
-        }
+    // First, find all {{ field:mode }} patterns
+    let mode_pattern = Regex::new(r"\{\{\s*(\w+)\s*:\s*(\w+)\s*\}\}").unwrap();
+    for cap in mode_pattern.captures_iter(template) {
+        let field_name = cap[1].to_string();
+        let mode = cap[2].to_string();
+        placeholders.push((field_name.clone(), Some(mode)));
+        seen_fields.insert(field_name);
     }
 
-    result
-}
-
-/// Parse template placeholders and extract field names with optional modes
-/// Returns a list of (field_name, optional_mode)
-fn parse_template_placeholders(template: &str) -> Vec<(String, Option<String>)> {
-    let mut placeholders = Vec::new();
-    let mut chars = template.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '{' {
-            // Check if it's a double brace (minijinja style)
-            if chars.peek() == Some(&'{') {
-                chars.next(); // Skip the second brace
-
-                // Parse minijinja-style placeholder content
-                let mut placeholder = String::new();
-                let mut found_end = false;
-                loop {
-                    match chars.next() {
-                        Some('}') => {
-                            if chars.peek() == Some(&'}') {
-                                chars.next(); // Skip the second closing brace
-                                found_end = true;
-                                break;
-                            } else {
-                                placeholder.push('}');
-                            }
-                        }
-                        Some(ch) => placeholder.push(ch),
-                        None => break,
-                    }
-                }
-
-                if found_end {
-                    // Check if placeholder contains :mode syntax
-                    if let Some(colon_pos) = placeholder.find(':') {
-                        let field_name = placeholder[..colon_pos].trim().to_string();
-                        let mode = placeholder[colon_pos + 1..].trim().to_string();
-                        placeholders.push((field_name, Some(mode)));
-                    } else {
-                        placeholders.push((placeholder.trim().to_string(), None));
-                    }
-                }
-            } else {
-                // Single brace - parse legacy placeholder content
-                let mut placeholder = String::new();
-                for inner_ch in chars.by_ref() {
-                    if inner_ch == '}' {
-                        break;
-                    }
-                    placeholder.push(inner_ch);
-                }
-
-                // Check if placeholder contains :mode syntax
-                if let Some(colon_pos) = placeholder.find(':') {
-                    let field_name = placeholder[..colon_pos].trim().to_string();
-                    let mode = placeholder[colon_pos + 1..].trim().to_string();
-                    placeholders.push((field_name, Some(mode)));
-                } else {
-                    placeholders.push((placeholder.trim().to_string(), None));
-                }
-            }
+    // Then, find all standard {{ field }} patterns (without mode)
+    let standard_pattern = Regex::new(r"\{\{\s*(\w+)\s*\}\}").unwrap();
+    for cap in standard_pattern.captures_iter(template) {
+        let field_name = cap[1].to_string();
+        // Check if this field was already captured with a mode
+        if !seen_fields.contains(&field_name) {
+            placeholders.push((field_name, None));
         }
     }
 
@@ -706,7 +636,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     .collect();
 
                 // Parse template placeholders
-                let placeholders = parse_template_placeholders(template);
+                let placeholders = parse_template_placeholders_with_mode(template);
 
                 for (placeholder_name, _mode) in &placeholders {
                     if placeholder_name != "self" && !field_names.contains(placeholder_name) {
@@ -819,7 +749,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                 };
 
                 // Parse template to detect mode syntax
-                let placeholders = parse_template_placeholders(&template);
+                let placeholders = parse_template_placeholders_with_mode(&template);
                 // Only use custom mode processing if template actually contains :mode syntax
                 let has_mode_syntax = placeholders.iter().any(|(field_name, mode)| {
                     mode.is_some()
@@ -845,46 +775,94 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                 if has_mode_syntax {
                     // Build custom context for fields with mode specifications
                     let mut context_fields = Vec::new();
+                    let mut modified_template = template.clone();
 
-                    // Convert template to minijinja syntax, but preserve mode information
-                    // We'll replace {field:mode} with unique keys for each mode
-                    let mut converted_template = template.clone();
-
-                    // Process each placeholder
+                    // Process each placeholder with mode
                     for (field_name, mode_opt) in &placeholders {
-                        // Find the corresponding field
-                        let field_ident =
-                            syn::Ident::new(field_name, proc_macro2::Span::call_site());
-
                         if let Some(mode) = mode_opt {
                             // Create a unique key for this field:mode combination
                             let unique_key = format!("{}__{}", field_name, mode);
 
-                            // Replace {field:mode} with {{field__mode}} in template
-                            let pattern = format!("{{{}:{}}}", field_name, mode);
-                            let replacement = format!("{{{{{}}}}}", unique_key);
-                            converted_template = converted_template.replace(&pattern, &replacement);
+                            // Replace {{ field:mode }} with {{ field__mode }} in template
+                            let pattern = format!("{{{{ {}:{} }}}}", field_name, mode);
+                            let replacement = format!("{{{{ {} }}}}", unique_key);
+                            modified_template = modified_template.replace(&pattern, &replacement);
 
-                            // Field with mode specification
+                            // Find the corresponding field
+                            let field_ident =
+                                syn::Ident::new(field_name, proc_macro2::Span::call_site());
+
+                            // Add to context with mode specification
                             context_fields.push(quote! {
                                 context.insert(
                                     #unique_key.to_string(),
                                     minijinja::Value::from(self.#field_ident.to_prompt_with_mode(#mode))
                                 );
                             });
-                        } else {
-                            // Replace {field} with {{field}} in template
-                            let pattern = format!("{{{}}}", field_name);
-                            let replacement = format!("{{{{{}}}}}", field_name);
-                            converted_template = converted_template.replace(&pattern, &replacement);
+                        }
+                    }
 
-                            // Field without mode (use default)
-                            context_fields.push(quote! {
-                                context.insert(
-                                    #field_name.to_string(),
-                                    minijinja::Value::from(self.#field_ident.to_prompt())
-                                );
-                            });
+                    // Add individual fields via direct access (for non-mode fields)
+                    for field in fields.iter() {
+                        let field_name = field.ident.as_ref().unwrap();
+                        let field_name_str = field_name.to_string();
+
+                        // Skip if this field already has a mode-specific entry
+                        let has_mode_entry = placeholders
+                            .iter()
+                            .any(|(name, mode)| name == &field_name_str && mode.is_some());
+
+                        if !has_mode_entry {
+                            // Check if field type is likely a struct that implements ToPrompt
+                            // (not a primitive type)
+                            let is_primitive = match &field.ty {
+                                syn::Type::Path(type_path) => {
+                                    if let Some(segment) = type_path.path.segments.last() {
+                                        let type_name = segment.ident.to_string();
+                                        matches!(
+                                            type_name.as_str(),
+                                            "String"
+                                                | "str"
+                                                | "i8"
+                                                | "i16"
+                                                | "i32"
+                                                | "i64"
+                                                | "i128"
+                                                | "isize"
+                                                | "u8"
+                                                | "u16"
+                                                | "u32"
+                                                | "u64"
+                                                | "u128"
+                                                | "usize"
+                                                | "f32"
+                                                | "f64"
+                                                | "bool"
+                                                | "char"
+                                        )
+                                    } else {
+                                        false
+                                    }
+                                }
+                                _ => false,
+                            };
+
+                            if is_primitive {
+                                context_fields.push(quote! {
+                                    context.insert(
+                                        #field_name_str.to_string(),
+                                        minijinja::Value::from_serialize(&self.#field_name)
+                                    );
+                                });
+                            } else {
+                                // For non-primitive types, use to_prompt()
+                                context_fields.push(quote! {
+                                    context.insert(
+                                        #field_name_str.to_string(),
+                                        minijinja::Value::from(self.#field_name.to_prompt())
+                                    );
+                                });
+                            }
                         }
                     }
 
@@ -899,7 +877,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                 // Build custom context and render template
                                 let text = {
                                     let mut env = minijinja::Environment::new();
-                                    env.add_template("prompt", #converted_template).unwrap_or_else(|e| {
+                                    env.add_template("prompt", #modified_template).unwrap_or_else(|e| {
                                         panic!("Failed to parse template: {}", e)
                                     });
 
@@ -923,7 +901,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             fn to_prompt(&self) -> String {
                                 // Same logic for to_prompt
                                 let mut env = minijinja::Environment::new();
-                                env.add_template("prompt", #converted_template).unwrap_or_else(|e| {
+                                env.add_template("prompt", #modified_template).unwrap_or_else(|e| {
                                     panic!("Failed to parse template: {}", e)
                                 });
 
@@ -939,9 +917,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                         }
                     }
                 } else {
-                    // No mode syntax, convert single braces to double braces for minijinja
-                    let converted_template = convert_to_minijinja_syntax(&template);
-
+                    // No mode syntax, use direct template rendering with render_prompt
                     quote! {
                         impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
                             fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
@@ -951,7 +927,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                 #(#image_field_parts)*
 
                                 // Add the rendered template as text
-                                let text = llm_toolkit::prompt::render_prompt(#converted_template, self).unwrap_or_else(|e| {
+                                let text = llm_toolkit::prompt::render_prompt(#template, self).unwrap_or_else(|e| {
                                     format!("Failed to render prompt: {}", e)
                                 });
                                 if !text.is_empty() {
@@ -962,7 +938,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             }
 
                             fn to_prompt(&self) -> String {
-                                llm_toolkit::prompt::render_prompt(#converted_template, self).unwrap_or_else(|e| {
+                                llm_toolkit::prompt::render_prompt(#template, self).unwrap_or_else(|e| {
                                     format!("Failed to render prompt: {}", e)
                                 })
                             }
@@ -1701,7 +1677,7 @@ pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let intents_doc_str = intents_doc_lines.join("\n");
 
     // Parse template variables (excluding intents_doc which we'll inject)
-    let placeholders = parse_template_placeholders(&prompt_template);
+    let placeholders = parse_template_placeholders_with_mode(&prompt_template);
     let user_variables: Vec<String> = placeholders
         .iter()
         .filter_map(|(name, _)| {
@@ -1742,8 +1718,8 @@ pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // Convert template to minijinja syntax
-    let converted_template = convert_to_minijinja_syntax(&prompt_template);
+    // Template is already in Jinja syntax, no conversion needed
+    let converted_template = prompt_template.clone();
 
     // Generate extractor struct name
     let extractor_name = syn::Ident::new(
@@ -1845,7 +1821,7 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     // Parse the template to find placeholders
-    let placeholders = parse_template_placeholders(&template);
+    let placeholders = parse_template_placeholders_with_mode(&template);
 
     // Convert template to minijinja syntax and build context generation code
     let mut converted_template = template.clone();
@@ -1884,9 +1860,9 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
                 // {self:some_mode} - use a unique key
                 let unique_key = format!("self__{}", specific_mode);
 
-                // Replace {self:mode} with {{self__mode}} in template
-                let pattern = format!("{{self:{}}}", specific_mode);
-                let replacement = format!("{{{{{}}}}}", unique_key);
+                // Replace {{ self:mode }} with {{ self__mode }} in template
+                let pattern = format!("{{{{ self:{} }}}}", specific_mode);
+                let replacement = format!("{{{{ {} }}}}", unique_key);
                 converted_template = converted_template.replace(&pattern, &replacement);
 
                 // Add to context with the specific mode
@@ -1897,10 +1873,7 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
                     );
                 });
             } else {
-                // {self} - behavior depends on whether the struct has mode support
-                let pattern = "{self}";
-                let replacement = "{{self}}";
-                converted_template = converted_template.replace(pattern, replacement);
+                // {{self}} - already in correct format, no replacement needed
 
                 if has_mode_support {
                     // If the struct has mode support, use to_prompt_with_mode with the mode parameter
@@ -1932,10 +1905,7 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
             if field_exists {
                 let field_ident = syn::Ident::new(placeholder_name, proc_macro2::Span::call_site());
 
-                // Replace {field} with {{field}} in template
-                let pattern = format!("{{{}}}", placeholder_name);
-                let replacement = format!("{{{{{}}}}}", placeholder_name);
-                converted_template = converted_template.replace(&pattern, &replacement);
+                // {{field}} - already in correct format, no replacement needed
 
                 // Add field to context - serialize the field value
                 context_fields.push(quote! {

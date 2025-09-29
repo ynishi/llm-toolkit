@@ -11,7 +11,7 @@ struct Inner {
 
 // Struct with template using mode syntax
 #[derive(ToPrompt, Serialize)]
-#[prompt(template = "Normal: {inner}, Schema: {inner:schema_only}")]
+#[prompt(template = "Normal: {{ inner }}, Schema: {{ inner:schema_only }}")]
 struct Outer {
     inner: Inner,
 }

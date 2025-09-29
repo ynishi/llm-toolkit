@@ -12,7 +12,7 @@ struct Target {
 
 // Test basic field interpolation
 #[derive(Serialize, ToPrompt, ToPromptFor, Default)]
-#[prompt_for(target = "Target", template = "User {name} has value {count}")]
+#[prompt_for(target = "Target", template = "User {{ name }} has value {{ count }}")]
 struct SimpleFields {
     name: String,
     count: u32,
@@ -20,7 +20,7 @@ struct SimpleFields {
 
 // Test {self} placeholder
 #[derive(Serialize, ToPrompt, ToPromptFor, Default)]
-#[prompt_for(target = "Target", template = "Configuration:\n{self}")]
+#[prompt_for(target = "Target", template = "Configuration:\n{{ self }}")]
 struct WithSelf {
     enabled: bool,
     timeout: u32,
@@ -30,7 +30,7 @@ struct WithSelf {
 #[derive(Serialize, ToPrompt, ToPromptFor, Default)]
 #[prompt_for(
     target = "Target",
-    template = "## Schema\n{self:schema_only}\n\n## Example\n{self:example_only}"
+    template = "## Schema\n{{ self:schema_only }}\n\n## Example\n{{ self:example_only }}"
 )]
 #[prompt(mode = "full")]
 struct WithModes {
@@ -44,7 +44,7 @@ struct WithModes {
 #[derive(Serialize, ToPrompt, ToPromptFor, Default)]
 #[prompt_for(
     target = "Target",
-    template = "Config for {name}:\nFull: {self}\nSchema: {self:schema_only}"
+    template = "Config for {{ name }}:\nFull: {{ self }}\nSchema: {{ self:schema_only }}"
 )]
 #[prompt(mode = "full")]
 struct MixedPlaceholders {
