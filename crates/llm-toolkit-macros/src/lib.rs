@@ -1981,6 +1981,32 @@ fn generate_multi_tag_actions_doc(
     doc_lines.join("\n")
 }
 
+/// Generate regex for matching any of the defined action tags
+fn generate_tags_regex(
+    variants: &syn::punctuated::Punctuated<syn::Variant, syn::Token![,]>,
+) -> String {
+    let mut tag_names = Vec::new();
+
+    for variant in variants {
+        let action_attrs = parse_action_attrs(&variant.attrs);
+        if let Some(tag) = action_attrs.tag {
+            tag_names.push(tag);
+        }
+    }
+
+    if tag_names.is_empty() {
+        return String::new();
+    }
+
+    let tags_pattern = tag_names.join("|");
+    // Match both self-closing tags like <Tag /> and content-based tags like <Tag>...</Tag>
+    // (?is) enables case-insensitive and single-line mode where . matches newlines
+    format!(
+        r"(?is)<(?:{})\b[^>]*/>|<(?:{})\b[^>]*>.*?</(?:{})>",
+        tags_pattern, tags_pattern, tags_pattern
+    )
+}
+
 /// Generate output for multi_tag mode
 fn generate_multi_tag_output(
     input: &DeriveInput,
@@ -2107,6 +2133,9 @@ fn generate_multi_tag_output(
     // Generate XML parsing logic for extract_actions
     let parsing_arms = generate_parsing_arms(&enum_data.variants, enum_name);
 
+    // Generate the regex pattern for matching tags
+    let tags_regex = generate_tags_regex(&enum_data.variants);
+
     let expanded = quote! {
         // Output the enum without the #[intent(...)] and #[action(...)] attributes
         #(#filtered_attrs)*
@@ -2138,6 +2167,45 @@ fn generate_multi_tag_output(
         pub struct #extractor_name;
 
         impl #extractor_name {
+            fn parse_single_action(&self, text: &str) -> Option<#enum_name> {
+                use ::quick_xml::events::Event;
+                use ::quick_xml::Reader;
+
+                let mut actions = Vec::new();
+                let mut reader = Reader::from_str(text);
+                reader.config_mut().trim_text(true);
+
+                let mut buf = Vec::new();
+
+                loop {
+                    match reader.read_event_into(&mut buf) {
+                        Ok(Event::Start(e)) => {
+                            let owned_e = e.into_owned();
+                            let tag_name = String::from_utf8_lossy(owned_e.name().as_ref()).to_string();
+                            let is_empty = false;
+
+                            #parsing_arms
+                        }
+                        Ok(Event::Empty(e)) => {
+                            let owned_e = e.into_owned();
+                            let tag_name = String::from_utf8_lossy(owned_e.name().as_ref()).to_string();
+                            let is_empty = true;
+
+                            #parsing_arms
+                        }
+                        Ok(Event::Eof) => break,
+                        Err(_) => {
+                            // Silently ignore XML parsing errors
+                            break;
+                        }
+                        _ => {}
+                    }
+                    buf.clear();
+                }
+
+                actions.into_iter().next()
+            }
+
             pub fn extract_actions(&self, text: &str) -> Result<Vec<#enum_name>, llm_toolkit::intent::IntentError> {
                 use ::quick_xml::events::Event;
                 use ::quick_xml::Reader;
@@ -2175,6 +2243,38 @@ fn generate_multi_tag_output(
                 }
 
                 Ok(actions)
+            }
+
+            pub fn transform_actions<F>(&self, text: &str, mut transformer: F) -> String
+            where
+                F: FnMut(#enum_name) -> String,
+            {
+                use ::regex::Regex;
+
+                let regex_pattern = #tags_regex;
+                if regex_pattern.is_empty() {
+                    return text.to_string();
+                }
+
+                let re = Regex::new(&regex_pattern).unwrap_or_else(|e| {
+                    panic!("Failed to compile regex for action tags: {}", e);
+                });
+
+                re.replace_all(text, |caps: &::regex::Captures| {
+                    let matched = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+
+                    // Try to parse the matched tag as an action
+                    if let Some(action) = self.parse_single_action(matched) {
+                        transformer(action)
+                    } else {
+                        // If parsing fails, return the original text
+                        matched.to_string()
+                    }
+                }).to_string()
+            }
+
+            pub fn strip_actions(&self, text: &str) -> String {
+                self.transform_actions(text, |_| String::new())
             }
         }
     };

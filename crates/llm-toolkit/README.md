@@ -609,6 +609,100 @@ This macro provides:
 - **Improved DX:** Eliminates boilerplate code for prompt functions and extractors.
 - **Single Source of Truth:** The `enum` becomes the single, reliable source for all intent-related logic.
 
+### Multi-Tag Mode for Complex Action Extraction
+
+For more complex scenarios where you need to extract multiple action tags from a single LLM response, the `define_intent!` macro supports a `multi_tag` mode. This is particularly useful for agent-like applications where the LLM might use multiple XML-style action tags in a single response.
+
+**Setup:**
+
+```rust
+use llm_toolkit::define_intent;
+
+#[define_intent(mode = "multi_tag")]
+#[intent(
+    prompt = r#"Based on the user request, generate a response using the following available actions.
+
+**Available Actions:**
+{{ actions_doc }}
+
+**User Request:**
+{{ user_request }}"#
+)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChatAction {
+    /// Get the current weather
+    #[action(tag = "GetWeather")]
+    GetWeather,
+
+    /// Show an image to the user
+    #[action(tag = "ShowImage")]
+    ShowImage {
+        /// The URL of the image to display
+        #[action(attribute)]
+        href: String,
+    },
+
+    /// Send a message to someone
+    #[action(tag = "SendMessage")]
+    SendMessage {
+        /// The recipient of the message
+        #[action(attribute)]
+        to: String,
+        /// The content of the message
+        #[action(inner_text)]
+        content: String,
+    },
+}
+```
+
+**Action Tag Attributes:**
+- `#[action(tag = "TagName")]` - Defines the XML tag name for this action
+- `#[action(attribute)]` - Maps a field to an XML attribute (e.g., `<Tag field="value" />`)
+- `#[action(inner_text)]` - Maps a field to the inner text content (e.g., `<Tag>field_value</Tag>`)
+
+**Generated Functions:**
+The macro generates:
+1. `build_chat_action_prompt(user_request: &str) -> String` - Builds the prompt with action documentation
+2. `ChatActionExtractor` struct with methods:
+   - `extract_actions(&self, text: &str) -> Result<Vec<ChatAction>, IntentError>` - Extract all actions from response
+   - `transform_actions<F>(&self, text: &str, transformer: F) -> String` - Transform action tags using a closure
+   - `strip_actions(&self, text: &str) -> String` - Remove all action tags from text
+
+**Usage Example:**
+
+```rust
+// 1. Build the prompt
+let prompt = build_chat_action_prompt("What's the weather and show me a cat picture?");
+
+// 2. Extract multiple actions from LLM response
+let llm_response = r#"
+Here's the weather: <GetWeather />
+And here's a cat picture: <ShowImage href="https://cataas.com/cat" />
+<SendMessage to="user">I've completed both requests!</SendMessage>
+"#;
+
+let extractor = ChatActionExtractor;
+let actions = extractor.extract_actions(llm_response)?;
+// Returns: [ChatAction::GetWeather, ChatAction::ShowImage { href: "https://cataas.com/cat" }, ...]
+
+// 3. Transform action tags to human-readable descriptions
+let transformed = extractor.transform_actions(llm_response, |action| match action {
+    ChatAction::GetWeather => "[Checking weather...]".to_string(),
+    ChatAction::ShowImage { href } => format!("[Displaying image from {}]", href),
+    ChatAction::SendMessage { to, content } => format!("[Message to {}: {}]", to, content),
+});
+// Result: "Here's the weather: [Checking weather...]\nAnd here's a cat picture: [Displaying image from https://cataas.com/cat]\n[Message to user: I've completed both requests!]"
+
+// 4. Strip all action tags for clean text output
+let clean_text = extractor.strip_actions(llm_response);
+// Result: "Here's the weather: \nAnd here's a cat picture: \n"
+```
+
+**When to Use Multi-Tag Mode:**
+- **Agent Applications:** When building AI agents that perform multiple actions per response
+- **Rich LLM Interactions:** When you need structured actions mixed with natural language
+- **Action Processing Pipelines:** When you need to extract, transform, or clean action-based responses
+
 ## Future Directions
 
 ### Image Handling Abstraction

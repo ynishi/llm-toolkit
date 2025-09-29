@@ -113,3 +113,46 @@ fn test_multi_tag_extraction_empty_and_unknown() {
     let actions_empty = extractor.extract_actions(llm_response_empty).unwrap();
     assert!(actions_empty.is_empty());
 }
+
+#[test]
+fn test_multi_tag_strip_actions() {
+    let extractor = ChatActionExtractor;
+
+    // Test stripping single tag
+    let text = "Hello <GetWeather /> world";
+    let result = extractor.strip_actions(text);
+    assert_eq!(result, "Hello  world");
+
+    // Test stripping multiple tags
+    let text = "Start <GetWeather /> middle <ShowImage href=\"test.jpg\" /> end";
+    let result = extractor.strip_actions(text);
+    assert_eq!(result, "Start  middle  end");
+
+    // Test text without tags
+    let text = "Just plain text";
+    let result = extractor.strip_actions(text);
+    assert_eq!(result, "Just plain text");
+}
+
+#[test]
+fn test_multi_tag_transform_actions() {
+    let extractor = ChatActionExtractor;
+
+    // Test transform with placeholder
+    let text = "Execute <GetWeather /> and then <ShowImage href=\"cat.jpg\" />";
+    let result = extractor.transform_actions(text, |action| match action {
+        ChatAction::GetWeather => "[WEATHER]".to_string(),
+        ChatAction::ShowImage { href } => format!("[IMAGE: {}]", href),
+        ChatAction::Thought(content) => format!("[THOUGHT: {}]", content),
+        ChatAction::SendMessage { to, content } => format!("[MSG TO {}: {}]", to, content),
+    });
+    assert_eq!(result, "Execute [WEATHER] and then [IMAGE: cat.jpg]");
+
+    // Test transform with descriptive text
+    let text = "Please <GetWeather /> for me";
+    let result = extractor.transform_actions(text, |action| match action {
+        ChatAction::GetWeather => "check the weather".to_string(),
+        _ => "perform action".to_string(),
+    });
+    assert_eq!(result, "Please check the weather for me");
+}
