@@ -29,7 +29,8 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **Multi-Target Prompts** | Generate multiple prompt formats from a single data structure for different contexts. | `ToPromptSet` trait, `#[prompt_for(...)]` attributes | Implemented |
 | **Context-Aware Prompts** | Generate prompts for a type within the context of another (e.g., a `Tool` for an `Agent`). | `ToPromptFor<T>` trait, `#[derive(ToPromptFor)]` | Implemented |
 | **Example Aggregation** | Combine examples from multiple data structures into a single formatted section. | `examples_section!` macro | Implemented |
-| **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentExtractor`, `PromptBasedExtractor`) | Implemented |
+| **External Prompt Templates** | Load prompt templates from external files to separate prompts from Rust code. | `#[prompt(template_file = "...")]` attribute | Implemented |
+| **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentFrame`, `IntentExtractor`) | Implemented |
 | **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
 
 ## Prompt Generation
@@ -169,7 +170,7 @@ The macro parser can sometimes get confused by the inner `#`. To avoid this, you
 **Problematic Example:**
 ```rust
 // This might fail to parse correctly
-#[prompt(template = r#"{"color": "#FFFFFF"}"#)] 
+#[prompt(template = r#"{"color": "#FFFFFF"}"#)]
 struct Color { /* ... */ }
 ```
 
@@ -178,6 +179,41 @@ struct Color { /* ... */ }
 // Use r##"..."## to avoid ambiguity
 #[prompt(template = r##"{"color": "#FFFFFF"}"##)]
 struct Color { /* ... */ }
+```
+
+#### Using External Template Files
+
+For larger prompts, you can separate them into external files (`.jinja`, `.txt`, etc.) and reference them using the `template_file` attribute. This improves code readability and makes prompts easier to manage.
+
+You can also enable compile-time validation of your templates with `validate = true`.
+
+```rust
+use llm_toolkit::ToPrompt;
+use serde::Serialize;
+
+// In templates/user_profile.jinja:
+// Name: {{ name }}
+// Email: {{ email }}
+
+#[derive(ToPrompt, Serialize)]
+#[prompt(
+    template_file = "templates/user_profile.jinja",
+    validate = true
+)]
+struct UserFromTemplate {
+    name: String,
+    email: String,
+}
+
+let user = UserFromTemplate {
+    name: "Yui".to_string(),
+    email: "yui@example.com".to_string(),
+};
+
+let p = user.to_prompt();
+// The following would be generated from the file:
+// Name: Yui
+// Email: yui@example.com
 ```
 
 ### 3. Enum Documentation with `#[derive(ToPrompt)]`
@@ -465,6 +501,56 @@ let examples = examples_section!(User, Concept);
 //   "style": "anime"
 // }
 // ---
+```
+
+## Intent Extraction with `IntentFrame`
+
+`llm-toolkit` provides a safe and robust way to extract structured intents (like enums) from an LLM's response. The core component for this is the `IntentFrame` struct.
+
+It solves a common problem: ensuring the tag you use to frame a query in a prompt (`<query>...</query>`) and the tag you use to extract the response (`<intent>...</intent>`) are managed together, preventing typos and mismatches.
+
+**Usage:**
+
+`IntentFrame` is used for two things: wrapping your input and extracting the structured response.
+
+```rust
+use llm_toolkit::{IntentFrame, IntentExtractor, IntentError};
+use std::str::FromStr;
+
+// 1. Define your intent enum
+#[derive(Debug, PartialEq)]
+enum UserIntent {
+    Search,
+    GetWeather,
+}
+
+impl FromStr for UserIntent {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "search" => Ok(UserIntent::Search),
+            "getweather" => Ok(UserIntent::GetWeather),
+            _ => Err(()),
+        }
+    }
+}
+
+// 2. Create an IntentFrame
+// The first tag is for wrapping input, the second is for extracting the response.
+let frame = IntentFrame::new("user_query", "intent");
+
+// 3. Wrap your input to create part of your prompt
+let user_input = "what is the weather in Tokyo?";
+let wrapped_input = frame.wrap(user_input);
+// wrapped_input is now "<user_query>what is the weather in Tokyo?</user_query>"
+
+// (Imagine sending a full prompt with wrapped_input to an LLM here)
+
+// 4. Extract the intent from the LLM's response
+let llm_response = "Okay, I will get the weather. <intent>GetWeather</intent>";
+let intent: UserIntent = frame.extract_intent(llm_response).unwrap();
+
+assert_eq!(intent, UserIntent::GetWeather);
 ```
 
 ## Future Directions
