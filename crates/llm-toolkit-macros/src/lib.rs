@@ -673,13 +673,11 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
                 // Check if struct derives Default
                 let has_default = input.attrs.iter().any(|attr| {
-                    if attr.path().is_ident("derive") {
-                        if let Ok(meta_list) = attr.meta.require_list() {
-                            let tokens_str = meta_list.tokens.to_string();
-                            tokens_str.contains("Default")
-                        } else {
-                            false
-                        }
+                    if attr.path().is_ident("derive")
+                        && let Ok(meta_list) = attr.meta.require_list()
+                    {
+                        let tokens_str = meta_list.tokens.to_string();
+                        tokens_str.contains("Default")
                     } else {
                         false
                     }
@@ -1590,6 +1588,7 @@ pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the #[intent(...)] attribute
     let mut prompt_template = None;
     let mut extractor_tag = None;
+    let mut mode = None;
 
     for attr in &input.attrs {
         if attr.path().is_ident("intent")
@@ -1616,10 +1615,32 @@ pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
                             extractor_tag = Some(lit_str.value());
                         }
                     }
+                    Meta::NameValue(nv) if nv.path.is_ident("mode") => {
+                        if let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }) = nv.value
+                        {
+                            mode = Some(lit_str.value());
+                        }
+                    }
                     _ => {}
                 }
             }
         }
+    }
+
+    // Parse the mode parameter (default to "single")
+    let mode = mode.unwrap_or_else(|| "single".to_string());
+
+    // Validate mode
+    if mode != "single" && mode != "multi_tag" {
+        return syn::Error::new(
+            input.ident.span(),
+            "`mode` must be either \"single\" or \"multi_tag\"",
+        )
+        .to_compile_error()
+        .into();
     }
 
     // Validate required attributes
@@ -1635,6 +1656,20 @@ pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    // Handle multi_tag mode
+    if mode == "multi_tag" {
+        let enum_name = &input.ident;
+        let actions_doc = generate_multi_tag_actions_doc(&enum_data.variants);
+        return generate_multi_tag_output(
+            &input,
+            enum_name,
+            enum_data,
+            prompt_template,
+            actions_doc,
+        );
+    }
+
+    // Continue with single mode logic
     let extractor_tag = match extractor_tag {
         Some(t) => t,
         None => {
@@ -1807,6 +1842,483 @@ fn to_snake_case(s: &str) -> String {
     }
 
     result
+}
+
+/// Parse #[action(...)] attributes for enum variants
+#[derive(Debug, Default)]
+struct ActionAttrs {
+    tag: Option<String>,
+}
+
+fn parse_action_attrs(attrs: &[syn::Attribute]) -> ActionAttrs {
+    let mut result = ActionAttrs::default();
+
+    for attr in attrs {
+        if attr.path().is_ident("action")
+            && let Ok(meta_list) = attr.meta.require_list()
+            && let Ok(metas) =
+                meta_list.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+        {
+            for meta in metas {
+                if let Meta::NameValue(nv) = meta
+                    && nv.path.is_ident("tag")
+                    && let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = nv.value
+                {
+                    result.tag = Some(lit_str.value());
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Parse #[action(...)] attributes for struct fields in variants
+#[derive(Debug, Default)]
+struct FieldActionAttrs {
+    is_attribute: bool,
+    is_inner_text: bool,
+}
+
+fn parse_field_action_attrs(attrs: &[syn::Attribute]) -> FieldActionAttrs {
+    let mut result = FieldActionAttrs::default();
+
+    for attr in attrs {
+        if attr.path().is_ident("action")
+            && let Ok(meta_list) = attr.meta.require_list()
+        {
+            let tokens_str = meta_list.tokens.to_string();
+            if tokens_str == "attribute" {
+                result.is_attribute = true;
+            } else if tokens_str == "inner_text" {
+                result.is_inner_text = true;
+            }
+        }
+    }
+
+    result
+}
+
+/// Generate actions_doc for multi_tag mode
+fn generate_multi_tag_actions_doc(
+    variants: &syn::punctuated::Punctuated<syn::Variant, syn::Token![,]>,
+) -> String {
+    let mut doc_lines = Vec::new();
+
+    for variant in variants {
+        let action_attrs = parse_action_attrs(&variant.attrs);
+
+        if let Some(tag) = action_attrs.tag {
+            let variant_docs = extract_doc_comments(&variant.attrs);
+
+            match &variant.fields {
+                syn::Fields::Unit => {
+                    // Simple tag without parameters
+                    doc_lines.push(format!("- `<{} />`: {}", tag, variant_docs));
+                }
+                syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                    // Tuple variant with inner text
+                    doc_lines.push(format!("- `<{}>...</{}>`: {}", tag, tag, variant_docs));
+                }
+                syn::Fields::Named(fields) => {
+                    // Struct variant with attributes and/or inner text
+                    let mut attrs_str = Vec::new();
+                    let mut has_inner_text = false;
+
+                    for field in &fields.named {
+                        let field_name = field.ident.as_ref().unwrap();
+                        let field_attrs = parse_field_action_attrs(&field.attrs);
+
+                        if field_attrs.is_attribute {
+                            attrs_str.push(format!("{}=\"...\"", field_name));
+                        } else if field_attrs.is_inner_text {
+                            has_inner_text = true;
+                        }
+                    }
+
+                    let attrs_part = if !attrs_str.is_empty() {
+                        format!(" {}", attrs_str.join(" "))
+                    } else {
+                        String::new()
+                    };
+
+                    if has_inner_text {
+                        doc_lines.push(format!(
+                            "- `<{}{}>...</{}>`: {}",
+                            tag, attrs_part, tag, variant_docs
+                        ));
+                    } else if !attrs_str.is_empty() {
+                        doc_lines.push(format!("- `<{}{} />`: {}", tag, attrs_part, variant_docs));
+                    } else {
+                        doc_lines.push(format!("- `<{} />`: {}", tag, variant_docs));
+                    }
+
+                    // Add field documentation
+                    for field in &fields.named {
+                        let field_name = field.ident.as_ref().unwrap();
+                        let field_attrs = parse_field_action_attrs(&field.attrs);
+                        let field_docs = extract_doc_comments(&field.attrs);
+
+                        if field_attrs.is_attribute {
+                            doc_lines
+                                .push(format!("  - `{}` (attribute): {}", field_name, field_docs));
+                        } else if field_attrs.is_inner_text {
+                            doc_lines
+                                .push(format!("  - `{}` (inner_text): {}", field_name, field_docs));
+                        }
+                    }
+                }
+                _ => {
+                    // Other field types not supported
+                }
+            }
+        }
+    }
+
+    doc_lines.join("\n")
+}
+
+/// Generate output for multi_tag mode
+fn generate_multi_tag_output(
+    input: &DeriveInput,
+    enum_name: &syn::Ident,
+    enum_data: &syn::DataEnum,
+    prompt_template: String,
+    actions_doc: String,
+) -> TokenStream {
+    // Parse template placeholders
+    let placeholders = parse_template_placeholders_with_mode(&prompt_template);
+    let user_variables: Vec<String> = placeholders
+        .iter()
+        .filter_map(|(name, _)| {
+            if name != "actions_doc" {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Generate function name (snake_case)
+    let enum_name_str = enum_name.to_string();
+    let snake_case_name = to_snake_case(&enum_name_str);
+    let function_name = syn::Ident::new(
+        &format!("build_{}_prompt", snake_case_name),
+        proc_macro2::Span::call_site(),
+    );
+
+    // Generate function parameters (all &str for simplicity)
+    let function_params: Vec<proc_macro2::TokenStream> = user_variables
+        .iter()
+        .map(|var| {
+            let ident = syn::Ident::new(var, proc_macro2::Span::call_site());
+            quote! { #ident: &str }
+        })
+        .collect();
+
+    // Generate context insertions
+    let context_insertions: Vec<proc_macro2::TokenStream> = user_variables
+        .iter()
+        .map(|var| {
+            let var_str = var.clone();
+            let ident = syn::Ident::new(var, proc_macro2::Span::call_site());
+            quote! {
+                __template_context.insert(#var_str.to_string(), minijinja::Value::from(#ident));
+            }
+        })
+        .collect();
+
+    // Generate extractor struct name
+    let extractor_name = syn::Ident::new(
+        &format!("{}Extractor", enum_name),
+        proc_macro2::Span::call_site(),
+    );
+
+    // Filter out the #[intent(...)] and #[action(...)] attributes
+    let filtered_attrs: Vec<_> = input
+        .attrs
+        .iter()
+        .filter(|attr| !attr.path().is_ident("intent"))
+        .collect();
+
+    // Filter action attributes from variants
+    let filtered_variants: Vec<proc_macro2::TokenStream> = enum_data
+        .variants
+        .iter()
+        .map(|variant| {
+            let variant_name = &variant.ident;
+            let variant_attrs: Vec<_> = variant
+                .attrs
+                .iter()
+                .filter(|attr| !attr.path().is_ident("action"))
+                .collect();
+            let fields = &variant.fields;
+
+            // Filter field attributes
+            let filtered_fields = match fields {
+                syn::Fields::Named(named_fields) => {
+                    let filtered: Vec<_> = named_fields
+                        .named
+                        .iter()
+                        .map(|field| {
+                            let field_name = &field.ident;
+                            let field_type = &field.ty;
+                            let field_vis = &field.vis;
+                            let filtered_attrs: Vec<_> = field
+                                .attrs
+                                .iter()
+                                .filter(|attr| !attr.path().is_ident("action"))
+                                .collect();
+                            quote! {
+                                #(#filtered_attrs)*
+                                #field_vis #field_name: #field_type
+                            }
+                        })
+                        .collect();
+                    quote! { { #(#filtered,)* } }
+                }
+                syn::Fields::Unnamed(unnamed_fields) => {
+                    let types: Vec<_> = unnamed_fields
+                        .unnamed
+                        .iter()
+                        .map(|field| {
+                            let field_type = &field.ty;
+                            quote! { #field_type }
+                        })
+                        .collect();
+                    quote! { (#(#types),*) }
+                }
+                syn::Fields::Unit => quote! {},
+            };
+
+            quote! {
+                #(#variant_attrs)*
+                #variant_name #filtered_fields
+            }
+        })
+        .collect();
+
+    let vis = &input.vis;
+    let generics = &input.generics;
+
+    // Generate XML parsing logic for extract_actions
+    let parsing_arms = generate_parsing_arms(&enum_data.variants, enum_name);
+
+    let expanded = quote! {
+        // Output the enum without the #[intent(...)] and #[action(...)] attributes
+        #(#filtered_attrs)*
+        #vis enum #enum_name #generics {
+            #(#filtered_variants),*
+        }
+
+        // Generate the prompt-building function
+        pub fn #function_name(#(#function_params),*) -> String {
+            let mut env = minijinja::Environment::new();
+            env.add_template("prompt", #prompt_template)
+                .expect("Failed to parse intent prompt template");
+
+            let tmpl = env.get_template("prompt").unwrap();
+
+            let mut __template_context = std::collections::HashMap::new();
+
+            // Add actions_doc
+            __template_context.insert("actions_doc".to_string(), minijinja::Value::from(#actions_doc));
+
+            // Add user-provided variables
+            #(#context_insertions)*
+
+            tmpl.render(&__template_context)
+                .unwrap_or_else(|e| format!("Failed to render intent prompt: {}", e))
+        }
+
+        // Generate the extractor struct
+        pub struct #extractor_name;
+
+        impl #extractor_name {
+            pub fn extract_actions(&self, text: &str) -> Result<Vec<#enum_name>, llm_toolkit::intent::IntentError> {
+                use ::quick_xml::events::Event;
+                use ::quick_xml::Reader;
+
+                let mut actions = Vec::new();
+                let mut reader = Reader::from_str(text);
+                reader.config_mut().trim_text(true);
+
+                let mut buf = Vec::new();
+
+                loop {
+                    match reader.read_event_into(&mut buf) {
+                        Ok(Event::Start(e)) => {
+                            let owned_e = e.into_owned();
+                            let tag_name = String::from_utf8_lossy(owned_e.name().as_ref()).to_string();
+                            let is_empty = false;
+
+                            #parsing_arms
+                        }
+                        Ok(Event::Empty(e)) => {
+                            let owned_e = e.into_owned();
+                            let tag_name = String::from_utf8_lossy(owned_e.name().as_ref()).to_string();
+                            let is_empty = true;
+
+                            #parsing_arms
+                        }
+                        Ok(Event::Eof) => break,
+                        Err(_) => {
+                            // Silently ignore XML parsing errors
+                            break;
+                        }
+                        _ => {}
+                    }
+                    buf.clear();
+                }
+
+                Ok(actions)
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+/// Generate parsing arms for XML extraction
+fn generate_parsing_arms(
+    variants: &syn::punctuated::Punctuated<syn::Variant, syn::Token![,]>,
+    enum_name: &syn::Ident,
+) -> proc_macro2::TokenStream {
+    let mut arms = Vec::new();
+
+    for variant in variants {
+        let variant_name = &variant.ident;
+        let action_attrs = parse_action_attrs(&variant.attrs);
+
+        if let Some(tag) = action_attrs.tag {
+            match &variant.fields {
+                syn::Fields::Unit => {
+                    // Simple tag without parameters
+                    arms.push(quote! {
+                        if &tag_name == #tag {
+                            actions.push(#enum_name::#variant_name);
+                        }
+                    });
+                }
+                syn::Fields::Unnamed(_fields) => {
+                    // Tuple variant with inner text - use reader.read_text()
+                    arms.push(quote! {
+                        if &tag_name == #tag && !is_empty {
+                            // Use read_text to get inner text as owned String
+                            match reader.read_text(owned_e.name()) {
+                                Ok(text) => {
+                                    actions.push(#enum_name::#variant_name(text.to_string()));
+                                }
+                                Err(_) => {
+                                    // If reading text fails, push empty string
+                                    actions.push(#enum_name::#variant_name(String::new()));
+                                }
+                            }
+                        }
+                    });
+                }
+                syn::Fields::Named(fields) => {
+                    // Struct variant with attributes and/or inner text
+                    let mut field_names = Vec::new();
+                    let mut has_inner_text_field = None;
+
+                    for field in &fields.named {
+                        let field_name = field.ident.as_ref().unwrap();
+                        let field_attrs = parse_field_action_attrs(&field.attrs);
+
+                        if field_attrs.is_attribute {
+                            field_names.push(field_name.clone());
+                        } else if field_attrs.is_inner_text {
+                            has_inner_text_field = Some(field_name.clone());
+                        }
+                    }
+
+                    if let Some(inner_text_field) = has_inner_text_field {
+                        // Handle inner text
+                        // Build attribute extraction code
+                        let attr_extractions: Vec<_> = field_names.iter().map(|field_name| {
+                            quote! {
+                                let mut #field_name = String::new();
+                                for attr in owned_e.attributes() {
+                                    if let Ok(attr) = attr {
+                                        if attr.key.as_ref() == stringify!(#field_name).as_bytes() {
+                                            #field_name = String::from_utf8_lossy(&attr.value).to_string();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }).collect();
+
+                        arms.push(quote! {
+                            if &tag_name == #tag {
+                                #(#attr_extractions)*
+
+                                // Check if it's a self-closing tag
+                                if is_empty {
+                                    let #inner_text_field = String::new();
+                                    actions.push(#enum_name::#variant_name {
+                                        #(#field_names,)*
+                                        #inner_text_field,
+                                    });
+                                } else {
+                                    // Use read_text to get inner text as owned String
+                                    match reader.read_text(owned_e.name()) {
+                                        Ok(text) => {
+                                            let #inner_text_field = text.to_string();
+                                            actions.push(#enum_name::#variant_name {
+                                                #(#field_names,)*
+                                                #inner_text_field,
+                                            });
+                                        }
+                                        Err(_) => {
+                                            // If reading text fails, push with empty string
+                                            let #inner_text_field = String::new();
+                                            actions.push(#enum_name::#variant_name {
+                                                #(#field_names,)*
+                                                #inner_text_field,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    } else {
+                        // Only attributes
+                        let attr_extractions: Vec<_> = field_names.iter().map(|field_name| {
+                            quote! {
+                                let mut #field_name = String::new();
+                                for attr in owned_e.attributes() {
+                                    if let Ok(attr) = attr {
+                                        if attr.key.as_ref() == stringify!(#field_name).as_bytes() {
+                                            #field_name = String::from_utf8_lossy(&attr.value).to_string();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }).collect();
+
+                        arms.push(quote! {
+                            if &tag_name == #tag {
+                                #(#attr_extractions)*
+                                actions.push(#enum_name::#variant_name {
+                                    #(#field_names),*
+                                });
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    quote! {
+        #(#arms)*
+    }
 }
 
 /// Derives the `ToPromptFor` trait for a struct
