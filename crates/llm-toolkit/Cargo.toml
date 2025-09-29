@@ -40,3 +40,11 @@ required-features = ["derive"]
 [[example]]
 name = "derive_prompt_format_with"
 required-features = ["derive"]
+
+[[example]]
+name = "test_define_intent"
+required-features = ["derive"]
+
+[[example]]
+name = "define_intent_comprehensive"
+required-features = ["derive"]

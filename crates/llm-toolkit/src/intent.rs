@@ -19,6 +19,42 @@ pub enum IntentError {
     Other(#[from] anyhow::Error),
 }
 
+/// Alias for IntentError for backward compatibility with macro-generated code.
+pub type IntentExtractionError = IntentError;
+
+/// Parse error for intent extraction
+#[derive(Debug, Error)]
+pub enum ParseError {
+    #[error("Failed to parse intent: {0}")]
+    ParseError(String),
+}
+
+/// Helper function for extracting intents from LLM responses using XML-style tags.
+/// This is used by the `define_intent` macro.
+pub fn extract_intent_from_response<T>(
+    response: &str,
+    tag: &str,
+) -> Result<T, IntentExtractionError>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    use crate::extract::FlexibleExtractor;
+    use crate::extract::core::ContentExtractor;
+
+    let extractor = FlexibleExtractor::new();
+    let extracted_str =
+        extractor
+            .extract_tagged(response, tag)
+            .ok_or_else(|| IntentError::TagNotFound {
+                tag: tag.to_string(),
+            })?;
+
+    T::from_str(&extracted_str).map_err(|e| IntentError::ParseFailed {
+        value: format!("{}: {}", extracted_str, e),
+    })
+}
+
 /// A generic trait for extracting a structured intent of type `T` from a string response.
 ///
 /// Type `T` is typically an enum representing the possible intents.

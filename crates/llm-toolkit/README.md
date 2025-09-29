@@ -30,6 +30,7 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **Context-Aware Prompts** | Generate prompts for a type within the context of another (e.g., a `Tool` for an `Agent`). | `ToPromptFor<T>` trait, `#[derive(ToPromptFor)]` | Implemented |
 | **Example Aggregation** | Combine examples from multiple data structures into a single formatted section. | `examples_section!` macro | Implemented |
 | **External Prompt Templates** | Load prompt templates from external files to separate prompts from Rust code. | `#[prompt(template_file = "...")]` attribute | Implemented |
+| **Type-Safe Intent Definition** | Generate prompt builders and extractors from a single enum definition. | `#[define_intent]` macro | Implemented |
 | **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentFrame`, `IntentExtractor`) | Implemented |
 | **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
 
@@ -552,6 +553,61 @@ let intent: UserIntent = frame.extract_intent(llm_response).unwrap();
 
 assert_eq!(intent, UserIntent::GetWeather);
 ```
+
+## Type-Safe Intents with `define_intent!`
+
+To achieve the highest level of type safety and developer experience, the `#[define_intent]` macro automates the entire process of creating and extracting intents.
+
+It solves a critical problem: by defining the prompt, the intent `enum`, and the extraction logic in a single place, it becomes impossible for the prompt-building code and the response-parsing code to diverge.
+
+**Usage:**
+
+Simply annotate an enum with `#[define_intent]` and provide the prompt template and extractor tag in an `#[intent(...)]` attribute.
+
+```rust
+use llm_toolkit::{define_intent, IntentExtractor, IntentError};
+use std::str::FromStr;
+
+#[define_intent]
+#[intent(
+    prompt = r#"
+Please classify the user's request. The available intents are:
+{{ intents_doc }}
+
+User request: <query>{{ user_request }}</query>
+"#,
+    extractor_tag = "intent"
+)]
+/// The user's primary intent.
+pub enum UserIntent {
+    /// The user wants to know the weather.
+    GetWeather,
+    /// The user wants to send a message.
+    SendMessage,
+}
+
+// The macro automatically generates:
+// 1. A function: `build_user_intent_prompt(user_request: &str) -> String`
+// 2. A struct: `pub struct UserIntentExtractor;` which implements `IntentExtractor<UserIntent>`
+
+// --- How to use the generated code ---
+
+// 1. Build the prompt
+let prompt = build_user_intent_prompt("what's the weather like in London?");
+// The prompt will include the formatted documentation from the enum.
+
+// 2. Use the generated extractor to parse the LLM's response
+let llm_response = "Understood. The user wants to know the weather. <intent>GetWeather</intent>";
+let extractor = UserIntentExtractor;
+let intent = extractor.extract_intent(llm_response).unwrap();
+
+assert_eq!(intent, UserIntent::GetWeather);
+```
+
+This macro provides:
+- **Ultimate Type Safety:** The prompt and the parser are guaranteed to be in sync.
+- **Improved DX:** Eliminates boilerplate code for prompt functions and extractors.
+- **Single Source of Truth:** The `enum` becomes the single, reliable source for all intent-related logic.
 
 ## Future Directions
 

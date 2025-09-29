@@ -31,6 +31,12 @@ pub use llm_toolkit_macros::ToPromptFor;
 #[cfg(feature = "derive")]
 pub use llm_toolkit_macros::examples_section;
 
+/// A procedural attribute macro for defining intent enums with automatic prompt and extractor generation.
+///
+/// This macro is available only when the `derive` feature is enabled.
+#[cfg(feature = "derive")]
+pub use llm_toolkit_macros::define_intent;
+
 pub mod extract;
 pub mod intent;
 pub mod multimodal;

@@ -10,7 +10,9 @@ EXAMPLES := \
 	examples_section_test \
 	multimodal_prompt \
 	to_prompt_for_test \
-	external_template
+	external_template \
+	define_intent_comprehensive \
+	test_define_intent
 
 # test-examplesターゲットで、リストをループ処理する
 test-examples:

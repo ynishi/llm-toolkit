@@ -48,28 +48,57 @@ fn parse_template_placeholders(template: &str) -> Vec<(String, Option<String>)> 
 
     while let Some(ch) = chars.next() {
         if ch == '{' {
-            // Check if it's a double brace (escaped)
+            // Check if it's a double brace (minijinja style)
             if chars.peek() == Some(&'{') {
                 chars.next(); // Skip the second brace
-                continue;
-            }
 
-            // Parse placeholder content
-            let mut placeholder = String::new();
-            for inner_ch in chars.by_ref() {
-                if inner_ch == '}' {
-                    break;
+                // Parse minijinja-style placeholder content
+                let mut placeholder = String::new();
+                let mut found_end = false;
+                loop {
+                    match chars.next() {
+                        Some('}') => {
+                            if chars.peek() == Some(&'}') {
+                                chars.next(); // Skip the second closing brace
+                                found_end = true;
+                                break;
+                            } else {
+                                placeholder.push('}');
+                            }
+                        }
+                        Some(ch) => placeholder.push(ch),
+                        None => break,
+                    }
                 }
-                placeholder.push(inner_ch);
-            }
 
-            // Check if placeholder contains :mode syntax
-            if let Some(colon_pos) = placeholder.find(':') {
-                let field_name = placeholder[..colon_pos].trim().to_string();
-                let mode = placeholder[colon_pos + 1..].trim().to_string();
-                placeholders.push((field_name, Some(mode)));
+                if found_end {
+                    // Check if placeholder contains :mode syntax
+                    if let Some(colon_pos) = placeholder.find(':') {
+                        let field_name = placeholder[..colon_pos].trim().to_string();
+                        let mode = placeholder[colon_pos + 1..].trim().to_string();
+                        placeholders.push((field_name, Some(mode)));
+                    } else {
+                        placeholders.push((placeholder.trim().to_string(), None));
+                    }
+                }
             } else {
-                placeholders.push((placeholder.trim().to_string(), None));
+                // Single brace - parse legacy placeholder content
+                let mut placeholder = String::new();
+                for inner_ch in chars.by_ref() {
+                    if inner_ch == '}' {
+                        break;
+                    }
+                    placeholder.push(inner_ch);
+                }
+
+                // Check if placeholder contains :mode syntax
+                if let Some(colon_pos) = placeholder.find(':') {
+                    let field_name = placeholder[..colon_pos].trim().to_string();
+                    let mode = placeholder[colon_pos + 1..].trim().to_string();
+                    placeholders.push((field_name, Some(mode)));
+                } else {
+                    placeholders.push((placeholder.trim().to_string(), None));
+                }
             }
         }
     }
@@ -1530,6 +1559,278 @@ fn parse_to_prompt_for_attribute(attrs: &[syn::Attribute]) -> (syn::Type, String
     }
 
     panic!("ToPromptFor requires #[prompt_for(target = \"TargetType\", template = \"...\")]");
+}
+
+/// A procedural attribute macro that generates prompt-building functions and extractor structs for intent enums.
+///
+/// This macro should be applied to an enum to generate:
+/// 1. A prompt-building function that incorporates enum documentation
+/// 2. An extractor struct that implements `IntentExtractor`
+///
+/// # Requirements
+///
+/// The enum must have an `#[intent(...)]` attribute with:
+/// - `prompt`: The prompt template (supports Jinja-style variables)
+/// - `extractor_tag`: The tag to use for extraction
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[define_intent]
+/// #[intent(
+///     prompt = "Analyze the intent: {{ user_input }}",
+///     extractor_tag = "intent"
+/// )]
+/// enum MyIntent {
+///     /// Create a new item
+///     Create,
+///     /// Update an existing item
+///     Update,
+///     /// Delete an item
+///     Delete,
+/// }
+/// ```
+///
+/// This will generate:
+/// - `pub fn build_my_intent_prompt(user_input: &str) -> String`
+/// - `pub struct MyIntentExtractor;` with `IntentExtractor<MyIntent>` implementation
+#[proc_macro_attribute]
+pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+
+    // Verify this is an enum
+    let enum_data = match &input.data {
+        Data::Enum(data) => data,
+        _ => {
+            return syn::Error::new(
+                input.ident.span(),
+                "`#[define_intent]` can only be applied to enums",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    // Parse the #[intent(...)] attribute
+    let mut prompt_template = None;
+    let mut extractor_tag = None;
+
+    for attr in &input.attrs {
+        if attr.path().is_ident("intent")
+            && let Ok(metas) =
+                attr.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+        {
+            for meta in metas {
+                match meta {
+                    Meta::NameValue(nv) if nv.path.is_ident("prompt") => {
+                        if let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }) = nv.value
+                        {
+                            prompt_template = Some(lit_str.value());
+                        }
+                    }
+                    Meta::NameValue(nv) if nv.path.is_ident("extractor_tag") => {
+                        if let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }) = nv.value
+                        {
+                            extractor_tag = Some(lit_str.value());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Validate required attributes
+    let prompt_template = match prompt_template {
+        Some(p) => p,
+        None => {
+            return syn::Error::new(
+                input.ident.span(),
+                "`#[intent(...)]` attribute must include `prompt = \"...\"`",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    let extractor_tag = match extractor_tag {
+        Some(t) => t,
+        None => {
+            return syn::Error::new(
+                input.ident.span(),
+                "`#[intent(...)]` attribute must include `extractor_tag = \"...\"`",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    // Generate the intents documentation
+    let enum_name = &input.ident;
+    let enum_docs = extract_doc_comments(&input.attrs);
+
+    let mut intents_doc_lines = Vec::new();
+
+    // Add enum description if present
+    if !enum_docs.is_empty() {
+        intents_doc_lines.push(format!("{}: {}", enum_name, enum_docs));
+    } else {
+        intents_doc_lines.push(format!("{}:", enum_name));
+    }
+    intents_doc_lines.push(String::new()); // Empty line
+    intents_doc_lines.push("Possible values:".to_string());
+
+    // Add each variant with its documentation
+    for variant in &enum_data.variants {
+        let variant_name = &variant.ident;
+        let variant_docs = extract_doc_comments(&variant.attrs);
+
+        if !variant_docs.is_empty() {
+            intents_doc_lines.push(format!("- {}: {}", variant_name, variant_docs));
+        } else {
+            intents_doc_lines.push(format!("- {}", variant_name));
+        }
+    }
+
+    let intents_doc_str = intents_doc_lines.join("\n");
+
+    // Parse template variables (excluding intents_doc which we'll inject)
+    let placeholders = parse_template_placeholders(&prompt_template);
+    let user_variables: Vec<String> = placeholders
+        .iter()
+        .filter_map(|(name, _)| {
+            if name != "intents_doc" {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Generate function name (snake_case)
+    let enum_name_str = enum_name.to_string();
+    let snake_case_name = to_snake_case(&enum_name_str);
+    let function_name = syn::Ident::new(
+        &format!("build_{}_prompt", snake_case_name),
+        proc_macro2::Span::call_site(),
+    );
+
+    // Generate function parameters (all &str for simplicity)
+    let function_params: Vec<proc_macro2::TokenStream> = user_variables
+        .iter()
+        .map(|var| {
+            let ident = syn::Ident::new(var, proc_macro2::Span::call_site());
+            quote! { #ident: &str }
+        })
+        .collect();
+
+    // Generate context insertions
+    let context_insertions: Vec<proc_macro2::TokenStream> = user_variables
+        .iter()
+        .map(|var| {
+            let var_str = var.clone();
+            let ident = syn::Ident::new(var, proc_macro2::Span::call_site());
+            quote! {
+                __template_context.insert(#var_str.to_string(), minijinja::Value::from(#ident));
+            }
+        })
+        .collect();
+
+    // Convert template to minijinja syntax
+    let converted_template = convert_to_minijinja_syntax(&prompt_template);
+
+    // Generate extractor struct name
+    let extractor_name = syn::Ident::new(
+        &format!("{}Extractor", enum_name),
+        proc_macro2::Span::call_site(),
+    );
+
+    // Filter out the #[intent(...)] attribute from the enum attributes
+    let filtered_attrs: Vec<_> = input
+        .attrs
+        .iter()
+        .filter(|attr| !attr.path().is_ident("intent"))
+        .collect();
+
+    // Rebuild the enum with filtered attributes
+    let vis = &input.vis;
+    let generics = &input.generics;
+    let variants = &enum_data.variants;
+    let enum_output = quote! {
+        #(#filtered_attrs)*
+        #vis enum #enum_name #generics {
+            #variants
+        }
+    };
+
+    // Generate the complete output
+    let expanded = quote! {
+        // Output the enum without the #[intent(...)] attribute
+        #enum_output
+
+        // Generate the prompt-building function
+        pub fn #function_name(#(#function_params),*) -> String {
+            let mut env = minijinja::Environment::new();
+            env.add_template("prompt", #converted_template)
+                .expect("Failed to parse intent prompt template");
+
+            let tmpl = env.get_template("prompt").unwrap();
+
+            let mut __template_context = std::collections::HashMap::new();
+
+            // Add intents_doc
+            __template_context.insert("intents_doc".to_string(), minijinja::Value::from(#intents_doc_str));
+
+            // Add user-provided variables
+            #(#context_insertions)*
+
+            tmpl.render(&__template_context)
+                .unwrap_or_else(|e| format!("Failed to render intent prompt: {}", e))
+        }
+
+        // Generate the extractor struct
+        pub struct #extractor_name;
+
+        impl #extractor_name {
+            pub const EXTRACTOR_TAG: &'static str = #extractor_tag;
+        }
+
+        impl llm_toolkit::intent::IntentExtractor<#enum_name> for #extractor_name {
+            fn extract_intent(&self, response: &str) -> Result<#enum_name, llm_toolkit::intent::IntentExtractionError> {
+                // Use the common extraction function with our tag
+                llm_toolkit::intent::extract_intent_from_response(response, Self::EXTRACTOR_TAG)
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+/// Convert PascalCase to snake_case
+fn to_snake_case(s: &str) -> String {
+    let mut result = String::new();
+    let mut prev_upper = false;
+
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i > 0 && !prev_upper {
+                result.push('_');
+            }
+            result.push(ch.to_lowercase().next().unwrap());
+            prev_upper = true;
+        } else {
+            result.push(ch);
+            prev_upper = false;
+        }
+    }
+
+    result
 }
 
 /// Derives the `ToPromptFor` trait for a struct
