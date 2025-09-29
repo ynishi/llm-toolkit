@@ -615,6 +615,16 @@ For more complex scenarios where you need to extract multiple action tags from a
 
 **Setup:**
 
+To use multi-tag mode, add both dependencies to your `Cargo.toml`:
+
+```toml
+[dependencies]
+llm-toolkit = { version = "0.8.3", features = ["derive"] }
+quick-xml = "0.38"  # Required for multi_tag mode
+```
+
+Then define your actions:
+
 ```rust
 use llm_toolkit::define_intent;
 
