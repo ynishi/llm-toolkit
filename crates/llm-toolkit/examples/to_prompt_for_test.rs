@@ -1,6 +1,6 @@
 #[cfg(feature = "derive")]
 mod test {
-    use llm_toolkit::prompt::{ToPrompt as ToPromptTrait, ToPromptFor as ToPromptForTrait};
+    use llm_toolkit::prompt::ToPromptFor as ToPromptForTrait;
     use llm_toolkit::{ToPrompt, ToPromptFor};
     use serde::Serialize;
 

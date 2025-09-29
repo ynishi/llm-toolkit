@@ -22,7 +22,7 @@ fn test_minimal_template() {
 }
 
 #[derive(ToPrompt, Serialize, Debug)]
-#[prompt(template = "Value: {value}")]
+#[prompt(template = "Value: {{ value }}")]
 struct WithPlaceholder {
     value: String,
 }

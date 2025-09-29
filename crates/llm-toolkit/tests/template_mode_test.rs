@@ -28,19 +28,19 @@ struct Concept {
 #[derive(ToPrompt, Serialize)]
 #[prompt(template = r#"
 SYSTEM PROMPT:
-{system_prompt}
+{{ system_prompt }}
 
 ---
 USER CONCEPT:
-{user_concept}
+{{ user_concept }}
 
 ---
 STYLE GUIDE (Schema Only):
-{style_guide:schema_only}
+{{ style_guide:schema_only }}
 
 ---
 ALTERNATIVE CONCEPT:
-{alternative:example_only}
+{{ alternative:example_only }}
 "#)]
 struct ImageGenerationPrompt {
     system_prompt: String,
@@ -68,6 +68,7 @@ fn test_template_with_mode_syntax() {
     };
 
     let output = prompt.to_prompt();
+    println!("Generated output:\n{}", output);
 
     // Check that the template was rendered correctly
     assert!(output.contains("SYSTEM PROMPT:"));
@@ -95,7 +96,7 @@ fn test_template_with_mode_syntax() {
 
 // Simple struct with template but no mode syntax (backward compatibility)
 #[derive(ToPrompt, Serialize)]
-#[prompt(template = "User {name} has role {role}.")]
+#[prompt(template = "User {{ name }} has role {{ role }}.")]
 struct SimpleUser {
     name: String,
     role: String,
@@ -128,13 +129,13 @@ struct TaskConfig {
 #[prompt(template = r#"Task Management System
 
 Configuration:
-{config:full}
+{{ config:full }}
 
 Quick Reference (Schema):
-{config:schema_only}
+{{ config:schema_only }}
 
 Example Configuration:
-{config:example_only}
+{{ config:example_only }}
 "#)]
 struct TaskManagement {
     config: TaskConfig,
@@ -163,7 +164,7 @@ fn test_same_field_with_different_modes() {
 
 // Test with primitive field types
 #[derive(ToPrompt, Serialize)]
-#[prompt(template = "Name: {name}, ID: {id}")]
+#[prompt(template = "Name: {{ name }}, ID: {{ id }}")]
 struct PrimitiveFields {
     name: String,
     id: u32,

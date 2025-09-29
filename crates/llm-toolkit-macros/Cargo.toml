@@ -17,6 +17,7 @@ syn = { version = "2.0", features = ["full"] }
 quote = "1.0"
 proc-macro2 = "1.0"
 minijinja = { workspace = true }
+regex = "1.10"
 
 [dev-dependencies]
 trybuild = "1.0"
