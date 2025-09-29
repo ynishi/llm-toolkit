@@ -484,9 +484,11 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             TokenStream::from(expanded)
         }
         Data::Struct(data_struct) => {
-            // Parse struct-level prompt attributes for template and mode
+            // Parse struct-level prompt attributes for template, template_file, mode, and validate
             let mut template_attr = None;
+            let mut template_file_attr = None;
             let mut mode_attr = None;
+            let mut validate_attr = false;
 
             for attr in &input.attrs {
                 if attr.path().is_ident("prompt") {
@@ -503,6 +505,13 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                         template_attr = Some(lit_str.value());
                                     }
                                 }
+                                Meta::NameValue(nv) if nv.path.is_ident("template_file") => {
+                                    if let syn::Expr::Lit(expr_lit) = nv.value
+                                        && let syn::Lit::Str(lit_str) = expr_lit.lit
+                                    {
+                                        template_file_attr = Some(lit_str.value());
+                                    }
+                                }
                                 Meta::NameValue(nv) if nv.path.is_ident("mode") => {
                                     if let syn::Expr::Lit(expr_lit) = nv.value
                                         && let syn::Lit::Str(lit_str) = expr_lit.lit
@@ -510,9 +519,173 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                         mode_attr = Some(lit_str.value());
                                     }
                                 }
+                                Meta::NameValue(nv) if nv.path.is_ident("validate") => {
+                                    if let syn::Expr::Lit(expr_lit) = nv.value
+                                        && let syn::Lit::Bool(lit_bool) = expr_lit.lit
+                                    {
+                                        validate_attr = lit_bool.value();
+                                    }
+                                }
                                 _ => {}
                             }
                         }
+                    }
+                }
+            }
+
+            // Check for mutual exclusivity between template and template_file
+            if template_attr.is_some() && template_file_attr.is_some() {
+                return syn::Error::new(
+                    input.ident.span(),
+                    "The `template` and `template_file` attributes are mutually exclusive. Please use only one.",
+                ).to_compile_error().into();
+            }
+
+            // Load template from file if template_file is specified
+            let template_str = if let Some(file_path) = template_file_attr {
+                // Try multiple strategies to find the template file
+                // This is necessary to support both normal compilation and trybuild tests
+
+                let mut full_path = None;
+
+                // Strategy 1: Try relative to CARGO_MANIFEST_DIR (normal compilation)
+                if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+                    // Check if this is a trybuild temporary directory
+                    let is_trybuild = manifest_dir.contains("target/tests/trybuild");
+
+                    if !is_trybuild {
+                        // Normal compilation - use CARGO_MANIFEST_DIR directly
+                        let candidate = std::path::Path::new(&manifest_dir).join(&file_path);
+                        if candidate.exists() {
+                            full_path = Some(candidate);
+                        }
+                    } else {
+                        // For trybuild, we need to find the original source directory
+                        // The manifest_dir looks like: .../target/tests/trybuild/llm-toolkit-macros
+                        // We need to get back to the original llm-toolkit-macros source directory
+
+                        // Extract the workspace root from the path
+                        if let Some(target_pos) = manifest_dir.find("/target/tests/trybuild") {
+                            let workspace_root = &manifest_dir[..target_pos];
+                            // Now construct the path to the original llm-toolkit-macros source
+                            let original_macros_dir = std::path::Path::new(workspace_root)
+                                .join("crates")
+                                .join("llm-toolkit-macros");
+
+                            let candidate = original_macros_dir.join(&file_path);
+                            if candidate.exists() {
+                                full_path = Some(candidate);
+                            }
+                        }
+                    }
+                }
+
+                // Strategy 2: Try as an absolute path or relative to current directory
+                if full_path.is_none() {
+                    let candidate = std::path::Path::new(&file_path).to_path_buf();
+                    if candidate.exists() {
+                        full_path = Some(candidate);
+                    }
+                }
+
+                // Strategy 3: For trybuild tests - try to find the file by looking in parent directories
+                // This handles the case where trybuild creates a temporary project
+                if full_path.is_none()
+                    && let Ok(current_dir) = std::env::current_dir()
+                {
+                    let mut search_dir = current_dir.as_path();
+                    // Search up to 10 levels up
+                    for _ in 0..10 {
+                        // Try from the llm-toolkit-macros directory
+                        let macros_dir = search_dir.join("crates/llm-toolkit-macros");
+                        if macros_dir.exists() {
+                            let candidate = macros_dir.join(&file_path);
+                            if candidate.exists() {
+                                full_path = Some(candidate);
+                                break;
+                            }
+                        }
+                        // Try directly
+                        let candidate = search_dir.join(&file_path);
+                        if candidate.exists() {
+                            full_path = Some(candidate);
+                            break;
+                        }
+                        if let Some(parent) = search_dir.parent() {
+                            search_dir = parent;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                // If we still haven't found the file, use the original path for a better error message
+                let final_path =
+                    full_path.unwrap_or_else(|| std::path::Path::new(&file_path).to_path_buf());
+
+                // Read the file at compile time
+                match std::fs::read_to_string(&final_path) {
+                    Ok(content) => Some(content),
+                    Err(e) => {
+                        return syn::Error::new(
+                            input.ident.span(),
+                            format!(
+                                "Failed to read template file '{}': {}",
+                                final_path.display(),
+                                e
+                            ),
+                        )
+                        .to_compile_error()
+                        .into();
+                    }
+                }
+            } else {
+                template_attr
+            };
+
+            // Perform validation if requested
+            if validate_attr && let Some(template) = &template_str {
+                // Validate Jinja syntax
+                let mut env = minijinja::Environment::new();
+                if let Err(e) = env.add_template("validation", template) {
+                    // Generate a compile warning using deprecated const hack
+                    let warning_msg =
+                        format!("Template validation warning: Invalid Jinja syntax - {}", e);
+                    let warning_ident = syn::Ident::new(
+                        "TEMPLATE_VALIDATION_WARNING",
+                        proc_macro2::Span::call_site(),
+                    );
+                    let _warning_tokens = quote! {
+                        #[deprecated(note = #warning_msg)]
+                        const #warning_ident: () = ();
+                        let _ = #warning_ident;
+                    };
+                    // We'll inject this warning into the generated code
+                    eprintln!("cargo:warning={}", warning_msg);
+                }
+
+                // Extract variables from template and check against struct fields
+                let fields = if let syn::Fields::Named(fields) = &data_struct.fields {
+                    &fields.named
+                } else {
+                    panic!("Template validation is only supported for structs with named fields.");
+                };
+
+                let field_names: std::collections::HashSet<String> = fields
+                    .iter()
+                    .filter_map(|f| f.ident.as_ref().map(|i| i.to_string()))
+                    .collect();
+
+                // Parse template placeholders
+                let placeholders = parse_template_placeholders(template);
+
+                for (placeholder_name, _mode) in &placeholders {
+                    if placeholder_name != "self" && !field_names.contains(placeholder_name) {
+                        let warning_msg = format!(
+                            "Template validation warning: Variable '{}' used in template but not found in struct fields",
+                            placeholder_name
+                        );
+                        eprintln!("cargo:warning={}", warning_msg);
                     }
                 }
             }
@@ -525,7 +698,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
             // Check if this is a mode-based struct (mode attribute present)
             let is_mode_based =
-                mode_attr.is_some() || (template_attr.is_none() && struct_docs.contains("mode"));
+                mode_attr.is_some() || (template_str.is_none() && struct_docs.contains("mode"));
 
             let expanded = if is_mode_based || mode_attr.is_some() {
                 // Mode-based generation: support schema_only, example_only, full
@@ -605,7 +778,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                         }
                     }
                 }
-            } else if let Some(template_str) = template_attr {
+            } else if let Some(template) = template_str {
                 // Use template-based approach if template is provided
                 // Collect image fields separately for to_prompt_parts()
                 let fields = if let syn::Fields::Named(fields) = &data_struct.fields {
@@ -617,7 +790,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                 };
 
                 // Parse template to detect mode syntax
-                let placeholders = parse_template_placeholders(&template_str);
+                let placeholders = parse_template_placeholders(&template);
                 // Only use custom mode processing if template actually contains :mode syntax
                 let has_mode_syntax = placeholders.iter().any(|(field_name, mode)| {
                     mode.is_some()
@@ -646,7 +819,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
                     // Convert template to minijinja syntax, but preserve mode information
                     // We'll replace {field:mode} with unique keys for each mode
-                    let mut converted_template = template_str.clone();
+                    let mut converted_template = template.clone();
 
                     // Process each placeholder
                     for (field_name, mode_opt) in &placeholders {
@@ -738,7 +911,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     }
                 } else {
                     // No mode syntax, convert single braces to double braces for minijinja
-                    let converted_template = convert_to_minijinja_syntax(&template_str);
+                    let converted_template = convert_to_minijinja_syntax(&template);
 
                     quote! {
                         impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {

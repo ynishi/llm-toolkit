@@ -9,7 +9,8 @@ EXAMPLES := \
 	derive_prompt \
 	examples_section_test \
 	multimodal_prompt \
-	to_prompt_for_test
+	to_prompt_for_test \
+	external_template
 
 # test-examplesターゲットで、リストをループ処理する
 test-examples:
