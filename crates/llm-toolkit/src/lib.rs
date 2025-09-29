@@ -37,6 +37,8 @@ pub mod multimodal;
 pub mod prompt;
 
 pub use extract::{FlexibleExtractor, MarkdownCodeBlockExtractor};
+pub use intent::frame::IntentFrame;
+#[allow(deprecated)]
 pub use intent::{IntentError, IntentExtractor, PromptBasedExtractor};
 pub use multimodal::ImageData;
 pub use prompt::{PromptPart, PromptSetError, ToPrompt, ToPromptFor, ToPromptSet};

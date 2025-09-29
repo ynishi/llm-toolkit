@@ -1,7 +1,8 @@
 //! Traits and implementations for extracting structured intents from LLM responses.
 
-use crate::extract::FlexibleExtractor;
-use crate::extract::core::ContentExtractor;
+pub mod frame;
+
+use self::frame::IntentFrame;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -34,42 +35,36 @@ where
 /// This extractor uses `FlexibleExtractor` to find content within a specific
 /// XML-like tag (e.g., `<intent>...<intent>`) and then parses that content
 /// into the target intent type `T`.
+#[deprecated(
+    since = "0.8.0",
+    note = "Please use `IntentFrame` instead for better safety and clarity."
+)]
 pub struct PromptBasedExtractor {
-    extractor: FlexibleExtractor,
-    tag: String,
+    frame: IntentFrame,
 }
 
+#[allow(deprecated)]
 impl PromptBasedExtractor {
     /// Creates a new extractor that looks for the specified tag.
     pub fn new(tag: &str) -> Self {
         Self {
-            extractor: FlexibleExtractor::new(),
-            tag: tag.to_string(),
+            frame: IntentFrame::new(tag, tag),
         }
     }
 }
 
+#[allow(deprecated)]
 impl<T> IntentExtractor<T> for PromptBasedExtractor
 where
     T: FromStr,
 {
     fn extract_intent(&self, text: &str) -> Result<T, IntentError> {
-        // 1. Use FlexibleExtractor to get the string inside the tag
-        let extracted_str = self
-            .extractor
-            .extract_tagged(text, &self.tag)
-            .ok_or_else(|| IntentError::TagNotFound {
-                tag: self.tag.clone(),
-            })?;
-
-        // 2. Parse the string into the user's enum
-        T::from_str(&extracted_str).map_err(|_| IntentError::ParseFailed {
-            value: extracted_str.to_string(),
-        })
+        self.frame.extract_intent(text)
     }
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 
