@@ -77,12 +77,13 @@ impl FlexibleExtractor {
         Err(ParseError::AllStrategiesFailed(errors))
     }
 
-    /// Extract first complete JSON object from text
-    fn extract_first_json_object(&self, text: &str) -> Option<String> {
-        let mut brace_count = 0;
+    /// Extract first complete JSON entity (object or array) from text
+    fn extract_first_json_entity(&self, text: &str) -> Option<String> {
+        let mut bracket_count = 0;
         let mut start_pos = None;
         let mut in_string = false;
         let mut escape_next = false;
+        let mut opening_char = None;
 
         for (i, ch) in text.char_indices() {
             if escape_next {
@@ -93,18 +94,25 @@ impl FlexibleExtractor {
             match ch {
                 '\\' if in_string => escape_next = true,
                 '"' => in_string = !in_string,
-                '{' if !in_string => {
-                    if brace_count == 0 {
+                '{' | '[' if !in_string => {
+                    if bracket_count == 0 {
                         start_pos = Some(i);
+                        opening_char = Some(ch);
                     }
-                    brace_count += 1;
+                    bracket_count += 1;
                 }
-                '}' if !in_string => {
-                    brace_count -= 1;
-                    if brace_count == 0
+                '}' | ']' if !in_string => {
+                    bracket_count -= 1;
+                    if bracket_count == 0
                         && let Some(p) = start_pos
+                        && let Some(opening) = opening_char
                     {
-                        return Some(text[p..=i].to_string());
+                        // Verify matching brackets
+                        let is_valid =
+                            (opening == '{' && ch == '}') || (opening == '[' && ch == ']');
+                        if is_valid {
+                            return Some(text[p..=i].to_string());
+                        }
                     }
                 }
                 _ => {}
@@ -112,6 +120,11 @@ impl FlexibleExtractor {
         }
 
         None
+    }
+
+    /// Extract first complete JSON object from text
+    fn extract_first_json_object(&self, text: &str) -> Option<String> {
+        self.extract_first_json_entity(text)
     }
 
     /// Extract content based on keyword matching
@@ -155,19 +168,14 @@ impl ContentExtractor for FlexibleExtractor {
     }
 
     fn extract_json_like(&self, text: &str) -> Option<String> {
-        // Find JSON-like content within braces
-        if let Some(start) = text.find('{')
-            && let Some(end) = text.rfind('}')
-            && end > start
-        {
-            return Some(text[start..=end].to_string());
-        }
+        // Delegate to extract_first_json_entity for proper handling
+        let result = self.extract_first_json_entity(text);
 
-        if self.debug_mode {
+        if result.is_none() && self.debug_mode {
             debug!("Failed to extract JSON-like content");
         }
 
-        None
+        result
     }
 
     fn extract_pattern(&self, text: &str, pattern: &str) -> Option<String> {
@@ -283,6 +291,19 @@ mod tests {
         let text = "Some text {\"first\": \"object\"} more text {\"second\": \"object\"}";
         let result = extractor.extract_first_json_object(text);
         assert_eq!(result, Some("{\"first\": \"object\"}".to_string()));
+    }
+
+    #[test]
+    fn test_extract_json_array() {
+        let extractor = FlexibleExtractor::new();
+
+        let text = "Here is an array: [{\"key\": \"value\"}] and more text";
+        let result = extractor.extract_first_json_object(text);
+        assert_eq!(result, Some("[{\"key\": \"value\"}]".to_string()));
+
+        // Test via extract_json_like as well
+        let result2 = extractor.extract_json_like(text);
+        assert_eq!(result2, Some("[{\"key\": \"value\"}]".to_string()));
     }
 
     #[test]
