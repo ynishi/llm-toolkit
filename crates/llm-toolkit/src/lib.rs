@@ -42,12 +42,24 @@ pub mod intent;
 pub mod multimodal;
 pub mod prompt;
 
+#[cfg(feature = "agent")]
+pub mod agent;
+
+#[cfg(feature = "agent")]
+pub mod orchestrator;
+
 pub use extract::{FlexibleExtractor, MarkdownCodeBlockExtractor};
 pub use intent::frame::IntentFrame;
 #[allow(deprecated)]
 pub use intent::{IntentError, IntentExtractor, PromptBasedExtractor};
 pub use multimodal::ImageData;
 pub use prompt::{PromptPart, PromptSetError, ToPrompt, ToPromptFor, ToPromptSet};
+
+#[cfg(feature = "agent")]
+pub use agent::{Agent, AgentError};
+
+#[cfg(feature = "agent")]
+pub use orchestrator::{BlueprintWorkflow, Orchestrator, OrchestratorError, StrategyMap};
 
 use extract::ParseError;
 
