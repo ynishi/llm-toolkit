@@ -97,7 +97,9 @@ impl Agent for ClaudeCodeAgent {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "claude".to_string());
 
-        log::debug!("Executing ClaudeCodeAgent with intent: {}", intent);
+        log::info!("🤖 ClaudeCodeAgent executing...");
+        log::debug!("Intent length: {} chars", intent.len());
+        log::trace!("Full intent: {}", intent);
 
         let output = Command::new(&claude_cmd)
             .arg("-p")
@@ -105,6 +107,7 @@ impl Agent for ClaudeCodeAgent {
             .output()
             .await
             .map_err(|e| {
+                log::error!("Failed to spawn claude process: {}", e);
                 AgentError::ProcessError(format!(
                     "Failed to spawn claude process: {}. \
                      Make sure 'claude' is installed and in PATH.",
@@ -114,6 +117,7 @@ impl Agent for ClaudeCodeAgent {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            log::error!("Claude command failed: {}", stderr);
             return Err(AgentError::ExecutionFailed(format!(
                 "Claude command failed with status {}: {}",
                 output.status, stderr
@@ -121,10 +125,13 @@ impl Agent for ClaudeCodeAgent {
         }
 
         let stdout = String::from_utf8(output.stdout).map_err(|e| {
+            log::error!("Failed to parse output: {}", e);
             AgentError::Other(format!("Failed to parse claude output as UTF-8: {}", e))
         })?;
 
-        log::debug!("ClaudeCodeAgent output: {}", stdout);
+        log::info!("✅ ClaudeCodeAgent completed");
+        log::debug!("Output length: {} chars", stdout.len());
+        log::trace!("Full output: {}", stdout);
 
         Ok(stdout)
     }
@@ -210,22 +217,40 @@ where
     }
 
     async fn execute(&self, intent: String) -> Result<Self::Output, AgentError> {
+        log::info!(
+            "📊 ClaudeCodeJsonAgent<{}> executing...",
+            std::any::type_name::<T>()
+        );
+
         let raw_output = self.inner.execute(intent).await?;
+
+        log::debug!("Extracting JSON from raw output...");
 
         // Try to extract JSON from the output (might be wrapped in markdown, etc.)
         let json_str = crate::extract_json(&raw_output).map_err(|e| {
+            log::error!("Failed to extract JSON: {}", e);
             AgentError::ParseError(format!(
                 "Failed to extract JSON from claude output: {}. Raw output: {}",
                 e, raw_output
             ))
         })?;
 
-        serde_json::from_str(&json_str).map_err(|e| {
+        log::debug!("Parsing JSON into {}...", std::any::type_name::<T>());
+
+        let result = serde_json::from_str(&json_str).map_err(|e| {
+            log::error!("Failed to parse JSON: {}", e);
             AgentError::ParseError(format!(
                 "Failed to parse JSON: {}. Extracted JSON: {}",
                 e, json_str
             ))
-        })
+        })?;
+
+        log::info!(
+            "✅ ClaudeCodeJsonAgent<{}> completed",
+            std::any::type_name::<T>()
+        );
+
+        Ok(result)
     }
 
     fn name(&self) -> String {

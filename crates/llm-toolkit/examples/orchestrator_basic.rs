@@ -13,7 +13,11 @@ use llm_toolkit::orchestrator::{BlueprintWorkflow, Orchestrator};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logger - set RUST_LOG=debug to see detailed execution logs
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     println!("🎭 Orchestrator Basic Example\n");
+    println!("💡 Set RUST_LOG=debug for detailed logs, RUST_LOG=trace for full output\n");
 
     // Check if claude CLI is available
     println!("🔍 Checking for claude CLI...");

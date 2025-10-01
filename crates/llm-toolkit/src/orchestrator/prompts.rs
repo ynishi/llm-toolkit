@@ -89,31 +89,72 @@ impl StrategyGenerationRequest {
 #[prompt(template = r##"
 # Intent Generation Task
 
-You are tasked with generating a high-quality intent prompt for an agent to execute a specific step in a workflow.
+You are generating an intent prompt that will be given to an agent.
+
+## Critical Constraint
+
+**The agent will receive ONLY the intent text you generate - no separate context.**
+Therefore, you MUST embed all necessary context data directly into the intent prompt itself.
 
 ## Step Information
 **Description**: {{ step_description }}
 **Expected Output**: {{ expected_output }}
 **Agent Expertise**: {{ agent_expertise }}
 
-## Intent Template
+## Intent Template (Base structure)
 {{ intent_template }}
 
-## Available Context
+## Available Context Data
 {{ context_info }}
 
 ---
 
 ## Your Task
 
-Generate a complete, well-structured intent prompt for the agent. The prompt should:
-1. Be clear and actionable
-2. Incorporate relevant context from previous steps
-3. Specify exactly what the agent needs to do
-4. Match the agent's expertise and capabilities
-5. Guide the agent to produce the expected output format
+Generate the complete intent prompt by:
+1. Taking the intent template as a base structure
+2. **Replacing all placeholders (like {previous_output}, {step_3_output}) with actual context values**
+3. Ensuring the resulting intent is self-contained and actionable
+4. Making it specific and concrete - avoid abstract requests like "review" or "refine" without concrete instructions
+5. Matching the agent's expertise and capabilities
 
-**Important:** Return ONLY the intent prompt text, no additional explanation or metadata.
+## Example
+
+This example shows how to transform a template with placeholders into a complete, self-contained intent.
+
+### INPUT
+
+**Step Description:** "Review and refine the article for clarity and technical accuracy"
+
+**Intent Template:**
+"Review the article in {step_3_output} and suggest improvements"
+
+**Available Context:**
+- step_3_output: "# Rust Ownership\n\nRust uses ownership to manage memory safely without garbage collection. The three rules are:\n1. Each value has an owner\n2. Only one owner at a time\n3. When owner goes out of scope, value is dropped"
+
+### OUTPUT
+
+You must generate a complete intent that embeds the actual article content:
+
+```
+Review the following article and suggest 3 specific improvements for clarity and technical accuracy:
+
+# Rust Ownership
+
+Rust uses ownership to manage memory safely without garbage collection. The three rules are:
+1. Each value has an owner
+2. Only one owner at a time
+3. When owner goes out of scope, value is dropped
+
+For each improvement, provide:
+1. Section/Line: [specific location]
+2. Issue: [what needs improvement]
+3. Suggestion: [concrete fix]
+```
+
+**Key point:** The agent receives ONLY the OUTPUT text above. It cannot access {step_3_output} separately, so you must copy the actual content into the intent.
+
+**Important:** Return ONLY the final intent prompt text, no additional explanation or metadata.
 "##)]
 pub struct IntentGenerationRequest {
     pub step_description: String,
