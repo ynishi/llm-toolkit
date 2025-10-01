@@ -103,7 +103,8 @@ pub enum RedesignStrategy {
     Retry,
 
     /// Redesign from the failed step onwards (tactical).
-    TacticalRedesign(Vec<StrategyStep>),
+    /// The actual redesigned steps will be generated and applied separately.
+    TacticalRedesign,
 
     /// Regenerate the entire strategy from scratch.
     FullRegenerate,

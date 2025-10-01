@@ -59,7 +59,7 @@ use crate::agent::Agent;
 use std::collections::HashMap;
 
 #[cfg(feature = "agent")]
-use crate::agent::impls::ClaudeCodeJsonAgent;
+use crate::agent::impls::{ClaudeCodeAgent, ClaudeCodeJsonAgent};
 
 /// The orchestrator coordinates multiple agents to execute complex workflows.
 ///
@@ -75,15 +75,22 @@ pub struct Orchestrator {
     /// Available agents, keyed by their name.
     agents: HashMap<String, Box<dyn Agent<Output = String>>>,
 
-    /// Internal agent for LLM-based strategy generation and redesign decisions.
+    /// Internal JSON agent for structured strategy generation.
     #[cfg(feature = "agent")]
-    internal_agent: ClaudeCodeJsonAgent<StrategyMap>,
+    internal_json_agent: ClaudeCodeJsonAgent<StrategyMap>,
+
+    /// Internal string agent for intent generation and redesign decisions.
+    #[cfg(feature = "agent")]
+    internal_agent: ClaudeCodeAgent,
 
     /// The currently active execution strategy.
     strategy_map: Option<StrategyMap>,
 
     /// Runtime context storing intermediate results.
     context: HashMap<String, String>,
+
+    /// The original task description (stored for regeneration).
+    current_task: Option<String>,
 }
 
 impl Orchestrator {
@@ -93,9 +100,11 @@ impl Orchestrator {
         Self {
             blueprint,
             agents: HashMap::new(),
-            internal_agent: ClaudeCodeJsonAgent::new(),
+            internal_json_agent: ClaudeCodeJsonAgent::new(),
+            internal_agent: ClaudeCodeAgent::new(),
             strategy_map: None,
             context: HashMap::new(),
+            current_task: None,
         }
     }
 
@@ -107,6 +116,7 @@ impl Orchestrator {
             agents: HashMap::new(),
             strategy_map: None,
             context: HashMap::new(),
+            current_task: None,
         }
     }
 
@@ -156,10 +166,13 @@ impl Orchestrator {
     pub async fn execute(&mut self, task: &str) -> Result<String, OrchestratorError> {
         log::info!("Starting orchestrator execution for task: {}", task);
 
-        // Phase 1: Generate strategy (stub for now)
+        // Store task for potential regeneration
+        self.current_task = Some(task.to_string());
+
+        // Phase 1: Generate strategy
         self.generate_strategy(task).await?;
 
-        // Phase 2: Execute strategy (stub for now)
+        // Phase 2: Execute strategy
         let result = self.execute_strategy().await?;
 
         log::info!("Orchestrator execution completed");
@@ -195,9 +208,9 @@ impl Orchestrator {
 
         log::debug!("Strategy generation prompt:\n{}", prompt);
 
-        // Call internal agent to generate strategy
+        // Call internal JSON agent to generate strategy
         let strategy_map = self
-            .internal_agent
+            .internal_json_agent
             .execute(prompt)
             .await
             .map_err(|e| OrchestratorError::StrategyGenerationFailed(e.to_string()))?;
@@ -236,48 +249,454 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Collects context information for a given step.
+    ///
+    /// Gathers previous step outputs and other relevant context data.
+    fn collect_context(&self, step_index: usize) -> HashMap<String, String> {
+        let mut context = HashMap::new();
+
+        // Add all previous step outputs
+        if let Some(strategy) = &self.strategy_map {
+            for i in 0..step_index {
+                if i < strategy.steps.len() {
+                    let prev_step = &strategy.steps[i];
+                    let key = format!("step_{}_output", prev_step.step_id);
+                    if let Some(output) = self.context.get(&key) {
+                        context.insert(key, output.clone());
+                        // Also provide as "previous_output" for convenience
+                        if i == step_index - 1 {
+                            context.insert("previous_output".to_string(), output.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add any other context from self.context
+        for (key, value) in &self.context {
+            if !key.starts_with("step_") {
+                context.insert(key.clone(), value.clone());
+            }
+        }
+
+        context
+    }
+
+    /// Formats context as a readable string for prompts.
+    fn format_context(&self, context: &HashMap<String, String>) -> String {
+        if context.is_empty() {
+            return "No context available yet.".to_string();
+        }
+
+        context
+            .iter()
+            .map(|(key, value)| {
+                // Truncate long values for readability
+                let display_value = if value.len() > 200 {
+                    format!("{}... (truncated)", &value[..200])
+                } else {
+                    value.clone()
+                };
+                format!("- {}: {}", key, display_value)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Formats completed steps for redesign prompts.
+    fn format_completed_steps(&self, up_to_index: usize) -> String {
+        if let Some(strategy) = &self.strategy_map {
+            strategy
+                .steps
+                .iter()
+                .take(up_to_index)
+                .enumerate()
+                .map(|(i, step)| {
+                    let output = self
+                        .context
+                        .get(&format!("step_{}_output", step.step_id))
+                        .cloned()
+                        .unwrap_or_else(|| "(no output)".to_string());
+
+                    format!(
+                        "Step {}: {}\n  Agent: {}\n  Output: {}\n",
+                        i + 1,
+                        step.description,
+                        step.assigned_agent,
+                        if output.len() > 100 {
+                            format!("{}...", &output[..100])
+                        } else {
+                            output
+                        }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            "No completed steps".to_string()
+        }
+    }
+
+    /// Builds an optimized intent prompt using LLM.
+    ///
+    /// Takes the intent template and current context, and generates a high-quality
+    /// prompt specifically tailored for the assigned agent.
+    #[cfg(all(feature = "agent", feature = "derive"))]
+    async fn build_intent(
+        &self,
+        step: &StrategyStep,
+        context: &HashMap<String, String>,
+    ) -> Result<String, OrchestratorError> {
+        use crate::prompt::ToPrompt;
+        use prompts::IntentGenerationRequest;
+
+        // Get agent expertise
+        let agent = self
+            .agents
+            .get(&step.assigned_agent)
+            .ok_or_else(|| OrchestratorError::AgentNotFound(step.assigned_agent.clone()))?;
+
+        let request = IntentGenerationRequest::new(
+            step.description.clone(),
+            step.expected_output.clone(),
+            agent.expertise().to_string(),
+            step.intent_template.clone(),
+            self.format_context(context),
+        );
+
+        let prompt = request.to_prompt();
+
+        log::debug!("Generating intent for step: {}", step.step_id);
+
+        // Use internal agent to generate the intent
+        let intent = self.internal_agent.execute(prompt).await?;
+
+        Ok(intent)
+    }
+
+    /// Builds intent (stub for non-derive feature).
+    #[cfg(not(all(feature = "agent", feature = "derive")))]
+    async fn build_intent(
+        &self,
+        step: &StrategyStep,
+        context: &HashMap<String, String>,
+    ) -> Result<String, OrchestratorError> {
+        // Simple template substitution as fallback
+        let mut intent = step.intent_template.clone();
+
+        for (key, value) in context {
+            let placeholder = format!("{{{}}}", key);
+            intent = intent.replace(&placeholder, value);
+        }
+
+        Ok(intent)
+    }
+
     /// Executes the current strategy step by step.
     ///
-    /// This is a stub implementation. Future versions will include:
-    /// - Context injection
-    /// - Error handling and redesign
-    /// - Progress tracking
+    /// Includes context injection, intent generation, and error handling with redesign.
     async fn execute_strategy(&mut self) -> Result<String, OrchestratorError> {
-        let strategy = self
-            .strategy_map
-            .as_ref()
-            .ok_or_else(OrchestratorError::no_strategy)?;
+        // Check strategy exists
+        if self.strategy_map.is_none() {
+            return Err(OrchestratorError::no_strategy());
+        }
 
         let mut final_result = String::new();
+        let mut step_index = 0;
 
-        for (i, step) in strategy.steps.iter().enumerate() {
-            log::info!("Executing step {}: {}", i + 1, step.description);
+        loop {
+            // Get current strategy info
+            let (step_count, goal, step) = {
+                let strategy = self.strategy_map.as_ref().unwrap();
+                if step_index >= strategy.steps.len() {
+                    break; // All steps completed
+                }
+                (
+                    strategy.steps.len(),
+                    strategy.goal.clone(),
+                    strategy.steps[step_index].clone(),
+                )
+            };
 
+            log::info!(
+                "Executing step {}/{}: {}",
+                step_index + 1,
+                step_count,
+                step.description
+            );
+
+            // Collect context
+            let context = self.collect_context(step_index);
+
+            // Build intent using LLM
+            let intent = self.build_intent(&step, &context).await?;
+
+            log::debug!("Generated intent:\n{}", intent);
+
+            // Execute agent
             let agent = self
                 .agents
                 .get(&step.assigned_agent)
                 .ok_or_else(|| OrchestratorError::AgentNotFound(step.assigned_agent.clone()))?;
 
-            // Build intent (stub - just use template as-is)
-            let intent = step.intent_template.clone();
+            match agent.execute(intent).await {
+                Ok(output) => {
+                    log::info!("Step {} completed successfully", step_index + 1);
 
-            // Execute agent
-            let output = agent.execute(intent).await?;
+                    // Store result in context
+                    self.context
+                        .insert(format!("step_{}_output", step.step_id), output.clone());
 
-            // Store result in context
-            self.context
-                .insert(format!("step_{}_output", step.step_id), output.clone());
+                    final_result = output;
+                    step_index += 1;
+                }
+                Err(e) => {
+                    log::warn!("Step {} failed: {}", step_index + 1, e);
 
-            final_result = output;
+                    // Determine redesign strategy
+                    match self
+                        .determine_redesign_strategy(&e, step_index, &goal)
+                        .await?
+                    {
+                        RedesignStrategy::Retry => {
+                            log::info!("Retrying step {}", step_index + 1);
+                            // Loop will retry the same step
+                            continue;
+                        }
+                        RedesignStrategy::TacticalRedesign => {
+                            log::info!("Performing tactical redesign from step {}", step_index + 1);
+                            self.tactical_redesign(&e, step_index).await?;
+                            // Retry from the same index with new strategy
+                            continue;
+                        }
+                        RedesignStrategy::FullRegenerate => {
+                            log::info!("Performing full strategy regeneration");
+                            self.full_regenerate(&e, step_index).await?;
+                            // Reset to beginning with new strategy
+                            step_index = 0;
+                            // Clear context to start fresh
+                            self.context.clear();
+                            continue;
+                        }
+                    }
+                }
+            }
         }
 
         Ok(final_result)
+    }
+
+    /// Determines the appropriate redesign strategy after an error.
+    #[cfg(all(feature = "agent", feature = "derive"))]
+    async fn determine_redesign_strategy(
+        &self,
+        error: &crate::agent::AgentError,
+        failed_step_index: usize,
+        goal: &str,
+    ) -> Result<RedesignStrategy, OrchestratorError> {
+        use crate::prompt::ToPrompt;
+        use prompts::RedesignDecisionRequest;
+
+        // Check if error is transient
+        if error.is_transient() {
+            return Ok(RedesignStrategy::Retry);
+        }
+
+        let strategy = self
+            .strategy_map
+            .as_ref()
+            .ok_or_else(OrchestratorError::no_strategy)?;
+
+        let request = RedesignDecisionRequest::new(
+            goal.to_string(),
+            failed_step_index,
+            strategy.steps.len(),
+            strategy.steps[failed_step_index].description.clone(),
+            error.to_string(),
+            self.format_completed_steps(failed_step_index),
+        );
+
+        let prompt = request.to_prompt();
+
+        log::debug!("Redesign decision prompt:\n{}", prompt);
+
+        // Ask internal agent for decision
+        let decision = self.internal_agent.execute(prompt).await?;
+
+        let decision_upper = decision.trim().to_uppercase();
+
+        if decision_upper.contains("RETRY") {
+            Ok(RedesignStrategy::Retry)
+        } else if decision_upper.contains("TACTICAL") {
+            Ok(RedesignStrategy::TacticalRedesign)
+        } else if decision_upper.contains("FULL") {
+            Ok(RedesignStrategy::FullRegenerate)
+        } else {
+            log::warn!(
+                "Unexpected redesign decision: {}. Defaulting to FULL",
+                decision
+            );
+            Ok(RedesignStrategy::FullRegenerate)
+        }
+    }
+
+    /// Determines the appropriate redesign strategy (stub).
+    #[cfg(not(all(feature = "agent", feature = "derive")))]
+    async fn determine_redesign_strategy(
+        &self,
+        error: &crate::agent::AgentError,
+        _failed_step_index: usize,
+        _goal: &str,
+    ) -> Result<RedesignStrategy, OrchestratorError> {
+        if error.is_transient() {
+            Ok(RedesignStrategy::Retry)
+        } else {
+            Ok(RedesignStrategy::FullRegenerate)
+        }
+    }
+
+    /// Performs tactical redesign of remaining steps.
+    #[cfg(all(feature = "agent", feature = "derive"))]
+    async fn tactical_redesign(
+        &mut self,
+        error: &crate::agent::AgentError,
+        failed_step_index: usize,
+    ) -> Result<(), OrchestratorError> {
+        use crate::prompt::ToPrompt;
+        use prompts::TacticalRedesignRequest;
+
+        let strategy = self
+            .strategy_map
+            .as_ref()
+            .ok_or_else(OrchestratorError::no_strategy)?
+            .clone();
+
+        let request = TacticalRedesignRequest::new(
+            strategy.goal.clone(),
+            serde_json::to_string_pretty(&strategy)
+                .map_err(|e| OrchestratorError::StrategyGenerationFailed(e.to_string()))?,
+            failed_step_index,
+            strategy.steps[failed_step_index].description.clone(),
+            error.to_string(),
+            self.format_completed_steps(failed_step_index),
+            self.format_agent_list(),
+        );
+
+        let prompt = request.to_prompt();
+
+        log::debug!("Tactical redesign prompt:\n{}", prompt);
+
+        // Get new steps from LLM
+        let response = self.internal_agent.execute(prompt).await?;
+
+        // Parse JSON array of StrategyStep
+        let new_steps: Vec<StrategyStep> = serde_json::from_str(&response).map_err(|e| {
+            OrchestratorError::StrategyGenerationFailed(format!(
+                "Failed to parse redesigned steps: {}",
+                e
+            ))
+        })?;
+
+        log::info!("Tactical redesign generated {} new steps", new_steps.len());
+
+        // Update strategy: keep completed steps, replace from failed_step_index onwards
+        if let Some(ref mut strategy) = self.strategy_map {
+            strategy.steps.truncate(failed_step_index);
+            strategy.steps.extend(new_steps);
+        }
+
+        Ok(())
+    }
+
+    /// Performs tactical redesign (stub).
+    #[cfg(not(all(feature = "agent", feature = "derive")))]
+    async fn tactical_redesign(
+        &mut self,
+        _error: &crate::agent::AgentError,
+        _failed_step_index: usize,
+    ) -> Result<(), OrchestratorError> {
+        Err(OrchestratorError::ExecutionFailed(
+            "Tactical redesign not available without agent and derive features".to_string(),
+        ))
+    }
+
+    /// Performs full strategy regeneration from scratch.
+    #[cfg(all(feature = "agent", feature = "derive"))]
+    async fn full_regenerate(
+        &mut self,
+        error: &crate::agent::AgentError,
+        failed_step_index: usize,
+    ) -> Result<(), OrchestratorError> {
+        use crate::prompt::ToPrompt;
+        use prompts::FullRegenerateRequest;
+
+        let task = self
+            .current_task
+            .as_ref()
+            .ok_or_else(|| {
+                OrchestratorError::Other("No current task available for regeneration".to_string())
+            })?
+            .clone();
+
+        let strategy = self
+            .strategy_map
+            .as_ref()
+            .ok_or_else(OrchestratorError::no_strategy)?
+            .clone();
+
+        let request = FullRegenerateRequest::new(
+            task,
+            self.format_agent_list(),
+            self.blueprint.description.clone(),
+            self.blueprint.graph.clone(),
+            serde_json::to_string_pretty(&strategy)
+                .map_err(|e| OrchestratorError::StrategyGenerationFailed(e.to_string()))?,
+            format!(
+                "Step {} ({}) failed with error: {}",
+                failed_step_index + 1,
+                strategy.steps[failed_step_index].description,
+                error
+            ),
+            self.format_completed_steps(failed_step_index),
+        );
+
+        let prompt = request.to_prompt();
+
+        log::debug!("Full regeneration prompt:\n{}", prompt);
+
+        // Generate completely new strategy
+        let new_strategy = self
+            .internal_json_agent
+            .execute(prompt)
+            .await
+            .map_err(|e| OrchestratorError::StrategyGenerationFailed(e.to_string()))?;
+
+        log::info!(
+            "Full regeneration completed with {} steps",
+            new_strategy.steps.len()
+        );
+
+        self.strategy_map = Some(new_strategy);
+        Ok(())
+    }
+
+    /// Performs full regeneration (stub).
+    #[cfg(not(all(feature = "agent", feature = "derive")))]
+    async fn full_regenerate(
+        &mut self,
+        _error: &crate::agent::AgentError,
+        _failed_step_index: usize,
+    ) -> Result<(), OrchestratorError> {
+        Err(OrchestratorError::ExecutionFailed(
+            "Full regeneration not available without agent and derive features".to_string(),
+        ))
     }
 
     /// Clears the current strategy and context (useful for re-execution).
     pub fn reset(&mut self) {
         self.strategy_map = None;
         self.context.clear();
+        self.current_task = None;
     }
 }
 
