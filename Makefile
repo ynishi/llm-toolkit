@@ -14,7 +14,8 @@ EXAMPLES := \
 	define_intent_comprehensive \
 	test_define_intent \
 	orchestrator_with_mock \
-	check_claude
+	check_claude \
+	agent_derive
 
 # test-examplesターゲットで、リストをループ処理する
 test-examples:

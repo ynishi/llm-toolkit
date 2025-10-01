@@ -41,6 +41,30 @@ pub use llm_toolkit_macros::examples_section;
 #[cfg(feature = "derive")]
 pub use llm_toolkit_macros::define_intent;
 
+/// A derive macro to implement the `Agent` trait for structs.
+///
+/// This macro is available only when the `agent` feature is enabled.
+/// It automatically generates an Agent implementation that uses ClaudeCodeAgent
+/// internally and deserializes responses into a structured output type.
+///
+/// # Example
+///
+/// ```ignore
+/// use llm_toolkit_macros::Agent;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Serialize, Deserialize)]
+/// struct MyOutput {
+///     result: String,
+/// }
+///
+/// #[derive(Agent)]
+/// #[agent(expertise = "My expertise", output = "MyOutput")]
+/// struct MyAgent;
+/// ```
+#[cfg(feature = "agent")]
+pub use llm_toolkit_macros::Agent;
+
 pub mod extract;
 pub mod intent;
 pub mod multimodal;

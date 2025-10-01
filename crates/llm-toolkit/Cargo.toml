@@ -56,12 +56,16 @@ required-features = ["derive"]
 
 [[example]]
 name = "orchestrator_basic"
-required-features = ["agent", "derive"]
+required-features = ["agent"]
 
 [[example]]
 name = "orchestrator_with_mock"
-required-features = ["agent", "derive"]
+required-features = ["agent"]
 
 [[example]]
 name = "check_claude"
+required-features = ["agent"]
+
+[[example]]
+name = "agent_derive"
 required-features = ["agent"]

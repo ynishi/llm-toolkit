@@ -2740,12 +2740,18 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
         .unwrap_or_else(|| syn::parse_str::<syn::Type>("String").unwrap());
 
     // Determine crate path
-    let crate_path = match crate_name("llm-toolkit") {
-        Ok(FoundCrate::Name(name)) => {
-            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-            quote! { ::#ident }
+    let found_crate =
+        crate_name("llm-toolkit").expect("llm-toolkit should be present in `Cargo.toml`");
+    let crate_path = match found_crate {
+        FoundCrate::Itself => {
+            // Even when it's the same crate, use absolute path to support examples/tests/bins
+            let ident = syn::Ident::new("llm_toolkit", proc_macro2::Span::call_site());
+            quote!(::#ident)
         }
-        _ => quote! { crate },
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
     };
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
