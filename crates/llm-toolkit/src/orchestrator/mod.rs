@@ -218,6 +218,41 @@ impl Orchestrator {
         self.agents.insert(name, Box::new(adapter));
     }
 
+    /// Adds an agent with ToPrompt support to the orchestrator's registry.
+    ///
+    /// When the output type implements `ToPrompt`, the orchestrator will automatically
+    /// use the prompt representation for context management instead of plain JSON.
+    /// This provides better LLM understanding of complex types like enums with descriptions.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use llm_toolkit::{ToPrompt, Agent};
+    ///
+    /// #[derive(ToPrompt, Serialize, Deserialize)]
+    /// pub enum AnalysisResult {
+    ///     /// The topic is technically sound
+    ///     Approved,
+    ///     /// Needs revision
+    ///     NeedsRevision,
+    /// }
+    ///
+    /// #[derive(Agent)]
+    /// #[agent(expertise = "...", output = "AnalysisResult")]
+    /// struct AnalyzerAgent;
+    ///
+    /// orchestrator.add_agent_with_to_prompt(AnalyzerAgent);
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn add_agent_with_to_prompt<T>(&mut self, agent: impl Agent<Output = T> + 'static)
+    where
+        T: Serialize + serde::de::DeserializeOwned + crate::prompt::ToPrompt + 'static,
+    {
+        let adapter = AgentAdapter::with_to_prompt(agent, |output: &T| output.to_prompt());
+        let name = adapter.name();
+        self.agents.insert(name, Box::new(adapter));
+    }
+
     /// Returns a reference to a dynamic agent by name.
     pub fn get_agent(&self, name: &str) -> Option<&dyn DynamicAgent> {
         self.agents.get(name).map(|boxed| &**boxed)
@@ -432,15 +467,44 @@ impl Orchestrator {
 
         context
             .iter()
-            .map(|(key, value)| {
-                // Convert JSON value to string and truncate if needed
-                let value_str = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
-                let display_value = if value_str.len() > 200 {
-                    format!("{}... (truncated)", &value_str[..200])
+            .filter_map(|(key, value)| {
+                // Skip _prompt versions in the listing (they'll be used as replacements)
+                if key.ends_with("_output_prompt") {
+                    return None;
+                }
+
+                // If there's a _prompt version, prefer it
+                let display_value = if let Some(prompt_key) = key.strip_suffix("_output") {
+                    let prompt_key_full = format!("{}_output_prompt", prompt_key);
+                    if let Some(JsonValue::String(prompt_str)) = context.get(&prompt_key_full) {
+                        // Use prompt representation
+                        if prompt_str.len() > 500 {
+                            format!("{}... (truncated)", &prompt_str[..500])
+                        } else {
+                            prompt_str.clone()
+                        }
+                    } else {
+                        // Fallback to JSON representation
+                        let value_str =
+                            serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+                        if value_str.len() > 200 {
+                            format!("{}... (truncated)", &value_str[..200])
+                        } else {
+                            value_str
+                        }
+                    }
                 } else {
-                    value_str
+                    // Not a step output, use as-is
+                    let value_str =
+                        serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+                    if value_str.len() > 200 {
+                        format!("{}... (truncated)", &value_str[..200])
+                    } else {
+                        value_str
+                    }
                 };
-                format!("- {}: {}", key, display_value)
+
+                Some(format!("- {}: {}", key, display_value))
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -595,9 +659,18 @@ impl Orchestrator {
                 Ok(output) => {
                     log::info!("Step {} completed successfully", step_index + 1);
 
-                    // Store result in context
+                    // Store JSON result in context
                     self.context
                         .insert(format!("step_{}_output", step.step_id), output.clone());
+
+                    // Store prompt version if available (for ToPrompt implementations)
+                    if let Some(prompt_str) = agent.try_to_prompt(&output) {
+                        log::debug!("Storing prompt representation for step {}", step.step_id);
+                        self.context.insert(
+                            format!("step_{}_output_prompt", step.step_id),
+                            JsonValue::String(prompt_str),
+                        );
+                    }
 
                     final_result = output;
                     steps_executed += 1;

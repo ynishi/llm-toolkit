@@ -148,7 +148,18 @@ pub trait DynamicAgent: Send + Sync {
     async fn is_available(&self) -> Result<(), AgentError> {
         Ok(())
     }
+
+    /// Attempts to convert a JSON output to a prompt string if the underlying type implements ToPrompt.
+    ///
+    /// Returns `Some(String)` if the output type implements ToPrompt, `None` otherwise.
+    /// This allows the orchestrator to use rich prompt representations when available.
+    fn try_to_prompt(&self, _json: &serde_json::Value) -> Option<String> {
+        None
+    }
 }
+
+/// Type alias for the ToPrompt conversion function.
+type ToPromptFn = Box<dyn Fn(&serde_json::Value) -> Option<String> + Send + Sync>;
 
 /// Adapter that wraps any `Agent<Output = T>` to implement `DynamicAgent`.
 ///
@@ -157,6 +168,7 @@ pub trait DynamicAgent: Send + Sync {
 /// stored in the same collection.
 pub struct AgentAdapter<T: Serialize + DeserializeOwned> {
     inner: Box<dyn Agent<Output = T>>,
+    try_to_prompt_fn: Option<ToPromptFn>,
 }
 
 impl<T: Serialize + DeserializeOwned> AgentAdapter<T> {
@@ -164,6 +176,25 @@ impl<T: Serialize + DeserializeOwned> AgentAdapter<T> {
     pub fn new(agent: impl Agent<Output = T> + 'static) -> Self {
         Self {
             inner: Box::new(agent),
+            try_to_prompt_fn: None,
+        }
+    }
+
+    /// Creates a new adapter with ToPrompt support.
+    ///
+    /// This constructor should be used when T implements ToPrompt, allowing the
+    /// orchestrator to use rich prompt representations instead of plain JSON.
+    pub fn with_to_prompt(
+        agent: impl Agent<Output = T> + 'static,
+        to_prompt_fn: impl Fn(&T) -> String + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            inner: Box::new(agent),
+            try_to_prompt_fn: Some(Box::new(move |json| {
+                serde_json::from_value::<T>(json.clone())
+                    .ok()
+                    .map(|output| to_prompt_fn(&output))
+            })),
         }
     }
 }
@@ -185,5 +216,9 @@ impl<T: Serialize + DeserializeOwned> DynamicAgent for AgentAdapter<T> {
 
     async fn is_available(&self) -> Result<(), AgentError> {
         self.inner.is_available().await
+    }
+
+    fn try_to_prompt(&self, json: &serde_json::Value) -> Option<String> {
+        self.try_to_prompt_fn.as_ref().and_then(|f| f(json))
     }
 }
