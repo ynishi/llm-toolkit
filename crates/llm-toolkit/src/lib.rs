@@ -6,6 +6,10 @@
 //! strongly-typed Rust application and the unstructured, often unpredictable
 //! string-based responses from LLM APIs.
 
+// Allow the crate to reference itself by name, which is needed for proc macros
+// to work correctly in examples, tests, and bins
+extern crate self as llm_toolkit;
+
 /// A derive macro to implement the `ToPrompt` trait for structs.
 ///
 /// This macro is available only when the `derive` feature is enabled.

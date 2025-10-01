@@ -47,12 +47,19 @@ pub mod blueprint;
 pub mod error;
 pub mod strategy;
 
+// Prompt definitions require both derive (ToPrompt macro) and agent (for usage)
+#[cfg(all(feature = "derive", feature = "agent"))]
+pub mod prompts;
+
 pub use blueprint::BlueprintWorkflow;
 pub use error::OrchestratorError;
 pub use strategy::{RedesignStrategy, StrategyMap, StrategyStep};
 
 use crate::agent::Agent;
 use std::collections::HashMap;
+
+#[cfg(feature = "agent")]
+use crate::agent::impls::ClaudeCodeJsonAgent;
 
 /// The orchestrator coordinates multiple agents to execute complex workflows.
 ///
@@ -68,6 +75,10 @@ pub struct Orchestrator {
     /// Available agents, keyed by their name.
     agents: HashMap<String, Box<dyn Agent<Output = String>>>,
 
+    /// Internal agent for LLM-based strategy generation and redesign decisions.
+    #[cfg(feature = "agent")]
+    internal_agent: ClaudeCodeJsonAgent<StrategyMap>,
+
     /// The currently active execution strategy.
     strategy_map: Option<StrategyMap>,
 
@@ -77,6 +88,19 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     /// Creates a new Orchestrator with a given blueprint.
+    #[cfg(feature = "agent")]
+    pub fn new(blueprint: BlueprintWorkflow) -> Self {
+        Self {
+            blueprint,
+            agents: HashMap::new(),
+            internal_agent: ClaudeCodeJsonAgent::new(),
+            strategy_map: None,
+            context: HashMap::new(),
+        }
+    }
+
+    /// Creates a new Orchestrator without the internal agent (for testing).
+    #[cfg(not(feature = "agent"))]
     pub fn new(blueprint: BlueprintWorkflow) -> Self {
         Self {
             blueprint,
@@ -144,10 +168,50 @@ impl Orchestrator {
 
     /// Generates an execution strategy from the blueprint, agents, and task.
     ///
-    /// This is a stub implementation. Future versions will use LLM calls
-    /// to generate strategies dynamically.
+    /// Uses the internal LLM agent to analyze the task, available agents,
+    /// and blueprint to generate an optimal execution strategy.
+    #[cfg(all(feature = "agent", feature = "derive"))]
     async fn generate_strategy(&mut self, task: &str) -> Result<(), OrchestratorError> {
+        use crate::prompt::ToPrompt;
+        use prompts::StrategyGenerationRequest;
+
         log::debug!("Generating strategy for task: {}", task);
+
+        if self.agents.is_empty() {
+            return Err(OrchestratorError::StrategyGenerationFailed(
+                "No agents available".to_string(),
+            ));
+        }
+
+        // Build the prompt using llm-toolkit's ToPrompt
+        let request = StrategyGenerationRequest::new(
+            task.to_string(),
+            self.format_agent_list(),
+            self.blueprint.description.clone(),
+            self.blueprint.graph.clone(),
+        );
+
+        let prompt = request.to_prompt();
+
+        log::debug!("Strategy generation prompt:\n{}", prompt);
+
+        // Call internal agent to generate strategy
+        let strategy_map = self
+            .internal_agent
+            .execute(prompt)
+            .await
+            .map_err(|e| OrchestratorError::StrategyGenerationFailed(e.to_string()))?;
+
+        log::info!("Generated strategy with {} steps", strategy_map.steps.len());
+
+        self.strategy_map = Some(strategy_map);
+        Ok(())
+    }
+
+    /// Generates an execution strategy (stub for non-derive feature).
+    #[cfg(not(all(feature = "agent", feature = "derive")))]
+    async fn generate_strategy(&mut self, task: &str) -> Result<(), OrchestratorError> {
+        log::debug!("Generating strategy for task (stub mode): {}", task);
 
         // Stub: Create a simple single-step strategy
         let mut strategy = StrategyMap::new(task.to_string());
