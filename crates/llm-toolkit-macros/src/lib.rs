@@ -1,4 +1,5 @@
 use proc_macro::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
 use quote::quote;
 use regex::Regex;
 use syn::{
@@ -61,6 +62,7 @@ fn extract_doc_comments(attrs: &[syn::Attribute]) -> String {
 fn generate_example_only_parts(
     fields: &syn::punctuated::Punctuated<syn::Field, syn::Token![,]>,
     has_default: bool,
+    crate_path: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let mut field_values = Vec::new();
 
@@ -106,7 +108,7 @@ fn generate_example_only_parts(
                 let json_value = serde_json::Value::Object(json_obj);
                 let json_str = serde_json::to_string_pretty(&json_value)
                     .unwrap_or_else(|_| "{}".to_string());
-                vec![llm_toolkit::prompt::PromptPart::Text(json_str)]
+                vec![#crate_path::prompt::PromptPart::Text(json_str)]
             }
         }
     } else {
@@ -117,7 +119,7 @@ fn generate_example_only_parts(
                 let json_value = serde_json::Value::Object(json_obj);
                 let json_str = serde_json::to_string_pretty(&json_value)
                     .unwrap_or_else(|_| "{}".to_string());
-                vec![llm_toolkit::prompt::PromptPart::Text(json_str)]
+                vec![#crate_path::prompt::PromptPart::Text(json_str)]
             }
         }
     }
@@ -128,6 +130,7 @@ fn generate_schema_only_parts(
     struct_name: &str,
     struct_docs: &str,
     fields: &syn::punctuated::Punctuated<syn::Field, syn::Token![,]>,
+    crate_path: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let mut schema_lines = vec![];
 
@@ -186,7 +189,7 @@ fn generate_schema_only_parts(
     let schema_str = schema_lines.join("\n");
 
     quote! {
-        vec![llm_toolkit::prompt::PromptPart::Text(#schema_str.to_string())]
+        vec![#crate_path::prompt::PromptPart::Text(#schema_str.to_string())]
     }
 }
 
@@ -381,6 +384,20 @@ fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
 pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
+    let found_crate =
+        crate_name("llm-toolkit").expect("llm-toolkit should be present in `Cargo.toml`");
+    let crate_path = match found_crate {
+        FoundCrate::Itself => {
+            // Even when it's the same crate, use absolute path to support examples/tests/bins
+            let ident = syn::Ident::new("llm_toolkit", proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+    };
+
     // Check if this is a struct or enum
     match &input.data {
         Data::Enum(data_enum) => {
@@ -429,9 +446,9 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
             let expanded = quote! {
-                impl #impl_generics llm_toolkit::prompt::ToPrompt for #enum_name #ty_generics #where_clause {
-                    fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
-                        vec![llm_toolkit::prompt::PromptPart::Text(#prompt_string.to_string())]
+                impl #impl_generics #crate_path::prompt::ToPrompt for #enum_name #ty_generics #where_clause {
+                    fn to_prompt_parts(&self) -> Vec<#crate_path::prompt::PromptPart> {
+                        vec![#crate_path::prompt::PromptPart::Text(#prompt_string.to_string())]
                     }
 
                     fn to_prompt(&self) -> String {
@@ -685,14 +702,14 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
                 // Generate schema-only parts
                 let schema_parts =
-                    generate_schema_only_parts(&struct_name_str, &struct_docs, fields);
+                    generate_schema_only_parts(&struct_name_str, &struct_docs, fields, &crate_path);
 
                 // Generate example parts
-                let example_parts = generate_example_only_parts(fields, has_default);
+                let example_parts = generate_example_only_parts(fields, has_default, &crate_path);
 
                 quote! {
-                    impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
-                        fn to_prompt_parts_with_mode(&self, mode: &str) -> Vec<llm_toolkit::prompt::PromptPart> {
+                    impl #impl_generics #crate_path::prompt::ToPrompt for #name #ty_generics #where_clause {
+                        fn to_prompt_parts_with_mode(&self, mode: &str) -> Vec<#crate_path::prompt::PromptPart> {
                             match mode {
                                 "schema_only" => #schema_parts,
                                 "example_only" => #example_parts,
@@ -705,8 +722,8 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                     parts.extend(schema_parts);
 
                                     // Add separator and example header
-                                    parts.push(llm_toolkit::prompt::PromptPart::Text("\n### Example".to_string()));
-                                    parts.push(llm_toolkit::prompt::PromptPart::Text(
+                                    parts.push(#crate_path::prompt::PromptPart::Text("\n### Example".to_string()));
+                                    parts.push(#crate_path::prompt::PromptPart::Text(
                                         format!("Here is an example of a valid `{}` object:", #struct_name_str)
                                     ));
 
@@ -719,7 +736,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             }
                         }
 
-                        fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
+                        fn to_prompt_parts(&self) -> Vec<#crate_path::prompt::PromptPart> {
                             self.to_prompt_parts_with_mode("full")
                         }
 
@@ -727,7 +744,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             self.to_prompt_parts()
                                 .into_iter()
                                 .filter_map(|part| match part {
-                                    llm_toolkit::prompt::PromptPart::Text(text) => Some(text),
+                                    #crate_path::prompt::PromptPart::Text(text) => Some(text),
                                     _ => None,
                                 })
                                 .collect::<Vec<_>>()
@@ -865,8 +882,8 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     }
 
                     quote! {
-                        impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
-                            fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
+                        impl #impl_generics #crate_path::prompt::ToPrompt for #name #ty_generics #where_clause {
+                            fn to_prompt_parts(&self) -> Vec<#crate_path::prompt::PromptPart> {
                                 let mut parts = Vec::new();
 
                                 // Add image parts first
@@ -890,7 +907,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                 };
 
                                 if !text.is_empty() {
-                                    parts.push(llm_toolkit::prompt::PromptPart::Text(text));
+                                    parts.push(#crate_path::prompt::PromptPart::Text(text));
                                 }
 
                                 parts
@@ -917,26 +934,26 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                 } else {
                     // No mode syntax, use direct template rendering with render_prompt
                     quote! {
-                        impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
-                            fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
+                        impl #impl_generics #crate_path::prompt::ToPrompt for #name #ty_generics #where_clause {
+                            fn to_prompt_parts(&self) -> Vec<#crate_path::prompt::PromptPart> {
                                 let mut parts = Vec::new();
 
                                 // Add image parts first
                                 #(#image_field_parts)*
 
                                 // Add the rendered template as text
-                                let text = llm_toolkit::prompt::render_prompt(#template, self).unwrap_or_else(|e| {
+                                let text = #crate_path::prompt::render_prompt(#template, self).unwrap_or_else(|e| {
                                     format!("Failed to render prompt: {}", e)
                                 });
                                 if !text.is_empty() {
-                                    parts.push(llm_toolkit::prompt::PromptPart::Text(text));
+                                    parts.push(#crate_path::prompt::PromptPart::Text(text));
                                 }
 
                                 parts
                             }
 
                             fn to_prompt(&self) -> String {
-                                llm_toolkit::prompt::render_prompt(#template, self).unwrap_or_else(|e| {
+                                #crate_path::prompt::render_prompt(#template, self).unwrap_or_else(|e| {
                                     format!("Failed to render prompt: {}", e)
                                 })
                             }
@@ -1009,8 +1026,8 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
                 // Generate the implementation with to_prompt_parts()
                 quote! {
-                    impl #impl_generics llm_toolkit::prompt::ToPrompt for #name #ty_generics #where_clause {
-                        fn to_prompt_parts(&self) -> Vec<llm_toolkit::prompt::PromptPart> {
+                    impl #impl_generics #crate_path::prompt::ToPrompt for #name #ty_generics #where_clause {
+                        fn to_prompt_parts(&self) -> Vec<#crate_path::prompt::PromptPart> {
                             let mut parts = Vec::new();
 
                             // Add image parts first
@@ -1021,7 +1038,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             #(#text_field_parts)*
 
                             if !text_parts.is_empty() {
-                                parts.push(llm_toolkit::prompt::PromptPart::Text(text_parts.join("\n")));
+                                parts.push(#crate_path::prompt::PromptPart::Text(text_parts.join("\n")));
                             }
 
                             parts
@@ -1188,6 +1205,20 @@ fn parse_struct_prompt_for_attrs(attrs: &[syn::Attribute]) -> Vec<TargetInfo> {
 pub fn to_prompt_set_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
+    let found_crate =
+        crate_name("llm-toolkit").expect("llm-toolkit should be present in `Cargo.toml`");
+    let crate_path = match found_crate {
+        FoundCrate::Itself => {
+            // Even when it's the same crate, use absolute path to support examples/tests/bins
+            let ident = syn::Ident::new("llm_toolkit", proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+    };
+
     // Only support structs with named fields
     let data_struct = match &input.data {
         Data::Struct(data) => data,
@@ -1279,14 +1310,14 @@ pub fn to_prompt_set_derive(input: TokenStream) -> TokenStream {
 
                     #(#image_parts)*
 
-                    let text = llm_toolkit::prompt::render_prompt(#template_str, self)
-                        .map_err(|e| llm_toolkit::prompt::PromptSetError::RenderFailed {
+                    let text = #crate_path::prompt::render_prompt(#template_str, self)
+                        .map_err(|e| #crate_path::prompt::PromptSetError::RenderFailed {
                             target: #target_name.to_string(),
                             source: e,
                         })?;
 
                     if !text.is_empty() {
-                        parts.push(llm_toolkit::prompt::PromptPart::Text(text));
+                        parts.push(#crate_path::prompt::PromptPart::Text(text));
                     }
 
                     Ok(parts)
@@ -1373,7 +1404,7 @@ pub fn to_prompt_set_derive(input: TokenStream) -> TokenStream {
                     #(#text_field_parts)*
 
                     if !text_parts.is_empty() {
-                        parts.push(llm_toolkit::prompt::PromptPart::Text(text_parts.join("\n")));
+                        parts.push(#crate_path::prompt::PromptPart::Text(text_parts.join("\n")));
                     }
 
                     Ok(parts)
@@ -1389,7 +1420,7 @@ pub fn to_prompt_set_derive(input: TokenStream) -> TokenStream {
     match_arms.push(quote! {
         _ => {
             let available = vec![#(#target_names.to_string()),*];
-            Err(llm_toolkit::prompt::PromptSetError::TargetNotFound {
+            Err(#crate_path::prompt::PromptSetError::TargetNotFound {
                 target: target.to_string(),
                 available,
             })
@@ -1400,8 +1431,8 @@ pub fn to_prompt_set_derive(input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     let expanded = quote! {
-        impl #impl_generics llm_toolkit::prompt::ToPromptSet for #struct_name #ty_generics #where_clause {
-            fn to_prompt_parts_for(&self, target: &str) -> Result<Vec<llm_toolkit::prompt::PromptPart>, llm_toolkit::prompt::PromptSetError> {
+        impl #impl_generics #crate_path::prompt::ToPromptSet for #struct_name #ty_generics #where_clause {
+            fn to_prompt_parts_for(&self, target: &str) -> Result<Vec<#crate_path::prompt::PromptPart>, #crate_path::prompt::PromptSetError> {
                 match target {
                     #(#match_arms)*
                 }
@@ -1451,6 +1482,16 @@ impl Parse for TypeList {
 #[proc_macro]
 pub fn examples_section(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as TypeList);
+
+    let found_crate =
+        crate_name("llm-toolkit").expect("llm-toolkit should be present in `Cargo.toml`");
+    let _crate_path = match found_crate {
+        FoundCrate::Itself => quote!(crate),
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+    };
 
     // Generate code for each type
     let mut type_sections = Vec::new();
@@ -1571,6 +1612,20 @@ fn parse_to_prompt_for_attribute(attrs: &[syn::Attribute]) -> (syn::Type, String
 #[proc_macro_attribute]
 pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
+
+    let found_crate =
+        crate_name("llm-toolkit").expect("llm-toolkit should be present in `Cargo.toml`");
+    let crate_path = match found_crate {
+        FoundCrate::Itself => {
+            // Even when it's the same crate, use absolute path to support examples/tests/bins
+            let ident = syn::Ident::new("llm_toolkit", proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+    };
 
     // Verify this is an enum
     let enum_data = match &input.data {
@@ -1812,10 +1867,10 @@ pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
             pub const EXTRACTOR_TAG: &'static str = #extractor_tag;
         }
 
-        impl llm_toolkit::intent::IntentExtractor<#enum_name> for #extractor_name {
-            fn extract_intent(&self, response: &str) -> Result<#enum_name, llm_toolkit::intent::IntentExtractionError> {
+        impl #crate_path::intent::IntentExtractor<#enum_name> for #extractor_name {
+            fn extract_intent(&self, response: &str) -> Result<#enum_name, #crate_path::intent::IntentExtractionError> {
                 // Use the common extraction function with our tag
-                llm_toolkit::intent::extract_intent_from_response(response, Self::EXTRACTOR_TAG)
+                #crate_path::intent::extract_intent_from_response(response, Self::EXTRACTOR_TAG)
             }
         }
     };
@@ -2015,6 +2070,20 @@ fn generate_multi_tag_output(
     prompt_template: String,
     actions_doc: String,
 ) -> TokenStream {
+    let found_crate =
+        crate_name("llm-toolkit").expect("llm-toolkit should be present in `Cargo.toml`");
+    let crate_path = match found_crate {
+        FoundCrate::Itself => {
+            // Even when it's the same crate, use absolute path to support examples/tests/bins
+            let ident = syn::Ident::new("llm_toolkit", proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+    };
+
     // Parse template placeholders
     let placeholders = parse_template_placeholders_with_mode(&prompt_template);
     let user_variables: Vec<String> = placeholders
@@ -2206,7 +2275,7 @@ fn generate_multi_tag_output(
                 actions.into_iter().next()
             }
 
-            pub fn extract_actions(&self, text: &str) -> Result<Vec<#enum_name>, llm_toolkit::intent::IntentError> {
+            pub fn extract_actions(&self, text: &str) -> Result<Vec<#enum_name>, #crate_path::intent::IntentError> {
                 use ::quick_xml::events::Event;
                 use ::quick_xml::Reader;
 
@@ -2426,6 +2495,20 @@ fn generate_parsing_arms(
 pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
+    let found_crate =
+        crate_name("llm-toolkit").expect("llm-toolkit should be present in `Cargo.toml`");
+    let crate_path = match found_crate {
+        FoundCrate::Itself => {
+            // Even when it's the same crate, use absolute path to support examples/tests/bins
+            let ident = syn::Ident::new("llm_toolkit", proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+    };
+
     // Parse the struct-level prompt_for attribute
     let (target_type, template) = parse_to_prompt_for_attribute(&input.attrs);
 
@@ -2532,7 +2615,7 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
     }
 
     let expanded = quote! {
-        impl #impl_generics llm_toolkit::prompt::ToPromptFor<#target_type> for #struct_name #ty_generics #where_clause
+        impl #impl_generics #crate_path::prompt::ToPromptFor<#target_type> for #struct_name #ty_generics #where_clause
         where
             #target_type: serde::Serialize,
         {
