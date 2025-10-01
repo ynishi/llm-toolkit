@@ -70,13 +70,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let task = "Write a beginner-friendly article about Rust's ownership system";
 
-    match orchestrator.execute(task).await {
-        Ok(result) => {
+    let result = orchestrator.execute(task).await;
+
+    match result.status {
+        llm_toolkit::orchestrator::OrchestrationStatus::Success => {
             println!("\n✅ Workflow completed successfully!\n");
-            println!("📄 Final Output:\n{}\n", result);
+            println!("📄 Final Output:\n{}\n", result.final_output);
         }
-        Err(e) => {
-            eprintln!("\n❌ Workflow failed: {}\n", e);
+        llm_toolkit::orchestrator::OrchestrationStatus::Failure => {
+            eprintln!("\n❌ Workflow failed: {}\n", result.error_message);
             eprintln!(
                 "💡 Tip: Make sure the 'claude' CLI is installed and available in your PATH."
             );

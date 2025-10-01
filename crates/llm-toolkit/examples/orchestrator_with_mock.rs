@@ -139,13 +139,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🚀 Executing workflow: {}\n", task);
 
-    match orchestrator.execute(task).await {
-        Ok(result) => {
+    let result = orchestrator.execute(task).await;
+
+    match result.status {
+        llm_toolkit::orchestrator::OrchestrationStatus::Success => {
             println!("\n✅ Workflow completed!\n");
-            println!("📄 Final Result:\n{}\n", result);
+            println!("📄 Final Result:\n{}\n", result.final_output);
         }
-        Err(e) => {
-            eprintln!("\n❌ Workflow failed: {}\n", e);
+        llm_toolkit::orchestrator::OrchestrationStatus::Failure => {
+            eprintln!("\n❌ Workflow failed: {}\n", result.error_message);
             std::process::exit(1);
         }
     }
