@@ -9,6 +9,28 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::process::Command;
 
+/// Supported Claude models
+#[derive(Debug, Clone, Copy, Default)]
+pub enum ClaudeModel {
+    /// Claude Sonnet 4.5 - Balanced performance and speed
+    #[default]
+    Sonnet45,
+    /// Claude Sonnet 4 - Previous generation balanced model
+    Sonnet4,
+    /// Claude Opus 4 - Most capable model
+    Opus4,
+}
+
+impl ClaudeModel {
+    fn as_str(&self) -> &str {
+        match self {
+            ClaudeModel::Sonnet45 => "claude-sonnet-4.5",
+            ClaudeModel::Sonnet4 => "claude-sonnet-4",
+            ClaudeModel::Opus4 => "claude-opus-4",
+        }
+    }
+}
+
 /// A general-purpose agent that executes tasks using the Claude CLI.
 ///
 /// This agent wraps the `claude` command-line tool and can handle
@@ -39,21 +61,47 @@ use tokio::process::Command;
 pub struct ClaudeCodeAgent {
     /// Path to the `claude` executable. If None, searches in PATH.
     claude_path: Option<PathBuf>,
+    /// Model to use for generation
+    model: Option<ClaudeModel>,
 }
 
 impl ClaudeCodeAgent {
     /// Creates a new ClaudeCodeAgent.
     ///
-    /// By default, this will search for `claude` in the system PATH.
+    /// By default, this will search for `claude` in the system PATH
+    /// and use the default model.
     pub fn new() -> Self {
-        Self { claude_path: None }
+        Self {
+            claude_path: None,
+            model: None,
+        }
     }
 
     /// Creates a new ClaudeCodeAgent with a custom path to the claude executable.
     pub fn with_path(path: PathBuf) -> Self {
         Self {
             claude_path: Some(path),
+            model: None,
         }
+    }
+
+    /// Sets the model to use.
+    pub fn with_model(mut self, model: ClaudeModel) -> Self {
+        self.model = Some(model);
+        self
+    }
+
+    /// Sets the model using a string identifier.
+    ///
+    /// Accepts: "sonnet", "sonnet-4.5", "sonnet-4", "opus", "opus-4", etc.
+    pub fn with_model_str(mut self, model: &str) -> Self {
+        self.model = Some(match model {
+            "sonnet" | "sonnet-4.5" | "claude-sonnet-4.5" => ClaudeModel::Sonnet45,
+            "sonnet-4" | "claude-sonnet-4" => ClaudeModel::Sonnet4,
+            "opus" | "opus-4" | "claude-opus-4" => ClaudeModel::Opus4,
+            _ => ClaudeModel::Sonnet45, // Default fallback
+        });
+        self
     }
 
     /// Checks if the `claude` CLI is available in the system (static version).
@@ -125,19 +173,23 @@ impl Agent for ClaudeCodeAgent {
         log::debug!("Intent length: {} chars", intent.len());
         log::trace!("Full intent: {}", intent);
 
-        let output = Command::new(&claude_cmd)
-            .arg("-p")
-            .arg(&intent)
-            .output()
-            .await
-            .map_err(|e| {
-                log::error!("Failed to spawn claude process: {}", e);
-                AgentError::ProcessError(format!(
-                    "Failed to spawn claude process: {}. \
-                     Make sure 'claude' is installed and in PATH.",
-                    e
-                ))
-            })?;
+        let mut cmd = Command::new(&claude_cmd);
+        cmd.arg("-p").arg(&intent);
+
+        // Add model if specified
+        if let Some(model) = &self.model {
+            cmd.arg("--model").arg(model.as_str());
+            log::debug!("Using model: {}", model.as_str());
+        }
+
+        let output = cmd.output().await.map_err(|e| {
+            log::error!("Failed to spawn claude process: {}", e);
+            AgentError::ProcessError(format!(
+                "Failed to spawn claude process: {}. \
+                 Make sure 'claude' is installed and in PATH.",
+                e
+            ))
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -221,6 +273,18 @@ where
             inner: ClaudeCodeAgent::with_path(path),
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    /// Sets the model to use.
+    pub fn with_model(mut self, model: ClaudeModel) -> Self {
+        self.inner = self.inner.with_model(model);
+        self
+    }
+
+    /// Sets the model using a string identifier.
+    pub fn with_model_str(mut self, model: &str) -> Self {
+        self.inner = self.inner.with_model_str(model);
+        self
     }
 }
 

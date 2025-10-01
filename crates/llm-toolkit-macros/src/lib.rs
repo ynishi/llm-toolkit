@@ -2804,11 +2804,31 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
                 }
             }
         }
+        "claude" => {
+            if let Some(model_str) = model {
+                quote! {
+                    use #crate_path::agent::impls::ClaudeCodeAgent;
+                    let agent = ClaudeCodeAgent::new().with_model_str(#model_str);
+                }
+            } else {
+                quote! {
+                    use #crate_path::agent::impls::ClaudeCodeAgent;
+                    let agent = ClaudeCodeAgent::new();
+                }
+            }
+        }
         _ => {
             // Default to Claude
-            quote! {
-                use #crate_path::agent::impls::ClaudeCodeAgent;
-                let agent = ClaudeCodeAgent::new();
+            if let Some(model_str) = model {
+                quote! {
+                    use #crate_path::agent::impls::ClaudeCodeAgent;
+                    let agent = ClaudeCodeAgent::new().with_model_str(#model_str);
+                }
+            } else {
+                quote! {
+                    use #crate_path::agent::impls::ClaudeCodeAgent;
+                    let agent = ClaudeCodeAgent::new();
+                }
             }
         }
     };
