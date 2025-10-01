@@ -120,17 +120,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Add mock agents with different specializations
-    orchestrator.add_agent(Box::new(MockAgent::new(
+    // Generic add_agent() automatically wraps them
+    orchestrator.add_agent(MockAgent::new(
         "DataProcessor",
         "Expert at processing and transforming data",
         "📥 Processed",
-    )));
+    ));
 
-    orchestrator.add_agent(Box::new(MockAgent::new(
+    orchestrator.add_agent(MockAgent::new(
         "ReportGenerator",
         "Generates clear and comprehensive reports from analyzed data",
         "📝 Generated",
-    )));
+    ));
 
     println!("📋 Registered {} agents", orchestrator.list_agents().len());
     println!("🔧 Using mock internal agents (no claude CLI required)\n");
@@ -145,7 +146,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         llm_toolkit::orchestrator::OrchestrationStatus::Success => {
             println!("\n✅ Workflow completed!\n");
             if let Some(output) = result.final_output {
-                println!("📄 Final Result:\n{}\n", output);
+                let output_str =
+                    serde_json::to_string_pretty(&output).unwrap_or_else(|_| output.to_string());
+                println!("📄 Final Result:\n{}\n", output_str);
             }
         }
         llm_toolkit::orchestrator::OrchestrationStatus::Failure => {

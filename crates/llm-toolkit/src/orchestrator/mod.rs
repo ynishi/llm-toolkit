@@ -65,8 +65,9 @@ pub use blueprint::BlueprintWorkflow;
 pub use error::OrchestratorError;
 pub use strategy::{RedesignStrategy, StrategyMap, StrategyStep};
 
-use crate::agent::Agent;
+use crate::agent::{Agent, AgentAdapter, DynamicAgent};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 /// Status of the orchestration execution.
@@ -80,7 +81,7 @@ pub enum OrchestrationStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestrationResult {
     pub status: OrchestrationStatus,
-    pub final_output: Option<String>,
+    pub final_output: Option<JsonValue>,
     pub steps_executed: usize,
     pub redesigns_triggered: usize,
     pub error_message: Option<String>,
@@ -109,7 +110,8 @@ pub struct Orchestrator {
     blueprint: BlueprintWorkflow,
 
     /// Available agents, keyed by their name.
-    agents: HashMap<String, Box<dyn Agent<Output = String>>>,
+    /// Uses DynamicAgent for type erasure, allowing heterogeneous agent types.
+    agents: HashMap<String, Box<dyn DynamicAgent>>,
 
     /// Internal JSON agent for structured strategy generation.
     /// Output type is StrategyMap for generating execution strategies.
@@ -129,8 +131,8 @@ pub struct Orchestrator {
     /// The currently active execution strategy.
     strategy_map: Option<StrategyMap>,
 
-    /// Runtime context storing intermediate results.
-    context: HashMap<String, String>,
+    /// Runtime context storing intermediate results as JSON values.
+    context: HashMap<String, JsonValue>,
 
     /// The original task description (stored for regeneration).
     current_task: Option<String>,
@@ -195,15 +197,29 @@ impl Orchestrator {
 
     /// Adds an agent to the orchestrator's registry.
     ///
-    /// Note: Currently only supports agents with `Output = String`.
-    /// Future versions may support heterogeneous agent types.
-    pub fn add_agent(&mut self, agent: Box<dyn Agent<Output = String>>) {
-        let name = agent.name();
-        self.agents.insert(name, agent);
+    /// Accepts any agent with any output type. The agent will be automatically
+    /// wrapped in an `AgentAdapter` for type erasure.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// #[derive(Agent)]
+    /// #[agent(expertise = "...", output = "MyCustomType")]
+    /// struct MyAgent;
+    ///
+    /// orchestrator.add_agent(MyAgent);
+    /// ```
+    pub fn add_agent<T>(&mut self, agent: impl Agent<Output = T> + 'static)
+    where
+        T: Serialize + serde::de::DeserializeOwned + 'static,
+    {
+        let adapter = AgentAdapter::new(agent);
+        let name = adapter.name();
+        self.agents.insert(name, Box::new(adapter));
     }
 
-    /// Returns a reference to an agent by name.
-    pub fn get_agent(&self, name: &str) -> Option<&dyn Agent<Output = String>> {
+    /// Returns a reference to a dynamic agent by name.
+    pub fn get_agent(&self, name: &str) -> Option<&dyn DynamicAgent> {
         self.agents.get(name).map(|boxed| &**boxed)
     }
 
@@ -377,7 +393,7 @@ impl Orchestrator {
     /// Collects context information for a given step.
     ///
     /// Gathers previous step outputs and other relevant context data.
-    fn collect_context(&self, step_index: usize) -> HashMap<String, String> {
+    fn collect_context(&self, step_index: usize) -> HashMap<String, JsonValue> {
         let mut context = HashMap::new();
 
         // Add all previous step outputs
@@ -409,7 +425,7 @@ impl Orchestrator {
 
     /// Formats context as a readable string for prompts.
     #[cfg(feature = "agent")]
-    fn format_context(&self, context: &HashMap<String, String>) -> String {
+    fn format_context(&self, context: &HashMap<String, JsonValue>) -> String {
         if context.is_empty() {
             return "No context available yet.".to_string();
         }
@@ -417,11 +433,12 @@ impl Orchestrator {
         context
             .iter()
             .map(|(key, value)| {
-                // Truncate long values for readability
-                let display_value = if value.len() > 200 {
-                    format!("{}... (truncated)", &value[..200])
+                // Convert JSON value to string and truncate if needed
+                let value_str = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+                let display_value = if value_str.len() > 200 {
+                    format!("{}... (truncated)", &value_str[..200])
                 } else {
-                    value.clone()
+                    value_str
                 };
                 format!("- {}: {}", key, display_value)
             })
@@ -443,17 +460,21 @@ impl Orchestrator {
                         .context
                         .get(&format!("step_{}_output", step.step_id))
                         .cloned()
-                        .unwrap_or_else(|| "(no output)".to_string());
+                        .unwrap_or_else(|| JsonValue::String("(no output)".to_string()));
+
+                    // Convert JSON value to string
+                    let output_str =
+                        serde_json::to_string(&output).unwrap_or_else(|_| "null".to_string());
 
                     format!(
                         "Step {}: {}\n  Agent: {}\n  Output: {}\n",
                         i + 1,
                         step.description,
                         step.assigned_agent,
-                        if output.len() > 100 {
-                            format!("{}...", &output[..100])
+                        if output_str.len() > 100 {
+                            format!("{}...", &output_str[..100])
                         } else {
-                            output
+                            output_str
                         }
                     )
                 })
@@ -472,7 +493,7 @@ impl Orchestrator {
     async fn build_intent(
         &self,
         step: &StrategyStep,
-        context: &HashMap<String, String>,
+        context: &HashMap<String, JsonValue>,
     ) -> Result<String, OrchestratorError> {
         use crate::prompt::ToPrompt;
         use prompts::IntentGenerationRequest;
@@ -506,14 +527,15 @@ impl Orchestrator {
     async fn build_intent(
         &self,
         step: &StrategyStep,
-        context: &HashMap<String, String>,
+        context: &HashMap<String, JsonValue>,
     ) -> Result<String, OrchestratorError> {
         // Simple template substitution as fallback
         let mut intent = step.intent_template.clone();
 
         for (key, value) in context {
             let placeholder = format!("{{{}}}", key);
-            intent = intent.replace(&placeholder, value);
+            let value_str = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+            intent = intent.replace(&placeholder, &value_str);
         }
 
         Ok(intent)
@@ -523,13 +545,13 @@ impl Orchestrator {
     ///
     /// Includes context injection, intent generation, and error handling with redesign.
     /// Returns (final_output, steps_executed, redesigns_triggered).
-    async fn execute_strategy(&mut self) -> Result<(String, usize, usize), OrchestratorError> {
+    async fn execute_strategy(&mut self) -> Result<(JsonValue, usize, usize), OrchestratorError> {
         // Check strategy exists
         if self.strategy_map.is_none() {
             return Err(OrchestratorError::no_strategy());
         }
 
-        let mut final_result = String::new();
+        let mut final_result = JsonValue::Null;
         let mut step_index = 0;
         let mut steps_executed = 0;
         let mut redesigns_triggered = 0;
@@ -569,7 +591,7 @@ impl Orchestrator {
                 .get(&step.assigned_agent)
                 .ok_or_else(|| OrchestratorError::AgentNotFound(step.assigned_agent.clone()))?;
 
-            match agent.execute(intent).await {
+            match agent.execute_dynamic(intent).await {
                 Ok(output) => {
                     log::info!("Step {} completed successfully", step_index + 1);
 
@@ -653,12 +675,12 @@ impl Orchestrator {
                                 }
                             } else {
                                 log::info!("Validation passed for step {}", step_index);
-                                // Store validation result
+                                // Store validation result as JSON string
                                 let validation_step =
                                     &self.strategy_map.as_ref().unwrap().steps[step_index];
                                 self.context.insert(
                                     format!("step_{}_output", validation_step.step_id),
-                                    validation_result,
+                                    JsonValue::String(validation_result),
                                 );
                                 step_index += 1; // Move to next step
                             }
@@ -995,7 +1017,7 @@ mod tests {
         let blueprint = BlueprintWorkflow::new("Test".to_string());
         let mut orch = Orchestrator::new(blueprint);
 
-        orch.add_agent(Box::new(ClaudeCodeAgent::new()));
+        orch.add_agent(ClaudeCodeAgent::new());
         assert_eq!(orch.list_agents().len(), 1);
         assert!(orch.get_agent("ClaudeCodeAgent").is_some());
     }
@@ -1005,7 +1027,7 @@ mod tests {
         let blueprint = BlueprintWorkflow::new("Test".to_string());
         let mut orch = Orchestrator::new(blueprint);
 
-        orch.add_agent(Box::new(ClaudeCodeAgent::new()));
+        orch.add_agent(ClaudeCodeAgent::new());
         let list = orch.format_agent_list();
         assert!(list.contains("ClaudeCodeAgent"));
     }

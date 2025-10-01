@@ -127,3 +127,63 @@ pub trait Agent: Send + Sync {
 ///
 /// This type alias is useful for storing heterogeneous collections of agents.
 pub type BoxedAgent<T> = Box<dyn Agent<Output = T>>;
+
+/// Dynamic agent trait for type-erased agent execution.
+///
+/// This trait allows the orchestrator to work with agents of different output types
+/// by converting all outputs to `serde_json::Value`. This enables heterogeneous
+/// agent collections while maintaining type safety at the agent implementation level.
+#[async_trait]
+pub trait DynamicAgent: Send + Sync {
+    /// Execute the agent and return the output as a JSON value.
+    async fn execute_dynamic(&self, intent: String) -> Result<serde_json::Value, AgentError>;
+
+    /// Returns the name of this agent.
+    fn name(&self) -> String;
+
+    /// Returns a natural language description of what this agent can do.
+    fn expertise(&self) -> &str;
+
+    /// Checks if the agent's backend is available.
+    async fn is_available(&self) -> Result<(), AgentError> {
+        Ok(())
+    }
+}
+
+/// Adapter that wraps any `Agent<Output = T>` to implement `DynamicAgent`.
+///
+/// This adapter performs type erasure by converting the agent's structured output
+/// into `serde_json::Value`, allowing agents with different output types to be
+/// stored in the same collection.
+pub struct AgentAdapter<T: Serialize + DeserializeOwned> {
+    inner: Box<dyn Agent<Output = T>>,
+}
+
+impl<T: Serialize + DeserializeOwned> AgentAdapter<T> {
+    /// Creates a new adapter wrapping the given agent.
+    pub fn new(agent: impl Agent<Output = T> + 'static) -> Self {
+        Self {
+            inner: Box::new(agent),
+        }
+    }
+}
+
+#[async_trait]
+impl<T: Serialize + DeserializeOwned> DynamicAgent for AgentAdapter<T> {
+    async fn execute_dynamic(&self, intent: String) -> Result<serde_json::Value, AgentError> {
+        let output = self.inner.execute(intent).await?;
+        serde_json::to_value(output).map_err(|e| AgentError::SerializationFailed(e.to_string()))
+    }
+
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+
+    fn expertise(&self) -> &str {
+        self.inner.expertise()
+    }
+
+    async fn is_available(&self) -> Result<(), AgentError> {
+        self.inner.is_available().await
+    }
+}

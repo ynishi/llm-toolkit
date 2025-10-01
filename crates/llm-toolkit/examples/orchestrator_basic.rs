@@ -56,8 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Add available agents
     // Note: ClaudeCodeAgent requires 'claude' CLI to be available
-    let claude_agent = ClaudeCodeAgent::new();
-    orchestrator.add_agent(Box::new(claude_agent));
+    // The generic add_agent() automatically wraps the agent
+    orchestrator.add_agent(ClaudeCodeAgent::new());
 
     println!("📋 Available agents:");
     for agent_name in orchestrator.list_agents() {
@@ -76,7 +76,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         llm_toolkit::orchestrator::OrchestrationStatus::Success => {
             println!("\n✅ Workflow completed successfully!\n");
             if let Some(output) = result.final_output {
-                println!("📄 Final Output:\n{}\n", output);
+                // Convert JSON value to pretty string
+                let output_str =
+                    serde_json::to_string_pretty(&output).unwrap_or_else(|_| output.to_string());
+                println!("📄 Final Output:\n{}\n", output_str);
             }
         }
         llm_toolkit::orchestrator::OrchestrationStatus::Failure => {

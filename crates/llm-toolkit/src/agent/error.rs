@@ -25,6 +25,10 @@ pub enum AgentError {
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
 
+    /// Failed to serialize output to JSON value.
+    #[error("Serialization failed: {0}")]
+    SerializationFailed(String),
+
     /// A generic error for other cases.
     #[error("Agent error: {0}")]
     Other(String),
