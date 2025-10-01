@@ -144,10 +144,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match result.status {
         llm_toolkit::orchestrator::OrchestrationStatus::Success => {
             println!("\n✅ Workflow completed!\n");
-            println!("📄 Final Result:\n{}\n", result.final_output);
+            if let Some(output) = result.final_output {
+                println!("📄 Final Result:\n{}\n", output);
+            }
         }
         llm_toolkit::orchestrator::OrchestrationStatus::Failure => {
-            eprintln!("\n❌ Workflow failed: {}\n", result.error_message);
+            if let Some(error) = result.error_message {
+                eprintln!("\n❌ Workflow failed: {}\n", error);
+            } else {
+                eprintln!("\n❌ Workflow failed\n");
+            }
             std::process::exit(1);
         }
     }

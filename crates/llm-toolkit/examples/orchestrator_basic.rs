@@ -75,10 +75,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match result.status {
         llm_toolkit::orchestrator::OrchestrationStatus::Success => {
             println!("\n✅ Workflow completed successfully!\n");
-            println!("📄 Final Output:\n{}\n", result.final_output);
+            if let Some(output) = result.final_output {
+                println!("📄 Final Output:\n{}\n", output);
+            }
         }
         llm_toolkit::orchestrator::OrchestrationStatus::Failure => {
-            eprintln!("\n❌ Workflow failed: {}\n", result.error_message);
+            let error_msg = result
+                .error_message
+                .unwrap_or_else(|| "Unknown error".to_string());
+            eprintln!("\n❌ Workflow failed: {}\n", error_msg);
             eprintln!(
                 "💡 Tip: Make sure the 'claude' CLI is installed and available in your PATH."
             );
