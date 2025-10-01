@@ -56,7 +56,7 @@ impl ClaudeCodeAgent {
         }
     }
 
-    /// Checks if the `claude` CLI is available in the system.
+    /// Checks if the `claude` CLI is available in the system (static version).
     ///
     /// Returns `true` if the command exists in PATH, `false` otherwise.
     /// Uses `which` on Unix/macOS or `where` on Windows for a quick check.
@@ -71,6 +71,30 @@ impl ClaudeCodeAgent {
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
+    }
+
+    /// Checks availability using tokio (async version for trait implementation).
+    async fn check_available() -> Result<(), AgentError> {
+        #[cfg(unix)]
+        let check_cmd = "which";
+        #[cfg(windows)]
+        let check_cmd = "where";
+
+        let output = Command::new(check_cmd)
+            .arg("claude")
+            .output()
+            .await
+            .map_err(|e| {
+                AgentError::ProcessError(format!("Failed to check claude availability: {}", e))
+            })?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(AgentError::ExecutionFailed(
+                "claude CLI not found in PATH. Please install Claude CLI.".to_string(),
+            ))
+        }
     }
 }
 
@@ -138,6 +162,10 @@ impl Agent for ClaudeCodeAgent {
 
     fn name(&self) -> String {
         "ClaudeCodeAgent".to_string()
+    }
+
+    async fn is_available(&self) -> Result<(), AgentError> {
+        Self::check_available().await
     }
 }
 
@@ -255,6 +283,10 @@ where
 
     fn name(&self) -> String {
         format!("ClaudeCodeJsonAgent<{}>", std::any::type_name::<T>())
+    }
+
+    async fn is_available(&self) -> Result<(), AgentError> {
+        self.inner.is_available().await
     }
 }
 

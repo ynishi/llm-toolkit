@@ -69,3 +69,11 @@ required-features = ["agent"]
 [[example]]
 name = "agent_derive"
 required-features = ["agent"]
+
+[[example]]
+name = "agent_backend_switching"
+required-features = ["agent"]
+
+[[example]]
+name = "check_agent_availability"
+required-features = ["agent"]

@@ -103,6 +103,24 @@ pub trait Agent: Send + Sync {
             .unwrap_or("UnknownAgent")
             .to_string()
     }
+
+    /// Checks if the agent's backend is available and ready to use.
+    ///
+    /// This is useful for verifying that required CLI tools or APIs are accessible
+    /// before attempting to execute tasks.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the agent is available and ready, or an `AgentError` describing
+    /// the issue if the agent cannot be used.
+    ///
+    /// # Default Implementation
+    ///
+    /// By default, this always returns `Ok(())`. Implementations should override
+    /// this to check for CLI availability, API keys, or other prerequisites.
+    async fn is_available(&self) -> Result<(), AgentError> {
+        Ok(())
+    }
 }
 
 /// A boxed agent trait object for dynamic dispatch.

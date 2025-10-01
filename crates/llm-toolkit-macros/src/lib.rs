@@ -2661,12 +2661,16 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
 struct AgentAttrs {
     expertise: Option<String>,
     output: Option<syn::Type>,
+    backend: Option<String>,
+    model: Option<String>,
 }
 
 impl Parse for AgentAttrs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut expertise = None;
         let mut output = None;
+        let mut backend = None;
+        let mut model = None;
 
         let pairs = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
 
@@ -2691,11 +2695,34 @@ impl Parse for AgentAttrs {
                         output = Some(ty);
                     }
                 }
+                Meta::NameValue(nv) if nv.path.is_ident("backend") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = &nv.value
+                    {
+                        backend = Some(lit_str.value());
+                    }
+                }
+                Meta::NameValue(nv) if nv.path.is_ident("model") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = &nv.value
+                    {
+                        model = Some(lit_str.value());
+                    }
+                }
                 _ => {}
             }
         }
 
-        Ok(AgentAttrs { expertise, output })
+        Ok(AgentAttrs {
+            expertise,
+            output,
+            backend,
+            model,
+        })
     }
 }
 
@@ -2710,6 +2737,8 @@ fn parse_agent_attrs(attrs: &[syn::Attribute]) -> syn::Result<AgentAttrs> {
     Ok(AgentAttrs {
         expertise: None,
         output: None,
+        backend: None,
+        model: None,
     })
 }
 
@@ -2738,6 +2767,10 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
     let output_type = agent_attrs
         .output
         .unwrap_or_else(|| syn::parse_str::<syn::Type>("String").unwrap());
+    let backend = agent_attrs
+        .backend
+        .unwrap_or_else(|| String::from("claude"));
+    let model = agent_attrs.model;
 
     // Determine crate path
     let found_crate =
@@ -2756,6 +2789,30 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
+    // Generate agent initialization code based on backend
+    let agent_init = match backend.as_str() {
+        "gemini" => {
+            if let Some(model_str) = model {
+                quote! {
+                    use #crate_path::agent::impls::GeminiAgent;
+                    let agent = GeminiAgent::new().with_model_str(#model_str);
+                }
+            } else {
+                quote! {
+                    use #crate_path::agent::impls::GeminiAgent;
+                    let agent = GeminiAgent::new();
+                }
+            }
+        }
+        _ => {
+            // Default to Claude
+            quote! {
+                use #crate_path::agent::impls::ClaudeCodeAgent;
+                let agent = ClaudeCodeAgent::new();
+            }
+        }
+    };
+
     let expanded = quote! {
         #[async_trait::async_trait]
         impl #impl_generics #crate_path::agent::Agent for #struct_name #ty_generics #where_clause {
@@ -2766,10 +2823,8 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
             }
 
             async fn execute(&self, intent: String) -> Result<Self::Output, #crate_path::agent::AgentError> {
-                use #crate_path::agent::impls::ClaudeCodeAgent;
-
-                // Create internal ClaudeCodeAgent
-                let agent = ClaudeCodeAgent::new();
+                // Create internal agent based on backend configuration
+                #agent_init
 
                 // Execute and get response
                 let response = agent.execute(intent).await?;
@@ -2781,6 +2836,12 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
                 // Deserialize into output type
                 serde_json::from_str(&json_str)
                     .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))
+            }
+
+            async fn is_available(&self) -> Result<(), #crate_path::agent::AgentError> {
+                // Create internal agent and check availability
+                #agent_init
+                agent.is_available().await
             }
         }
     };
