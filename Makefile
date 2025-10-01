@@ -12,13 +12,15 @@ EXAMPLES := \
 	to_prompt_for_test \
 	external_template \
 	define_intent_comprehensive \
-	test_define_intent
+	test_define_intent \
+	orchestrator_with_mock \
+	check_claude
 
 # test-examplesターゲットで、リストをループ処理する
 test-examples:
 	@for name in $(EXAMPLES); do \
 		echo "Running $$name example..."; \
-		cargo run --example $$name --package llm-toolkit --features="derive"; \
+		cargo run --example $$name --package llm-toolkit --features="derive agent"; \
 	done
 
 # Run checks for all workspace members

@@ -76,12 +76,14 @@ pub struct Orchestrator {
     agents: HashMap<String, Box<dyn Agent<Output = String>>>,
 
     /// Internal JSON agent for structured strategy generation.
+    /// Output type is StrategyMap for generating execution strategies.
     #[cfg(feature = "agent")]
-    internal_json_agent: ClaudeCodeJsonAgent<StrategyMap>,
+    internal_json_agent: Box<dyn Agent<Output = StrategyMap>>,
 
     /// Internal string agent for intent generation and redesign decisions.
+    /// Output type is String for generating prompts and making decisions.
     #[cfg(feature = "agent")]
-    internal_agent: ClaudeCodeAgent,
+    internal_agent: Box<dyn Agent<Output = String>>,
 
     /// The currently active execution strategy.
     strategy_map: Option<StrategyMap>,
@@ -95,13 +97,41 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     /// Creates a new Orchestrator with a given blueprint.
+    ///
+    /// Uses default internal agents (ClaudeCodeAgent and ClaudeCodeJsonAgent).
     #[cfg(feature = "agent")]
     pub fn new(blueprint: BlueprintWorkflow) -> Self {
         Self {
             blueprint,
             agents: HashMap::new(),
-            internal_json_agent: ClaudeCodeJsonAgent::new(),
-            internal_agent: ClaudeCodeAgent::new(),
+            internal_json_agent: Box::new(ClaudeCodeJsonAgent::new()),
+            internal_agent: Box::new(ClaudeCodeAgent::new()),
+            strategy_map: None,
+            context: HashMap::new(),
+            current_task: None,
+        }
+    }
+
+    /// Creates a new Orchestrator with custom internal agents.
+    ///
+    /// This allows you to inject mock or alternative agents for testing or custom LLM backends.
+    ///
+    /// # Arguments
+    ///
+    /// * `blueprint` - The workflow blueprint
+    /// * `internal_agent` - Agent for string outputs (intent generation, redesign decisions)
+    /// * `internal_json_agent` - Agent for StrategyMap generation
+    #[cfg(feature = "agent")]
+    pub fn with_internal_agents(
+        blueprint: BlueprintWorkflow,
+        internal_agent: Box<dyn Agent<Output = String>>,
+        internal_json_agent: Box<dyn Agent<Output = StrategyMap>>,
+    ) -> Self {
+        Self {
+            blueprint,
+            agents: HashMap::new(),
+            internal_json_agent,
+            internal_agent,
             strategy_map: None,
             context: HashMap::new(),
             current_task: None,

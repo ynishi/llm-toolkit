@@ -22,7 +22,7 @@ minijinja.workspace = true
 quick-xml.workspace = true
 llm-toolkit-macros = { workspace = true, optional = true }
 async-trait = "0.1"
-tokio = { version = "1", features = ["process", "io-util"], optional = true }
+tokio = { version = "1", features = ["process", "io-util", "macros", "rt"], optional = true }
 
 [dev-dependencies]
 strum.workspace = true
@@ -52,3 +52,15 @@ required-features = ["derive"]
 [[example]]
 name = "define_intent_comprehensive"
 required-features = ["derive"]
+
+[[example]]
+name = "orchestrator_basic"
+required-features = ["agent", "derive"]
+
+[[example]]
+name = "orchestrator_with_mock"
+required-features = ["agent", "derive"]
+
+[[example]]
+name = "check_claude"
+required-features = ["agent"]

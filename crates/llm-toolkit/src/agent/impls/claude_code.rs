@@ -55,6 +55,23 @@ impl ClaudeCodeAgent {
             claude_path: Some(path),
         }
     }
+
+    /// Checks if the `claude` CLI is available in the system.
+    ///
+    /// Returns `true` if the command exists in PATH, `false` otherwise.
+    /// Uses `which` on Unix/macOS or `where` on Windows for a quick check.
+    pub fn is_available() -> bool {
+        #[cfg(unix)]
+        let check_cmd = "which";
+        #[cfg(windows)]
+        let check_cmd = "where";
+
+        std::process::Command::new(check_cmd)
+            .arg("claude")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
 }
 
 impl Default for ClaudeCodeAgent {
