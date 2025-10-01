@@ -2652,3 +2652,132 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
+
+// ============================================================================
+// Agent Derive Macro
+// ============================================================================
+
+/// Attribute parameters for #[agent(...)]
+struct AgentAttrs {
+    expertise: Option<String>,
+    output: Option<syn::Type>,
+}
+
+impl Parse for AgentAttrs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut expertise = None;
+        let mut output = None;
+
+        let pairs = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
+
+        for meta in pairs {
+            match meta {
+                Meta::NameValue(nv) if nv.path.is_ident("expertise") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = &nv.value
+                    {
+                        expertise = Some(lit_str.value());
+                    }
+                }
+                Meta::NameValue(nv) if nv.path.is_ident("output") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = &nv.value
+                    {
+                        let ty: syn::Type = syn::parse_str(&lit_str.value())?;
+                        output = Some(ty);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(AgentAttrs { expertise, output })
+    }
+}
+
+/// Parse #[agent(...)] attributes from a struct
+fn parse_agent_attrs(attrs: &[syn::Attribute]) -> syn::Result<AgentAttrs> {
+    for attr in attrs {
+        if attr.path().is_ident("agent") {
+            return attr.parse_args::<AgentAttrs>();
+        }
+    }
+
+    Ok(AgentAttrs {
+        expertise: None,
+        output: None,
+    })
+}
+
+/// Derive macro for implementing the Agent trait
+///
+/// # Usage
+/// ```ignore
+/// #[derive(Agent)]
+/// #[agent(expertise = "Rust expert", output = "MyOutputType")]
+/// struct MyAgent;
+/// ```
+#[proc_macro_derive(Agent, attributes(agent))]
+pub fn derive_agent(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_name = &input.ident;
+
+    // Parse #[agent(...)] attributes
+    let agent_attrs = match parse_agent_attrs(&input.attrs) {
+        Ok(attrs) => attrs,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    let expertise = agent_attrs
+        .expertise
+        .unwrap_or_else(|| String::from("general AI assistant"));
+    let output_type = agent_attrs
+        .output
+        .unwrap_or_else(|| syn::parse_str::<syn::Type>("String").unwrap());
+
+    // Determine crate path
+    let crate_path = match crate_name("llm-toolkit") {
+        Ok(FoundCrate::Name(name)) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote! { ::#ident }
+        }
+        _ => quote! { crate },
+    };
+
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let expanded = quote! {
+        #[async_trait::async_trait]
+        impl #impl_generics #crate_path::agent::Agent for #struct_name #ty_generics #where_clause {
+            type Output = #output_type;
+
+            fn expertise(&self) -> &str {
+                #expertise
+            }
+
+            async fn execute(&self, intent: String) -> Result<Self::Output, #crate_path::agent::AgentError> {
+                use #crate_path::agent::impls::ClaudeCodeAgent;
+
+                // Create internal ClaudeCodeAgent
+                let agent = ClaudeCodeAgent::new();
+
+                // Execute and get response
+                let response = agent.execute(intent).await?;
+
+                // Extract JSON from the response
+                let json_str = #crate_path::extract_json(&response)
+                    .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))?;
+
+                // Deserialize into output type
+                serde_json::from_str(&json_str)
+                    .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}

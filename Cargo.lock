@@ -279,13 +279,18 @@ dependencies = [
 name = "llm-toolkit-macros"
 version = "0.8.5"
 dependencies = [
+ "async-trait",
+ "llm-toolkit",
  "minijinja",
  "proc-macro-crate",
  "proc-macro2",
  "quick-xml",
  "quote",
  "regex",
+ "serde",
+ "serde_json",
  "syn",
+ "tokio",
  "trybuild",
 ]
 

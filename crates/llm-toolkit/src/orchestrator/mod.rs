@@ -105,6 +105,7 @@ struct ValidationResult {
 /// - Runtime context for inter-agent communication
 pub struct Orchestrator {
     /// The workflow blueprint (reference material for strategy generation).
+    #[cfg(any(not(feature = "agent"), feature = "derive"))]
     blueprint: BlueprintWorkflow,
 
     /// Available agents, keyed by their name.
@@ -307,7 +308,7 @@ impl Orchestrator {
     ///
     /// Uses the internal LLM agent to analyze the task, available agents,
     /// and blueprint to generate an optimal execution strategy.
-    #[cfg(all(feature = "agent", feature = "derive"))]
+    #[cfg(feature = "agent")]
     async fn generate_strategy(&mut self, task: &str) -> Result<(), OrchestratorError> {
         use crate::prompt::ToPrompt;
         use prompts::StrategyGenerationRequest;
@@ -407,6 +408,7 @@ impl Orchestrator {
     }
 
     /// Formats context as a readable string for prompts.
+    #[cfg(feature = "agent")]
     fn format_context(&self, context: &HashMap<String, String>) -> String {
         if context.is_empty() {
             return "No context available yet.".to_string();
@@ -428,6 +430,7 @@ impl Orchestrator {
     }
 
     /// Formats completed steps for redesign prompts.
+    #[cfg(feature = "agent")]
     fn format_completed_steps(&self, up_to_index: usize) -> String {
         if let Some(strategy) = &self.strategy_map {
             strategy
@@ -465,7 +468,7 @@ impl Orchestrator {
     ///
     /// Takes the intent template and current context, and generates a high-quality
     /// prompt specifically tailored for the assigned agent.
-    #[cfg(all(feature = "agent", feature = "derive"))]
+    #[cfg(feature = "agent")]
     async fn build_intent(
         &self,
         step: &StrategyStep,
@@ -762,7 +765,7 @@ impl Orchestrator {
     }
 
     /// Determines the appropriate redesign strategy after an error.
-    #[cfg(all(feature = "agent", feature = "derive"))]
+    #[cfg(feature = "agent")]
     async fn determine_redesign_strategy(
         &self,
         error: &crate::agent::AgentError,
@@ -831,7 +834,7 @@ impl Orchestrator {
     }
 
     /// Performs tactical redesign of remaining steps.
-    #[cfg(all(feature = "agent", feature = "derive"))]
+    #[cfg(feature = "agent")]
     async fn tactical_redesign(
         &mut self,
         error: &crate::agent::AgentError,
@@ -896,7 +899,7 @@ impl Orchestrator {
     }
 
     /// Performs full strategy regeneration from scratch.
-    #[cfg(all(feature = "agent", feature = "derive"))]
+    #[cfg(feature = "agent")]
     async fn full_regenerate(
         &mut self,
         error: &crate::agent::AgentError,
@@ -975,7 +978,7 @@ impl Orchestrator {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "agent"))]
 mod tests {
     use super::*;
     use crate::agent::impls::ClaudeCodeAgent;
