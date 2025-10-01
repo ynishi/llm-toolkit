@@ -18,11 +18,11 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use llm_toolkit::orchestrator::{Orchestrator, BlueprintWorkflow};
+//! use llm_toolkit::orchestrator::{Orchestrator, BlueprintWorkflow, OrchestrationStatus};
 //! use llm_toolkit::agent::ClaudeCodeAgent;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() {
 //!     let blueprint = BlueprintWorkflow::new(r#"
 //!         Technical Article Workflow:
 //!         1. Analyze topic and create outline
@@ -36,10 +36,20 @@
 //!
 //!     let result = orchestrator.execute(
 //!         "Write an article about Rust async programming"
-//!     ).await?;
+//!     ).await;
 //!
-//!     println!("{}", result);
-//!     Ok(())
+//!     match result.status {
+//!         OrchestrationStatus::Success => {
+//!             println!("Success! Steps: {}, Redesigns: {}",
+//!                 result.steps_executed, result.redesigns_triggered);
+//!             if let Some(output) = result.final_output {
+//!                 println!("{}", output);
+//!             }
+//!         }
+//!         OrchestrationStatus::Failure => {
+//!             eprintln!("Failed: {:?}", result.error_message);
+//!         }
+//!     }
 //! }
 //! ```
 
@@ -58,6 +68,23 @@ pub use strategy::{RedesignStrategy, StrategyMap, StrategyStep};
 use crate::agent::Agent;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Status of the orchestration execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OrchestrationStatus {
+    Success,
+    Failure,
+}
+
+/// Structured result returned by the orchestrator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestrationResult {
+    pub status: OrchestrationStatus,
+    pub final_output: Option<String>,
+    pub steps_executed: usize,
+    pub redesigns_triggered: usize,
+    pub error_message: Option<String>,
+}
 
 #[cfg(feature = "agent")]
 use crate::agent::impls::{ClaudeCodeAgent, ClaudeCodeJsonAgent, InnerValidatorAgent};
@@ -219,7 +246,7 @@ impl Orchestrator {
     /// 1. Generate a strategy map from the blueprint and available agents
     /// 2. Execute each step in sequence
     /// 3. Handle errors with adaptive redesign strategies
-    /// 4. Return the final result
+    /// 4. Return a structured result with execution details
     ///
     /// # Arguments
     ///
@@ -227,21 +254,53 @@ impl Orchestrator {
     ///
     /// # Returns
     ///
-    /// The final output as a string. Future versions may support typed outputs.
-    pub async fn execute(&mut self, task: &str) -> Result<String, OrchestratorError> {
+    /// An `OrchestrationResult` containing:
+    /// - Status (Success/Failure)
+    /// - Final output (if successful)
+    /// - Number of steps executed
+    /// - Number of redesigns triggered
+    /// - Error message (if failed)
+    pub async fn execute(&mut self, task: &str) -> OrchestrationResult {
         log::info!("Starting orchestrator execution for task: {}", task);
 
         // Store task for potential regeneration
         self.current_task = Some(task.to_string());
 
         // Phase 1: Generate strategy
-        self.generate_strategy(task).await?;
+        if let Err(e) = self.generate_strategy(task).await {
+            log::error!("Strategy generation failed: {}", e);
+            return OrchestrationResult {
+                status: OrchestrationStatus::Failure,
+                final_output: None,
+                steps_executed: 0,
+                redesigns_triggered: 0,
+                error_message: Some(e.to_string()),
+            };
+        }
 
         // Phase 2: Execute strategy
-        let result = self.execute_strategy().await?;
-
-        log::info!("Orchestrator execution completed");
-        Ok(result)
+        match self.execute_strategy().await {
+            Ok((final_output, steps_executed, redesigns_triggered)) => {
+                log::info!("Orchestrator execution completed successfully");
+                OrchestrationResult {
+                    status: OrchestrationStatus::Success,
+                    final_output: Some(final_output),
+                    steps_executed,
+                    redesigns_triggered,
+                    error_message: None,
+                }
+            }
+            Err(e) => {
+                log::error!("Orchestrator execution failed: {}", e);
+                OrchestrationResult {
+                    status: OrchestrationStatus::Failure,
+                    final_output: None,
+                    steps_executed: 0,
+                    redesigns_triggered: 0,
+                    error_message: Some(e.to_string()),
+                }
+            }
+        }
     }
 
     /// Generates an execution strategy from the blueprint, agents, and task.
@@ -460,7 +519,8 @@ impl Orchestrator {
     /// Executes the current strategy step by step.
     ///
     /// Includes context injection, intent generation, and error handling with redesign.
-    async fn execute_strategy(&mut self) -> Result<String, OrchestratorError> {
+    /// Returns (final_output, steps_executed, redesigns_triggered).
+    async fn execute_strategy(&mut self) -> Result<(String, usize, usize), OrchestratorError> {
         // Check strategy exists
         if self.strategy_map.is_none() {
             return Err(OrchestratorError::no_strategy());
@@ -468,6 +528,8 @@ impl Orchestrator {
 
         let mut final_result = String::new();
         let mut step_index = 0;
+        let mut steps_executed = 0;
+        let mut redesigns_triggered = 0;
 
         loop {
             // Get current strategy info
@@ -513,6 +575,7 @@ impl Orchestrator {
                         .insert(format!("step_{}_output", step.step_id), output.clone());
 
                     final_result = output;
+                    steps_executed += 1;
 
                     // Check if this step requires validation
                     let requires_validation = step.requires_validation;
@@ -558,6 +621,7 @@ impl Orchestrator {
                                             "Retrying step {} after validation failure",
                                             step_index
                                         );
+                                        redesigns_triggered += 1;
                                         step_index -= 1; // Go back to the original step
                                         continue;
                                     }
@@ -566,6 +630,7 @@ impl Orchestrator {
                                             "Performing tactical redesign from step {} after validation failure",
                                             step_index
                                         );
+                                        redesigns_triggered += 1;
                                         self.tactical_redesign(&validation_error, step_index - 1)
                                             .await?;
                                         step_index -= 1; // Go back to the original step
@@ -575,6 +640,7 @@ impl Orchestrator {
                                         log::info!(
                                             "Performing full strategy regeneration after validation failure"
                                         );
+                                        redesigns_triggered += 1;
                                         self.full_regenerate(&validation_error, step_index - 1)
                                             .await?;
                                         step_index = 0;
@@ -609,17 +675,20 @@ impl Orchestrator {
                     {
                         RedesignStrategy::Retry => {
                             log::info!("Retrying step {}", step_index + 1);
+                            redesigns_triggered += 1;
                             // Loop will retry the same step
                             continue;
                         }
                         RedesignStrategy::TacticalRedesign => {
                             log::info!("Performing tactical redesign from step {}", step_index + 1);
+                            redesigns_triggered += 1;
                             self.tactical_redesign(&e, step_index).await?;
                             // Retry from the same index with new strategy
                             continue;
                         }
                         RedesignStrategy::FullRegenerate => {
                             log::info!("Performing full strategy regeneration");
+                            redesigns_triggered += 1;
                             self.full_regenerate(&e, step_index).await?;
                             // Reset to beginning with new strategy
                             step_index = 0;
@@ -632,7 +701,7 @@ impl Orchestrator {
             }
         }
 
-        Ok(final_result)
+        Ok((final_result, steps_executed, redesigns_triggered))
     }
 
     /// Executes a validation step.
