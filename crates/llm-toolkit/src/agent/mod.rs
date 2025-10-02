@@ -13,34 +13,205 @@
 //!
 //! This separation enables maximum reusability and flexibility.
 //!
-//! # Example
+//! # Use Cases
+//!
+//! ## 1. Simple Structured Output
+//!
+//! Use `#[derive(Agent)]` when you just need LLM → JSON parsing without additional logic:
 //!
 //! ```rust,ignore
-//! use llm_toolkit::agent::{Agent, AgentError};
+//! use llm_toolkit::Agent;
 //! use serde::{Serialize, Deserialize};
 //!
 //! #[derive(Serialize, Deserialize)]
-//! struct ArticleDraft {
+//! struct ArticleSummary {
 //!     title: String,
-//!     body: String,
+//!     key_points: Vec<String>,
 //! }
 //!
-//! struct ContentSynthesizerAgent;
+//! #[derive(Agent)]
+//! #[agent(
+//!     expertise = "Summarizing articles and extracting key information",
+//!     output = "ArticleSummary"
+//! )]
+//! struct ArticleSummarizerAgent;
+//!
+//! // Usage
+//! let agent = ArticleSummarizerAgent;
+//! let result: ArticleSummary = agent.execute("Summarize this article...".to_string()).await?;
+//! ```
+//!
+//! **When to use:** Simple agents where the LLM generates JSON and you just need it parsed.
+//!
+//! ## 2. Post-Processing (Save, Validate, Transform)
+//!
+//! Manually implement `Agent` trait when you need custom logic after the LLM call.
+//! This is the recommended pattern for production use cases.
+//!
+//! ```rust,ignore
+//! use llm_toolkit::agent::{Agent, AgentError, impls::ClaudeCodeAgent};
+//! use serde::{Serialize, Deserialize};
+//! use std::path::PathBuf;
+//!
+//! #[derive(Serialize, Deserialize, Debug)]
+//! struct ArticleData {
+//!     title: String,
+//!     content: String,
+//! }
+//!
+//! /// An agent that generates articles and saves them to disk
+//! pub struct ArticleGeneratorAgent {
+//!     inner: ClaudeCodeAgent,  // Reuse existing LLM agent
+//!     save_dir: PathBuf,       // Custom state for post-processing
+//! }
+//!
+//! impl ArticleGeneratorAgent {
+//!     pub fn new(save_dir: PathBuf) -> Self {
+//!         Self {
+//!             inner: ClaudeCodeAgent::new(),
+//!             save_dir,
+//!         }
+//!     }
+//! }
 //!
 //! #[async_trait::async_trait]
-//! impl Agent for ContentSynthesizerAgent {
-//!     type Output = ArticleDraft;
+//! impl Agent for ArticleGeneratorAgent {
+//!     type Output = ArticleData;
 //!
 //!     fn expertise(&self) -> &str {
-//!         "Generate well-structured article drafts from research topics"
+//!         "Generate articles and save them to disk"
 //!     }
 //!
 //!     async fn execute(&self, intent: String) -> Result<Self::Output, AgentError> {
-//!         // Implementation details...
-//!         todo!()
+//!         // 1. Call LLM
+//!         let raw_output = self.inner.execute(intent).await?;
+//!
+//!         // 2. Parse JSON
+//!         let json_str = crate::extract_json(&raw_output)
+//!             .map_err(|e| AgentError::ParseError(e.to_string()))?;
+//!         let data: ArticleData = serde_json::from_str(&json_str)
+//!             .map_err(|e| AgentError::ParseError(e.to_string()))?;
+//!
+//!         // 3. Post-processing: Save to disk
+//!         let filename = format!("{}.json", data.title.replace(" ", "_"));
+//!         let path = self.save_dir.join(filename);
+//!         tokio::fs::write(&path, &json_str).await
+//!             .map_err(|e| AgentError::Other(format!("Failed to save: {}", e)))?;
+//!
+//!         // 4. Return typed output
+//!         Ok(data)
 //!     }
 //! }
 //! ```
+//!
+//! **When to use:**
+//! - Saving outputs to database/filesystem
+//! - Validating LLM output before returning
+//! - Transforming data formats
+//! - Chaining multiple operations
+//! - Any custom business logic
+//!
+//! **Pattern benefits:**
+//! - ✅ Type-safe: Output type is preserved
+//! - ✅ Composable: Reuse existing agents like `ClaudeCodeAgent`
+//! - ✅ Flexible: Full control over execution flow
+//! - ✅ Testable: Easy to mock inner agent
+//!
+//! ## 3. Multi-Step Processing
+//!
+//! Build agents that perform multiple LLM calls or validation steps:
+//!
+//! ```rust,ignore
+//! pub struct ValidatedArticleAgent {
+//!     generator: ClaudeCodeAgent,
+//!     validator: ClaudeCodeAgent,
+//! }
+//!
+//! #[async_trait::async_trait]
+//! impl Agent for ValidatedArticleAgent {
+//!     type Output = ArticleData;
+//!
+//!     async fn execute(&self, intent: String) -> Result<Self::Output, AgentError> {
+//!         // Step 1: Generate article
+//!         let article = self.generator.execute(intent).await?;
+//!         let data: ArticleData = serde_json::from_str(&article)?;
+//!
+//!         // Step 2: Validate quality
+//!         let validation_prompt = format!(
+//!             "Validate this article meets quality standards:\n{}",
+//!             serde_json::to_string_pretty(&data)?
+//!         );
+//!         let validation = self.validator.execute(validation_prompt).await?;
+//!
+//!         // Step 3: Parse validation result and handle failures
+//!         if !validation.contains("PASS") {
+//!             return Err(AgentError::ExecutionFailed(
+//!                 format!("Validation failed: {}", validation)
+//!             ));
+//!         }
+//!
+//!         Ok(data)
+//!     }
+//! }
+//! ```
+//!
+//! ## 4. Custom Backend Integration
+//!
+//! Wrap other LLM providers or APIs:
+//!
+//! ```rust,ignore
+//! pub struct CustomLLMAgent {
+//!     api_key: String,
+//!     endpoint: String,
+//! }
+//!
+//! #[async_trait::async_trait]
+//! impl Agent for CustomLLMAgent {
+//!     type Output = String;
+//!
+//!     fn expertise(&self) -> &str {
+//!         "Custom LLM provider integration"
+//!     }
+//!
+//!     async fn execute(&self, intent: String) -> Result<Self::Output, AgentError> {
+//!         // Your custom HTTP client logic here
+//!         let client = reqwest::Client::new();
+//!         let response = client.post(&self.endpoint)
+//!             .header("Authorization", format!("Bearer {}", self.api_key))
+//!             .json(&serde_json::json!({ "prompt": intent }))
+//!             .send()
+//!             .await
+//!             .map_err(|e| AgentError::ProcessError(e.to_string()))?;
+//!
+//!         response.text().await
+//!             .map_err(|e| AgentError::Other(e.to_string()))
+//!     }
+//! }
+//! ```
+//!
+//! # Implementation Patterns
+//!
+//! The crate provides `ClaudeCodeJsonAgent` as a reference implementation of the post-processing
+//! pattern. It composes `ClaudeCodeAgent` and adds JSON extraction/parsing:
+//!
+//! ```rust,ignore
+//! // From llm_toolkit::agent::impls::claude_code
+//! pub struct ClaudeCodeJsonAgent<T> {
+//!     inner: ClaudeCodeAgent,
+//!     _phantom: PhantomData<T>,
+//! }
+//!
+//! #[async_trait]
+//! impl<T: Serialize + DeserializeOwned> Agent for ClaudeCodeJsonAgent<T> {
+//!     async fn execute(&self, intent: String) -> Result<T, AgentError> {
+//!         let raw = self.inner.execute(intent).await?;
+//!         let json = extract_json(&raw)?;
+//!         serde_json::from_str(&json)
+//!     }
+//! }
+//! ```
+//!
+//! This pattern is recommended for building your own custom agents.
 
 pub mod error;
 
