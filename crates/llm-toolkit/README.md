@@ -221,31 +221,47 @@ let p = user.to_prompt();
 
 ### 3. Enum Documentation with `#[derive(ToPrompt)]`
 
-For enums, the `ToPrompt` derive macro provides flexible ways to generate prompts that describe your enum variants for LLM consumption. You can use doc comments, custom descriptions, or exclude variants entirely.
+For enums, the `ToPrompt` derive macro provides flexible ways to generate prompts. It distinguishes between **instance-level** prompts (describing a single variant) and **type-level** schema (describing all possible variants).
 
-#### Basic Usage with Doc Comments
-
-By default, the macro extracts documentation from Rust doc comments (`///`) on both the enum and its variants:
+#### Instance vs. Type-Level Prompts
 
 ```rust
 use llm_toolkit::ToPrompt;
 
 /// Represents different user intents for a chatbot
 #[derive(ToPrompt)]
-pub enum BasicIntent {
+pub enum UserIntent {
     /// User wants to greet or say hello
     Greeting,
-    /// User is asking for help or assistance  
+    /// User is asking for help or assistance
     Help,
 }
+
+// Instance-level: describe the current variant only
+let intent = UserIntent::Greeting;
+let prompt = intent.to_prompt();
+// Output: "Greeting: User wants to greet or say hello"
+
+// Type-level: describe all possible variants
+let schema = UserIntent::prompt_schema();
+// Output:
+// UserIntent: Represents different user intents for a chatbot
+//
+// Possible values:
+// - Greeting: User wants to greet or say hello
+// - Help: User is asking for help or assistance
 ```
+
+**When to use which:**
+- **`value.to_prompt()`** - When you need to describe a specific enum value to the LLM (e.g., "The user selected: Greeting")
+- **`Enum::prompt_schema()`** - When you need to explain all possible options to the LLM (e.g., "Choose one of these intents...")
 
 #### Advanced Attribute Controls
 
 The `ToPrompt` derive macro supports powerful attribute-based controls for fine-tuning the generated prompts:
 
 - **`#[prompt("...")]`** - Provide a custom description that overrides the doc comment
-- **`#[prompt(skip)]`** - Exclude a variant from the prompt entirely (useful for internal-only variants)
+- **`#[prompt(skip)]`** - Exclude a variant from the schema (but the variant name is still shown at instance level)
 - **No attribute** - Variants without doc comments or attributes will show just the variant name
 
 Here's a comprehensive example showcasing all features:
@@ -258,22 +274,29 @@ use llm_toolkit::ToPrompt;
 pub enum UserAction {
     /// User wants to create a new document
     CreateDocument,
-    
+
     /// User is searching for existing content
-    Search { query: String },
-    
+    Search,
+
     #[prompt("Custom: User is updating their profile settings and preferences")]
     UpdateProfile,
-    
+
     #[prompt(skip)]
     InternalDebugAction,
-    
+
     DeleteItem,
 }
 
-let action = UserAction::CreateDocument;
-let p = action.to_prompt();
-// The following would be printed:
+// Instance-level prompts
+let action1 = UserAction::CreateDocument;
+assert_eq!(action1.to_prompt(), "CreateDocument: User wants to create a new document");
+
+let action2 = UserAction::InternalDebugAction;
+assert_eq!(action2.to_prompt(), "InternalDebugAction");  // Skipped variants show name only
+
+// Type-level schema
+let schema = UserAction::prompt_schema();
+// Output:
 // UserAction: Represents different actions a user can take in the system
 //
 // Possible values:
@@ -281,13 +304,13 @@ let p = action.to_prompt();
 // - Search: User is searching for existing content
 // - UpdateProfile: Custom: User is updating their profile settings and preferences
 // - DeleteItem
+//
+// Note: InternalDebugAction is excluded from schema due to #[prompt(skip)]
 ```
 
-Note how in the output:
-- `CreateDocument` and `Search` use their doc comments
-- `UpdateProfile` uses the custom description from `#[prompt("...")]`
-- `InternalDebugAction` is completely excluded due to `#[prompt(skip)]`
-- `DeleteItem` appears with just its name since it has no documentation
+**Behavior of `#[prompt(skip)]`:**
+- At **instance level** (`value.to_prompt()`): Shows only the variant name
+- At **type level** (`Enum::prompt_schema()`): Completely excluded from the schema
 
 ### 4. Multi-Target Prompts with `#[derive(ToPromptSet)]`
 

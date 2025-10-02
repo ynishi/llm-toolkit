@@ -118,6 +118,27 @@ pub trait ToPrompt {
     fn to_prompt(&self) -> String {
         self.to_prompt_with_mode("full")
     }
+
+    /// Returns a schema-level prompt for the type itself.
+    ///
+    /// For enums, this returns all possible variants with their descriptions.
+    /// For structs, this returns the field schema.
+    ///
+    /// Unlike instance methods like `to_prompt()`, this is a type-level method
+    /// that doesn't require an instance.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Enum: get all variants
+    /// let schema = MyEnum::prompt_schema();
+    ///
+    /// // Struct: get field schema
+    /// let schema = MyStruct::prompt_schema();
+    /// ```
+    fn prompt_schema() -> String {
+        String::new() // Default implementation returns empty string
+    }
 }
 
 // Add implementations for common types

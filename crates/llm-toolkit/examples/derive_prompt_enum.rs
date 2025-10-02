@@ -48,18 +48,30 @@ pub enum FeatureDemo {
 }
 
 fn main() {
-    // Create an instance and demonstrate the generated prompt
+    // Demonstrate instance-level prompts (single variant)
+    println!("=== Instance-level prompts (single variant) ===\n");
+
     let intent = UserIntent::Greeting;
-    println!("UserIntent prompt:");
+    println!("UserIntent::Greeting instance:");
     println!("{}", intent.to_prompt());
+    println!();
+
+    let intent2 = UserIntent::Help;
+    println!("UserIntent::Help instance:");
+    println!("{}", intent2.to_prompt());
     println!("\n---\n");
 
-    let priority = Priority::High;
-    println!("Priority prompt (with custom description and skip):");
-    println!("{}", priority.to_prompt());
+    // Demonstrate type-level schema (all variants)
+    println!("=== Type-level schema (all variants) ===\n");
+
+    println!("UserIntent schema:");
+    println!("{}", UserIntent::prompt_schema());
     println!("\n---\n");
 
-    let demo = FeatureDemo::WithDocComment;
-    println!("FeatureDemo prompt (showing all attribute features):");
-    println!("{}", demo.to_prompt());
+    println!("Priority schema (with custom description and skip):");
+    println!("{}", Priority::prompt_schema());
+    println!("\n---\n");
+
+    println!("FeatureDemo schema (showing all attribute features):");
+    println!("{}", FeatureDemo::prompt_schema());
 }

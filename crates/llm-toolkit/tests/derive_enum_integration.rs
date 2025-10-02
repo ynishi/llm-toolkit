@@ -16,18 +16,21 @@ mod tests {
 
     #[test]
     fn test_enum_prompt_generation() {
+        // Test instance prompt (single variant)
         let instance = TestEnum::First;
         let prompt = instance.to_prompt();
+        assert_eq!(prompt, "First: First variant with doc");
 
-        // Check that the prompt contains expected elements
-        assert!(prompt.contains("TestEnum:"));
-        assert!(prompt.contains("Possible values:"));
-        assert!(prompt.contains("- First: First variant with doc"));
-        assert!(prompt.contains("- Second: Custom description"));
-        assert!(prompt.contains("- Fourth"));
+        // Test schema prompt (all variants)
+        let schema = TestEnum::prompt_schema();
+        assert!(schema.contains("TestEnum:"));
+        assert!(schema.contains("Possible values:"));
+        assert!(schema.contains("- First: First variant with doc"));
+        assert!(schema.contains("- Second: Custom description"));
+        assert!(schema.contains("- Fourth"));
 
         // Check that skipped variant is not included
-        assert!(!prompt.contains("Third"));
+        assert!(!schema.contains("Third"));
     }
 
     #[test]
@@ -48,21 +51,26 @@ mod tests {
             PlainName,
         }
 
+        // Test instance prompt
         let instance = PriorityTest::WithDoc;
         let prompt = instance.to_prompt();
+        assert_eq!(prompt, "WithDoc: Uses doc comment");
+
+        // Test schema prompt (all variants)
+        let schema = PriorityTest::prompt_schema();
 
         // Verify skip works
-        assert!(!prompt.contains("SkipMe"));
+        assert!(!schema.contains("SkipMe"));
 
         // Verify custom description overrides doc comment
-        assert!(prompt.contains("- CustomOverride: Custom override"));
-        assert!(!prompt.contains("This doc comment should be ignored"));
+        assert!(schema.contains("- CustomOverride: Custom override"));
+        assert!(!schema.contains("This doc comment should be ignored"));
 
         // Verify doc comment is used
-        assert!(prompt.contains("- WithDoc: Uses doc comment"));
+        assert!(schema.contains("- WithDoc: Uses doc comment"));
 
         // Verify plain name is shown
-        assert!(prompt.contains("- PlainName"));
+        assert!(schema.contains("- PlainName"));
     }
 
     #[test]
@@ -88,15 +96,18 @@ mod tests {
             C,
         }
 
+        // Test instance prompt (even skipped variants have names)
         let instance = AllSkipped::A;
         let prompt = instance.to_prompt();
+        assert_eq!(prompt, "A");
 
-        // Should have header but no variants
-        assert!(prompt.contains("AllSkipped:"));
-        assert!(prompt.contains("Possible values:"));
-        assert!(!prompt.contains("- A"));
-        assert!(!prompt.contains("- B"));
-        assert!(!prompt.contains("- C"));
+        // Test schema prompt (all variants are skipped, so schema shows header but no variants)
+        let schema = AllSkipped::prompt_schema();
+        assert!(schema.contains("AllSkipped:"));
+        assert!(schema.contains("Possible values:"));
+        assert!(!schema.contains("- A"));
+        assert!(!schema.contains("- B"));
+        assert!(!schema.contains("- C"));
     }
 
     #[test]

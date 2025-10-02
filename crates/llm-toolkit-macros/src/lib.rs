@@ -445,13 +445,67 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             let prompt_string = prompt_lines.join("\n");
             let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
+            // Generate match arms for instance-level to_prompt()
+            let mut match_arms = Vec::new();
+            for variant in &data_enum.variants {
+                let variant_name = &variant.ident;
+
+                // Apply same priority logic as schema generation
+                match parse_prompt_attribute(&variant.attrs) {
+                    PromptAttribute::Skip => {
+                        // For skipped variants, return the variant name only
+                        match_arms.push(quote! {
+                            Self::#variant_name => stringify!(#variant_name).to_string()
+                        });
+                    }
+                    PromptAttribute::Description(desc) => {
+                        // Use custom description
+                        match_arms.push(quote! {
+                            Self::#variant_name => format!("{}: {}", stringify!(#variant_name), #desc)
+                        });
+                    }
+                    PromptAttribute::None => {
+                        // Fall back to doc comment or just variant name
+                        let variant_docs = extract_doc_comments(&variant.attrs);
+                        if !variant_docs.is_empty() {
+                            match_arms.push(quote! {
+                                Self::#variant_name => format!("{}: {}", stringify!(#variant_name), #variant_docs)
+                            });
+                        } else {
+                            match_arms.push(quote! {
+                                Self::#variant_name => stringify!(#variant_name).to_string()
+                            });
+                        }
+                    }
+                }
+            }
+
+            let to_prompt_impl = if match_arms.is_empty() {
+                // Empty enum: no variants to match
+                quote! {
+                    fn to_prompt(&self) -> String {
+                        match *self {}
+                    }
+                }
+            } else {
+                quote! {
+                    fn to_prompt(&self) -> String {
+                        match self {
+                            #(#match_arms),*
+                        }
+                    }
+                }
+            };
+
             let expanded = quote! {
                 impl #impl_generics #crate_path::prompt::ToPrompt for #enum_name #ty_generics #where_clause {
                     fn to_prompt_parts(&self) -> Vec<#crate_path::prompt::PromptPart> {
-                        vec![#crate_path::prompt::PromptPart::Text(#prompt_string.to_string())]
+                        vec![#crate_path::prompt::PromptPart::Text(self.to_prompt())]
                     }
 
-                    fn to_prompt(&self) -> String {
+                    #to_prompt_impl
+
+                    fn prompt_schema() -> String {
                         #prompt_string.to_string()
                     }
                 }
@@ -750,6 +804,18 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                 .collect::<Vec<_>>()
                                 .join("\n")
                         }
+
+                        fn prompt_schema() -> String {
+                            let schema_parts = #schema_parts;
+                            schema_parts
+                                .into_iter()
+                                .filter_map(|part| match part {
+                                    #crate_path::prompt::PromptPart::Text(text) => Some(text),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        }
                     }
                 }
             } else if let Some(template) = template_str {
@@ -929,6 +995,10 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                     format!("Failed to render prompt: {}", e)
                                 })
                             }
+
+                            fn prompt_schema() -> String {
+                                String::new() // Template-based structs don't have auto-generated schema
+                            }
                         }
                     }
                 } else {
@@ -956,6 +1026,10 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                 #crate_path::prompt::render_prompt(#template, self).unwrap_or_else(|e| {
                                     format!("Failed to render prompt: {}", e)
                                 })
+                            }
+
+                            fn prompt_schema() -> String {
+                                String::new() // Template-based structs don't have auto-generated schema
                             }
                         }
                     }
@@ -1048,6 +1122,10 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             let mut text_parts = Vec::new();
                             #(#text_field_parts)*
                             text_parts.join("\n")
+                        }
+
+                        fn prompt_schema() -> String {
+                            String::new() // Default key-value format doesn't have auto-generated schema
                         }
                     }
                 }
