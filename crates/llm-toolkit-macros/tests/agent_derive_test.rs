@@ -13,3 +13,15 @@ fn agent_derive_with_backend_compile_pass() {
     let t = trybuild::TestCases::new();
     t.pass("tests/ui/agent_derive_with_backend.rs");
 }
+
+#[test]
+fn agent_attribute_basic_compile_pass() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/ui/agent_attribute_basic.rs");
+}
+
+#[test]
+fn agent_attribute_custom_inner_compile_pass() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/ui/agent_attribute_custom_inner.rs");
+}

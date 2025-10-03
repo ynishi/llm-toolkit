@@ -750,22 +750,18 @@ The Agent API follows the principle of **capability and intent separation**:
 
 This separation enables maximum reusability and flexibility.
 
-#### Defining an Agent with `#[derive(Agent)]`
+#### Defining Agents: Two Approaches
 
-Enable the `agent` feature in your `Cargo.toml`:
-```toml
-[dependencies]
-llm-toolkit = { version = "0.9.0", features = ["agent", "derive"] }
-serde = { version = "1.0", features = ["derive"] }
-```
+`llm-toolkit` provides two ways to define agents, each optimized for different use cases:
 
-Then define your agent with a structured output type:
+##### 1. Simple Agents with `#[derive(Agent)]` (Recommended for Prototyping)
+
+For quick prototyping and simple use cases, use the derive macro:
 
 ```rust
 use llm_toolkit::Agent;
 use serde::{Deserialize, Serialize};
 
-// Define the structured output your agent will produce
 #[derive(Serialize, Deserialize, Debug)]
 struct ArticleDraft {
     title: String,
@@ -773,7 +769,7 @@ struct ArticleDraft {
     references: Vec<String>,
 }
 
-// Use the Agent derive macro
+// Simple stateless agent
 #[derive(Agent)]
 #[agent(
     expertise = "Research topics and generate well-structured article drafts with citations",
@@ -781,23 +777,229 @@ struct ArticleDraft {
 )]
 struct ContentSynthesizerAgent;
 
-// The agent is now ready to use
+// Usage - extremely simple
 #[tokio::main]
 async fn main() {
     let agent = ContentSynthesizerAgent;
-
-    let intent = "Write a 500-word article about Rust's async/await";
-    let result: ArticleDraft = agent.execute(intent.to_string()).await.unwrap();
-
+    let result: ArticleDraft = agent.execute("Write about Rust async/await".to_string()).await.unwrap();
     println!("Generated: {}", result.title);
 }
 ```
 
-The `#[derive(Agent)]` macro automatically:
-- Implements the `Agent` trait with your specified expertise
-- Uses `ClaudeCodeAgent` internally for LLM interaction
-- Deserializes responses into your structured `Output` type
-- Handles errors gracefully
+**Features:**
+- ✅ Simplest possible interface
+- ✅ Minimal boilerplate
+- ✅ Perfect for prototyping
+- ⚠️ Creates internal agent on each `execute()` call (stateless)
+
+##### 2. Advanced Agents with `#[agent(...)]` (Recommended for Production)
+
+For production use, testing, and when you need agent injection:
+
+```rust
+use llm_toolkit::agent::impls::ClaudeCodeAgent;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ArticleDraft {
+    title: String,
+    body: String,
+    references: Vec<String>,
+}
+
+// Advanced agent with Generic support
+#[llm_toolkit_macros::agent(
+    expertise = "Research topics and generate well-structured article drafts with citations",
+    output = "ArticleDraft"
+)]
+struct ContentSynthesizerAgent;
+
+#[tokio::main]
+async fn main() {
+    // Method 1: Using Default
+    let agent = ContentSynthesizerAgent::default();
+
+    // Method 2: Convenience constructor with specific model
+    let agent = ContentSynthesizerAgent::with_claude_model("opus-4");
+
+    // Method 3: Inject custom agent
+    let custom_claude = ClaudeCodeAgent::new().with_model_str("sonnet-4.5");
+    let agent = ContentSynthesizerAgent::new(custom_claude);
+
+    let result: ArticleDraft = agent.execute("Write about Rust async/await".to_string()).await.unwrap();
+    println!("Generated: {}", result.title);
+}
+```
+
+**Practical Injection Examples:**
+
+```rust
+use llm_toolkit::agent::impls::{ClaudeCodeAgent, GeminiAgent};
+
+// Example 1: Environment-based agent selection
+fn create_agent(env: &str) -> ContentSynthesizerAgent {
+    match env {
+        "production" => {
+            let claude = ClaudeCodeAgent::new().with_model_str("opus-4");
+            ContentSynthesizerAgent::new(claude)
+        },
+        "development" => {
+            let claude = ClaudeCodeAgent::new().with_model_str("sonnet-4.5");
+            ContentSynthesizerAgent::new(claude)
+        },
+        _ => ContentSynthesizerAgent::default()
+    }
+}
+
+// Example 2: Switching between different LLM providers
+fn create_agent_with_provider(provider: &str) -> ContentSynthesizerAgent {
+    match provider {
+        "claude" => {
+            let inner = ClaudeCodeAgent::new().with_model_str("sonnet-4.5");
+            ContentSynthesizerAgent::new(inner)
+        },
+        "gemini" => {
+            let inner = GeminiAgent::new().with_model_str("gemini-2.0-flash");
+            ContentSynthesizerAgent::new(inner)
+        },
+        _ => ContentSynthesizerAgent::default()
+    }
+}
+
+// Example 3: Custom configuration injection
+fn create_configured_agent() -> ContentSynthesizerAgent {
+    let claude = ClaudeCodeAgent::new()
+        .with_model_str("opus-4")
+        .with_system_prompt("You are an expert technical writer focused on clarity and accuracy.");
+    ContentSynthesizerAgent::new(claude)
+}
+```
+
+**Features:**
+- ✅ Agent injection support (great for testing with mocks)
+- ✅ Reuses internal agent (efficient)
+- ✅ Static dispatch (compile-time optimization)
+- ✅ Multiple constructor patterns
+- ✅ Suitable for production use
+
+**Testing Example:**
+
+Agent injection makes testing simple and deterministic:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use llm_toolkit::agent::{Agent, AgentError};
+
+    // Define a mock agent for testing
+    struct MockAgent {
+        response: String,
+        call_count: std::cell::RefCell<usize>,
+    }
+
+    #[async_trait::async_trait]
+    impl Agent for MockAgent {
+        type Output = String;
+        fn expertise(&self) -> &str { "mock" }
+        async fn execute(&self, _: String) -> Result<String, AgentError> {
+            *self.call_count.borrow_mut() += 1;
+            Ok(self.response.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_with_mock() {
+        // Inject deterministic mock for testing
+        let mock = MockAgent {
+            response: r#"{"title": "Test Article", "body": "Test content", "references": ["source1"]}"#.to_string(),
+            call_count: std::cell::RefCell::new(0),
+        };
+        let agent = ContentSynthesizerAgent::new(mock);
+
+        // Execute and verify
+        let result = agent.execute("test".to_string()).await.unwrap();
+        assert_eq!(result.title, "Test Article");
+        assert_eq!(result.references.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_error_handling() {
+        // Mock that returns an error
+        struct ErrorAgent;
+
+        #[async_trait::async_trait]
+        impl Agent for ErrorAgent {
+            type Output = String;
+            fn expertise(&self) -> &str { "error mock" }
+            async fn execute(&self, _: String) -> Result<String, AgentError> {
+                Err(AgentError::ExecutionError("Simulated failure".to_string()))
+            }
+        }
+
+        let agent = ContentSynthesizerAgent::new(ErrorAgent);
+        let result = agent.execute("test".to_string()).await;
+        assert!(result.is_err());
+    }
+}
+```
+
+**Using Custom Agent Backends:**
+
+You can specify custom agent implementations (like Olama, local models, etc.) using `default_inner`:
+
+```rust
+// Define your custom agent
+#[derive(Default, Clone)]
+struct OlamaAgent {
+    model: String,
+}
+
+impl OlamaAgent {
+    fn new() -> Self { /* ... */ }
+    fn with_model(self, model: &str) -> Self { /* ... */ }
+}
+
+#[async_trait::async_trait]
+impl Agent for OlamaAgent {
+    type Output = String;
+    fn expertise(&self) -> &str { "Olama agent" }
+    async fn execute(&self, intent: String) -> Result<String, AgentError> {
+        // Call Olama API
+    }
+}
+
+// Create specialized agents using OlamaAgent as backend
+#[llm_toolkit_macros::agent(
+    expertise = "Writing technical articles",
+    output = "ArticleDraft",
+    default_inner = "OlamaAgent"  // Custom backend!
+)]
+struct ArticleWriterAgent;
+
+#[llm_toolkit_macros::agent(
+    expertise = "Reviewing Rust code",
+    output = "CodeReview",
+    default_inner = "OlamaAgent"  // Same backend, different expertise!
+)]
+struct CodeReviewerAgent;
+
+// Usage:
+let olama = OlamaAgent::new().with_model("llama3.1");
+let writer = ArticleWriterAgent::new(olama.clone());
+let reviewer = CodeReviewerAgent::new(olama);
+```
+
+This pattern lets you:
+- ✅ Reuse one backend (Olama, etc.) for multiple specialized agents
+- ✅ Each agent has unique expertise
+- ✅ Share configuration or customize per-agent
+- ✅ Easy testing with mock backends
+
+**When to use which:**
+- **`#[derive(Agent)]`**: Quick scripts, prototyping, simple tools
+- **`#[agent(...)]` with `backend`**: Production with Claude/Gemini
+- **`#[agent(...)]` with `default_inner`**: Custom backends (Olama, local models, mocks)
 
 ### Multi-Agent Orchestration
 

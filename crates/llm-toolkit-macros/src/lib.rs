@@ -2741,6 +2741,8 @@ struct AgentAttrs {
     output: Option<syn::Type>,
     backend: Option<String>,
     model: Option<String>,
+    inner: Option<String>,
+    default_inner: Option<String>,
 }
 
 impl Parse for AgentAttrs {
@@ -2749,6 +2751,8 @@ impl Parse for AgentAttrs {
         let mut output = None;
         let mut backend = None;
         let mut model = None;
+        let mut inner = None;
+        let mut default_inner = None;
 
         let pairs = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
 
@@ -2791,6 +2795,24 @@ impl Parse for AgentAttrs {
                         model = Some(lit_str.value());
                     }
                 }
+                Meta::NameValue(nv) if nv.path.is_ident("inner") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = &nv.value
+                    {
+                        inner = Some(lit_str.value());
+                    }
+                }
+                Meta::NameValue(nv) if nv.path.is_ident("default_inner") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = &nv.value
+                    {
+                        default_inner = Some(lit_str.value());
+                    }
+                }
                 _ => {}
             }
         }
@@ -2800,6 +2822,8 @@ impl Parse for AgentAttrs {
             output,
             backend,
             model,
+            inner,
+            default_inner,
         })
     }
 }
@@ -2817,7 +2841,101 @@ fn parse_agent_attrs(attrs: &[syn::Attribute]) -> syn::Result<AgentAttrs> {
         output: None,
         backend: None,
         model: None,
+        inner: None,
+        default_inner: None,
     })
+}
+
+/// Generate backend-specific convenience constructors
+fn generate_backend_constructors(
+    struct_name: &syn::Ident,
+    backend: &str,
+    _model: Option<&str>,
+    crate_path: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    match backend {
+        "claude" => {
+            quote! {
+                impl #struct_name {
+                    /// Create a new agent with ClaudeCodeAgent backend
+                    pub fn with_claude() -> Self {
+                        Self::new(#crate_path::agent::impls::ClaudeCodeAgent::new())
+                    }
+
+                    /// Create a new agent with ClaudeCodeAgent backend and specific model
+                    pub fn with_claude_model(model: &str) -> Self {
+                        Self::new(
+                            #crate_path::agent::impls::ClaudeCodeAgent::new()
+                                .with_model_str(model)
+                        )
+                    }
+                }
+            }
+        }
+        "gemini" => {
+            quote! {
+                impl #struct_name {
+                    /// Create a new agent with GeminiAgent backend
+                    pub fn with_gemini() -> Self {
+                        Self::new(#crate_path::agent::impls::GeminiAgent::new())
+                    }
+
+                    /// Create a new agent with GeminiAgent backend and specific model
+                    pub fn with_gemini_model(model: &str) -> Self {
+                        Self::new(
+                            #crate_path::agent::impls::GeminiAgent::new()
+                                .with_model_str(model)
+                        )
+                    }
+                }
+            }
+        }
+        _ => quote! {},
+    }
+}
+
+/// Generate Default implementation for the agent
+fn generate_default_impl(
+    struct_name: &syn::Ident,
+    backend: &str,
+    model: Option<&str>,
+    crate_path: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let agent_init = match backend {
+        "gemini" => {
+            if let Some(model_str) = model {
+                quote! {
+                    #crate_path::agent::impls::GeminiAgent::new()
+                        .with_model_str(#model_str)
+                }
+            } else {
+                quote! {
+                    #crate_path::agent::impls::GeminiAgent::new()
+                }
+            }
+        }
+        _ => {
+            // Default to Claude
+            if let Some(model_str) = model {
+                quote! {
+                    #crate_path::agent::impls::ClaudeCodeAgent::new()
+                        .with_model_str(#model_str)
+                }
+            } else {
+                quote! {
+                    #crate_path::agent::impls::ClaudeCodeAgent::new()
+                }
+            }
+        }
+    };
+
+    quote! {
+        impl Default for #struct_name {
+            fn default() -> Self {
+                Self::new(#agent_init)
+            }
+        }
+    }
 }
 
 /// Derive macro for implementing the Agent trait
@@ -2942,6 +3060,158 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
                 agent.is_available().await
             }
         }
+    };
+
+    TokenStream::from(expanded)
+}
+
+// ============================================================================
+// Agent Attribute Macro (Generic version with injection support)
+// ============================================================================
+
+/// Attribute macro for implementing the Agent trait with Generic support
+///
+/// This version generates a struct definition with Generic inner agent,
+/// allowing for agent injection and testing with mock agents.
+///
+/// # Usage
+/// ```ignore
+/// #[agent(expertise = "Rust expert", output = "MyOutputType")]
+/// struct MyAgent;
+/// ```
+#[proc_macro_attribute]
+pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
+    // Parse attributes
+    let agent_attrs = match syn::parse::<AgentAttrs>(attr) {
+        Ok(attrs) => attrs,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    // Parse the input struct
+    let input = parse_macro_input!(item as DeriveInput);
+    let struct_name = &input.ident;
+    let vis = &input.vis;
+
+    let expertise = agent_attrs
+        .expertise
+        .unwrap_or_else(|| String::from("general AI assistant"));
+    let output_type = agent_attrs
+        .output
+        .unwrap_or_else(|| syn::parse_str::<syn::Type>("String").unwrap());
+    let backend = agent_attrs
+        .backend
+        .unwrap_or_else(|| String::from("claude"));
+    let model = agent_attrs.model;
+
+    // Determine crate path
+    let found_crate =
+        crate_name("llm-toolkit").expect("llm-toolkit should be present in `Cargo.toml`");
+    let crate_path = match found_crate {
+        FoundCrate::Itself => {
+            let ident = syn::Ident::new("llm_toolkit", proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+    };
+
+    // Determine generic parameter name for inner agent (default: "A")
+    let inner_generic_name = agent_attrs.inner.unwrap_or_else(|| String::from("A"));
+    let inner_generic_ident = syn::Ident::new(&inner_generic_name, proc_macro2::Span::call_site());
+
+    // Determine default agent type - prioritize default_inner, fallback to backend
+    let default_agent_type = if let Some(ref custom_type) = agent_attrs.default_inner {
+        // Custom type specified via default_inner attribute
+        let type_path: syn::Type =
+            syn::parse_str(custom_type).expect("default_inner must be a valid type path");
+        quote! { #type_path }
+    } else {
+        // Use backend to determine default type
+        match backend.as_str() {
+            "gemini" => quote! { #crate_path::agent::impls::GeminiAgent },
+            _ => quote! { #crate_path::agent::impls::ClaudeCodeAgent },
+        }
+    };
+
+    // Generate struct definition
+    let struct_def = quote! {
+        #vis struct #struct_name<#inner_generic_ident = #default_agent_type> {
+            inner: #inner_generic_ident,
+        }
+    };
+
+    // Generate basic constructor
+    let constructors = quote! {
+        impl<#inner_generic_ident> #struct_name<#inner_generic_ident> {
+            /// Create a new agent with a custom inner agent implementation
+            pub fn new(inner: #inner_generic_ident) -> Self {
+                Self { inner }
+            }
+        }
+    };
+
+    // Generate backend-specific constructors and Default implementation
+    let (backend_constructors, default_impl) = if agent_attrs.default_inner.is_some() {
+        // Custom type - generate Default impl for the default type
+        let default_impl = quote! {
+            impl Default for #struct_name {
+                fn default() -> Self {
+                    Self {
+                        inner: <#default_agent_type as Default>::default(),
+                    }
+                }
+            }
+        };
+        (quote! {}, default_impl)
+    } else {
+        // Built-in backend - generate backend-specific constructors
+        let backend_constructors =
+            generate_backend_constructors(struct_name, &backend, model.as_deref(), &crate_path);
+        let default_impl =
+            generate_default_impl(struct_name, &backend, model.as_deref(), &crate_path);
+        (backend_constructors, default_impl)
+    };
+
+    // Generate Agent trait implementation
+    let agent_impl = quote! {
+        #[async_trait::async_trait]
+        impl<#inner_generic_ident> #crate_path::agent::Agent for #struct_name<#inner_generic_ident>
+        where
+            #inner_generic_ident: #crate_path::agent::Agent<Output = String>,
+        {
+            type Output = #output_type;
+
+            fn expertise(&self) -> &str {
+                #expertise
+            }
+
+            async fn execute(&self, intent: String) -> Result<Self::Output, #crate_path::agent::AgentError> {
+                // Use the inner agent (no need to create a new one each time)
+                let response = self.inner.execute(intent).await?;
+
+                // Extract JSON from the response
+                let json_str = #crate_path::extract_json(&response)
+                    .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))?;
+
+                // Deserialize into output type
+                serde_json::from_str(&json_str)
+                    .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))
+            }
+
+            async fn is_available(&self) -> Result<(), #crate_path::agent::AgentError> {
+                self.inner.is_available().await
+            }
+        }
+    };
+
+    let expanded = quote! {
+        #struct_def
+        #constructors
+        #backend_constructors
+        #default_impl
+        #agent_impl
     };
 
     TokenStream::from(expanded)
