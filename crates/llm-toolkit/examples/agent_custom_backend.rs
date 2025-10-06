@@ -5,7 +5,7 @@
 //!
 //! Run with: cargo run --example agent_custom_backend --features agent
 
-use llm_toolkit::agent::{Agent, AgentError};
+use llm_toolkit::agent::{Agent, AgentError, Payload};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -39,16 +39,17 @@ impl Agent for OlamaAgent {
         "General purpose Olama agent"
     }
 
-    async fn execute(&self, intent: String) -> Result<String, AgentError> {
+    async fn execute(&self, intent: Payload) -> Result<String, AgentError> {
         // In a real implementation, this would call the Olama API
         // For this example, we'll return mock data
+        let text_intent = intent.to_text();
         println!(
             "📡 OlamaAgent (model: {}) executing: {}",
-            self.model, intent
+            self.model, text_intent
         );
         Ok(format!(
             r#"{{"title": "Response from {}", "content": "Processed: {}"}}"#,
-            self.model, intent
+            self.model, text_intent
         ))
     }
 }
@@ -154,19 +155,23 @@ async fn main() {
     println!("\n📝 Executing sample tasks:\n");
 
     let article = writer
-        .execute("Write about Rust async/await".to_string())
+        .execute("Write about Rust async/await".to_string().into())
         .await
         .unwrap();
     println!("   Article: {:?}", article);
 
     let review = reviewer
-        .execute("Review this function for performance issues".to_string())
+        .execute(
+            "Review this function for performance issues"
+                .to_string()
+                .into(),
+        )
         .await
         .unwrap();
     println!("   Review: {:?}", review);
 
     let analysis = analyst
-        .execute("Analyze user engagement metrics".to_string())
+        .execute("Analyze user engagement metrics".to_string().into())
         .await
         .unwrap();
     println!("   Analysis: {:?}\n", analysis);

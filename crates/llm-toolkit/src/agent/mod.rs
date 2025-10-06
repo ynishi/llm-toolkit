@@ -214,11 +214,13 @@
 //! This pattern is recommended for building your own custom agents.
 
 pub mod error;
+pub mod payload;
 
 #[cfg(feature = "agent")]
 pub mod impls;
 
 pub use error::AgentError;
+pub use payload::{Payload, PayloadContent};
 
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
@@ -256,13 +258,14 @@ pub trait Agent: Send + Sync {
     ///
     /// # Arguments
     ///
-    /// * `intent` - A natural language description of the task to perform.
-    ///              This should include all necessary context and information.
+    /// * `intent` - A payload containing the task to perform. Can be text, images,
+    ///              or a combination. Use `.into()` to convert from String for backward
+    ///              compatibility.
     ///
     /// # Returns
     ///
     /// A `Result` containing the structured output on success, or an `AgentError` on failure.
-    async fn execute(&self, intent: String) -> Result<Self::Output, AgentError>;
+    async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError>;
 
     /// Returns the name of this agent.
     ///
@@ -307,7 +310,7 @@ pub type BoxedAgent<T> = Box<dyn Agent<Output = T>>;
 #[async_trait]
 pub trait DynamicAgent: Send + Sync {
     /// Execute the agent and return the output as a JSON value.
-    async fn execute_dynamic(&self, intent: String) -> Result<serde_json::Value, AgentError>;
+    async fn execute_dynamic(&self, intent: Payload) -> Result<serde_json::Value, AgentError>;
 
     /// Returns the name of this agent.
     fn name(&self) -> String;
@@ -372,7 +375,7 @@ impl<T: Serialize + DeserializeOwned> AgentAdapter<T> {
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned> DynamicAgent for AgentAdapter<T> {
-    async fn execute_dynamic(&self, intent: String) -> Result<serde_json::Value, AgentError> {
+    async fn execute_dynamic(&self, intent: Payload) -> Result<serde_json::Value, AgentError> {
         let output = self.inner.execute(intent).await?;
         serde_json::to_value(output).map_err(|e| AgentError::SerializationFailed(e.to_string()))
     }

@@ -3,7 +3,7 @@
 //! This agent validates the output of a previous step against the overall task goal
 //! and specific quality criteria. It returns a JSON string with validation results.
 
-use crate::agent::{Agent, AgentError};
+use crate::agent::{Agent, AgentError, Payload};
 use async_trait::async_trait;
 
 /// A built-in agent that validates step outputs against quality criteria.
@@ -56,7 +56,7 @@ impl Agent for InnerValidatorAgent {
         "A built-in agent that validates the output of a previous step against the overall task goal and specific quality criteria. It returns a JSON string with a 'status' ('PASS' or 'FAIL') and a 'reason'."
     }
 
-    async fn execute(&self, _intent: String) -> Result<Self::Output, AgentError> {
+    async fn execute(&self, _intent: Payload) -> Result<Self::Output, AgentError> {
         // Placeholder implementation
         Ok(String::new())
     }

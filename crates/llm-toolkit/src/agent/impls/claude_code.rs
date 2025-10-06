@@ -3,7 +3,7 @@
 //! This agent can handle a wide variety of tasks by spawning the `claude` command
 //! with the `-p` flag to pass prompts directly.
 
-use crate::agent::{Agent, AgentError};
+use crate::agent::{Agent, AgentError, Payload};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -162,19 +162,30 @@ impl Agent for ClaudeCodeAgent {
          complex multi-step tasks autonomously."
     }
 
-    async fn execute(&self, intent: String) -> Result<Self::Output, AgentError> {
+    async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
+        let payload = intent;
+
         let claude_cmd = self
             .claude_path
             .as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "claude".to_string());
 
+        // Extract text content for now (images not yet supported by claude CLI -p)
+        let text_intent = payload.to_text();
+
         log::info!("🤖 ClaudeCodeAgent executing...");
-        log::debug!("Intent length: {} chars", intent.len());
-        log::trace!("Full intent: {}", intent);
+        log::debug!("Intent length: {} chars", text_intent.len());
+        log::trace!("Full intent: {}", text_intent);
+
+        if payload.has_images() {
+            log::warn!(
+                "ClaudeCodeAgent: Images in payload are not yet supported and will be ignored"
+            );
+        }
 
         let mut cmd = Command::new(&claude_cmd);
-        cmd.arg("-p").arg(&intent);
+        cmd.arg("-p").arg(&text_intent);
 
         // Add model if specified
         if let Some(model) = &self.model {
@@ -308,7 +319,7 @@ where
         self.inner.expertise()
     }
 
-    async fn execute(&self, intent: String) -> Result<Self::Output, AgentError> {
+    async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         log::info!(
             "📊 ClaudeCodeJsonAgent<{}> executing...",
             std::any::type_name::<T>()

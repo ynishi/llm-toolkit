@@ -3038,7 +3038,7 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
                 #expertise
             }
 
-            async fn execute(&self, intent: String) -> Result<Self::Output, #crate_path::agent::AgentError> {
+            async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
                 // Create internal agent based on backend configuration
                 #agent_init
 
@@ -3187,7 +3187,7 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #expertise
             }
 
-            async fn execute(&self, intent: String) -> Result<Self::Output, #crate_path::agent::AgentError> {
+            async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
                 // Use the inner agent (no need to create a new one each time)
                 let response = self.inner.execute(intent).await?;
 

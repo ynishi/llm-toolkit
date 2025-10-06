@@ -1,6 +1,6 @@
 // Test for agent attribute macro with custom default_inner type
 
-use llm_toolkit::agent::{Agent, AgentError};
+use llm_toolkit::agent::{Agent, AgentError, Payload};
 use serde::{Deserialize, Serialize};
 
 // Define a custom OlamaAgent (mock implementation for testing)
@@ -30,11 +30,12 @@ impl Agent for OlamaAgent {
         "General purpose Olama agent"
     }
 
-    async fn execute(&self, intent: String) -> Result<String, AgentError> {
+    async fn execute(&self, intent: Payload) -> Result<String, AgentError> {
         // Mock implementation
+        let text_intent = intent.to_text();
         Ok(format!(
             "{{\"title\": \"Response from {}\", \"body\": \"Processed: {}\"}}",
-            self.model, intent
+            self.model, text_intent
         ))
     }
 }

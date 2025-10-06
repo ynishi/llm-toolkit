@@ -3,7 +3,7 @@
 //! This agent can handle a wide variety of tasks by spawning the `gemini` command
 //! with prompts and configuration options.
 
-use crate::agent::{Agent, AgentError};
+use crate::agent::{Agent, AgentError, Payload};
 use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -218,8 +218,17 @@ impl Agent for GeminiAgent {
         "General-purpose AI assistant powered by Google Gemini, capable of coding, analysis, and research tasks"
     }
 
-    async fn execute(&self, intent: String) -> Result<Self::Output, AgentError> {
-        let mut cmd = self.build_command(&intent)?;
+    async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
+        let payload = intent;
+
+        // Extract text content for now (images not yet supported in this integration)
+        let text_intent = payload.to_text();
+
+        if payload.has_images() {
+            log::warn!("GeminiAgent: Images in payload are not yet supported and will be ignored");
+        }
+
+        let mut cmd = self.build_command(&text_intent)?;
 
         let output = cmd.output().await.map_err(|e| {
             AgentError::ExecutionFailed(format!("Failed to execute gemini command: {}", e))

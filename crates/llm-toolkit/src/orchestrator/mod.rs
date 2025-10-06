@@ -387,7 +387,7 @@ impl Orchestrator {
         // Call internal JSON agent to generate strategy
         let strategy_map = self
             .internal_json_agent
-            .execute(prompt)
+            .execute(prompt.into())
             .await
             .map_err(|e| OrchestratorError::StrategyGenerationFailed(e.to_string()))?;
 
@@ -581,7 +581,7 @@ impl Orchestrator {
         log::debug!("Generating intent for step: {}", step.step_id);
 
         // Use internal agent to generate the intent
-        let intent = self.internal_agent.execute(prompt).await?;
+        let intent = self.internal_agent.execute(prompt.into()).await?;
 
         Ok(intent)
     }
@@ -655,7 +655,7 @@ impl Orchestrator {
                 .get(&step.assigned_agent)
                 .ok_or_else(|| OrchestratorError::AgentNotFound(step.assigned_agent.clone()))?;
 
-            match agent.execute_dynamic(intent).await {
+            match agent.execute_dynamic(intent.into()).await {
                 Ok(output) => {
                     log::info!("Step {} completed successfully", step_index + 1);
 
@@ -836,7 +836,7 @@ impl Orchestrator {
         log::debug!("Validation intent:\n{}", intent);
 
         // Execute the inner validator agent
-        let result = self.inner_validator_agent.execute(intent).await?;
+        let result = self.inner_validator_agent.execute(intent.into()).await?;
 
         log::debug!("Validation result:\n{}", result);
 
@@ -894,7 +894,7 @@ impl Orchestrator {
         log::debug!("Redesign decision prompt:\n{}", prompt);
 
         // Ask internal agent for decision
-        let decision = self.internal_agent.execute(prompt).await?;
+        let decision = self.internal_agent.execute(prompt.into()).await?;
 
         let decision_upper = decision.trim().to_uppercase();
 
@@ -960,7 +960,7 @@ impl Orchestrator {
         log::debug!("Tactical redesign prompt:\n{}", prompt);
 
         // Get new steps from LLM
-        let response = self.internal_agent.execute(prompt).await?;
+        let response = self.internal_agent.execute(prompt.into()).await?;
 
         // Parse JSON array of StrategyStep
         let new_steps: Vec<StrategyStep> = serde_json::from_str(&response).map_err(|e| {
@@ -1040,7 +1040,7 @@ impl Orchestrator {
         // Generate completely new strategy
         let new_strategy = self
             .internal_json_agent
-            .execute(prompt)
+            .execute(prompt.into())
             .await
             .map_err(|e| OrchestratorError::StrategyGenerationFailed(e.to_string()))?;
 

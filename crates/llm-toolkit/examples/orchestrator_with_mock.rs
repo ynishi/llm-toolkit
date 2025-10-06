@@ -8,7 +8,7 @@
 //! Run with: cargo run --example orchestrator_with_mock --features agent,derive
 
 use async_trait::async_trait;
-use llm_toolkit::agent::{Agent, AgentError};
+use llm_toolkit::agent::{Agent, AgentError, Payload};
 use llm_toolkit::orchestrator::{BlueprintWorkflow, Orchestrator, StrategyMap, StrategyStep};
 
 /// A mock agent that simulates work without requiring external LLM calls.
@@ -41,12 +41,13 @@ impl Agent for MockAgent {
         self.name.clone()
     }
 
-    async fn execute(&self, intent: String) -> Result<Self::Output, AgentError> {
+    async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         // Return a mock response
+        let text_intent = intent.to_text();
         Ok(format!(
             "{}: Processed request - {}",
             self.response_prefix,
-            intent.chars().take(50).collect::<String>()
+            text_intent.chars().take(50).collect::<String>()
         ))
     }
 }
@@ -67,7 +68,7 @@ impl Agent for MockJsonAgent {
         "MockJsonAgent".to_string()
     }
 
-    async fn execute(&self, _intent: String) -> Result<Self::Output, AgentError> {
+    async fn execute(&self, _intent: Payload) -> Result<Self::Output, AgentError> {
         // Return a simple mock strategy
         let mut strategy = StrategyMap::new("Complete the mock task".to_string());
 
