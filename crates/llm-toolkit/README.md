@@ -33,6 +33,7 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **Type-Safe Intent Definition** | Generate prompt builders and extractors from a single enum definition. | `#[define_intent]` macro | Implemented |
 | **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentFrame`, `IntentExtractor`) | Implemented |
 | **Agent API** | Define reusable AI agents with expertise and structured outputs. | `Agent` trait, `#[derive(Agent)]` macro | Implemented |
+| **Multi-Modal Payload** | Pass text and images to agents through a unified `Payload` interface with backward compatibility. | `Payload`, `PayloadContent` types | Implemented |
 | **Multi-Agent Orchestration** | Coordinate multiple agents to execute complex workflows with adaptive error recovery. | `Orchestrator`, `BlueprintWorkflow`, `StrategyMap` | Implemented |
 | **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
 
@@ -746,9 +747,56 @@ let clean_text = extractor.strip_actions(llm_response);
 
 The Agent API follows the principle of **capability and intent separation**:
 - **Capability**: An agent declares what it can do (`expertise`) and what it produces (`Output`)
-- **Intent**: The orchestrator provides what needs to be done as a natural language string
+- **Intent**: The orchestrator provides what needs to be done as a `Payload` (multi-modal content)
 
 This separation enables maximum reusability and flexibility.
+
+### Multi-Modal Agent Communication with Payload
+
+The `execute()` method accepts a `Payload` type that supports multi-modal content including text and images. This enables agents to process both textual instructions and visual inputs.
+
+**Basic Usage (Text Only):**
+
+```rust
+use llm_toolkit::agent::Agent;
+
+// String automatically converts to Payload for backward compatibility
+let result = agent.execute("Analyze this text".to_string().into()).await?;
+
+// Or use Payload explicitly
+use llm_toolkit::agent::Payload;
+let payload = Payload::text("Analyze this text");
+let result = agent.execute(payload).await?;
+```
+
+**Multi-Modal Usage (Text + Images):**
+
+```rust
+use llm_toolkit::agent::Payload;
+use std::path::PathBuf;
+
+// Combine text and images
+let payload = Payload::text("What's in this image?")
+    .with_image(PathBuf::from("/path/to/image.png"));
+
+let result = agent.execute(payload).await?;
+
+// Or from raw image data
+let image_bytes = std::fs::read("/path/to/image.png")?;
+let payload = Payload::text("Describe this screenshot")
+    .with_image_data(image_bytes);
+```
+
+**Backward Compatibility:**
+
+All existing code using `String` continues to work thanks to automatic conversion:
+
+```rust
+// This still works unchanged
+let result = agent.execute("Simple text intent".to_string().into()).await?;
+```
+
+**Note:** While the `Payload` type supports images, not all agent backends currently process them. `ClaudeCodeAgent` and `GeminiAgent` will log a warning if images are included but not yet supported by the CLI integration.
 
 #### Defining Agents: Two Approaches
 
@@ -781,7 +829,7 @@ struct ContentSynthesizerAgent;
 #[tokio::main]
 async fn main() {
     let agent = ContentSynthesizerAgent;
-    let result: ArticleDraft = agent.execute("Write about Rust async/await".to_string()).await.unwrap();
+    let result: ArticleDraft = agent.execute("Write about Rust async/await".to_string().into()).await.unwrap();
     println!("Generated: {}", result.title);
 }
 ```
@@ -826,7 +874,7 @@ async fn main() {
     let custom_claude = ClaudeCodeAgent::new().with_model_str("sonnet-4.5");
     let agent = ContentSynthesizerAgent::new(custom_claude);
 
-    let result: ArticleDraft = agent.execute("Write about Rust async/await".to_string()).await.unwrap();
+    let result: ArticleDraft = agent.execute("Write about Rust async/await".to_string().into()).await.unwrap();
     println!("Generated: {}", result.title);
 }
 ```
@@ -890,7 +938,7 @@ Agent injection makes testing simple and deterministic:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llm_toolkit::agent::{Agent, AgentError};
+    use llm_toolkit::agent::{Agent, AgentError, Payload};
 
     // Define a mock agent for testing
     struct MockAgent {
@@ -902,7 +950,7 @@ mod tests {
     impl Agent for MockAgent {
         type Output = String;
         fn expertise(&self) -> &str { "mock" }
-        async fn execute(&self, _: String) -> Result<String, AgentError> {
+        async fn execute(&self, _: Payload) -> Result<String, AgentError> {
             *self.call_count.borrow_mut() += 1;
             Ok(self.response.clone())
         }
@@ -918,7 +966,7 @@ mod tests {
         let agent = ContentSynthesizerAgent::new(mock);
 
         // Execute and verify
-        let result = agent.execute("test".to_string()).await.unwrap();
+        let result = agent.execute("test".to_string().into()).await.unwrap();
         assert_eq!(result.title, "Test Article");
         assert_eq!(result.references.len(), 1);
     }
@@ -932,13 +980,13 @@ mod tests {
         impl Agent for ErrorAgent {
             type Output = String;
             fn expertise(&self) -> &str { "error mock" }
-            async fn execute(&self, _: String) -> Result<String, AgentError> {
+            async fn execute(&self, _: Payload) -> Result<String, AgentError> {
                 Err(AgentError::ExecutionError("Simulated failure".to_string()))
             }
         }
 
         let agent = ContentSynthesizerAgent::new(ErrorAgent);
-        let result = agent.execute("test".to_string()).await;
+        let result = agent.execute("test".to_string().into()).await;
         assert!(result.is_err());
     }
 }
@@ -960,11 +1008,13 @@ impl OlamaAgent {
     fn with_model(self, model: &str) -> Self { /* ... */ }
 }
 
+use llm_toolkit::agent::Payload;
+
 #[async_trait::async_trait]
 impl Agent for OlamaAgent {
     type Output = String;
     fn expertise(&self) -> &str { "Olama agent" }
-    async fn execute(&self, intent: String) -> Result<String, AgentError> {
+    async fn execute(&self, intent: Payload) -> Result<String, AgentError> {
         // Call Olama API
     }
 }
