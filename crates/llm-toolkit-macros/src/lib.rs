@@ -649,9 +649,35 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                // If we still haven't found the file, use the original path for a better error message
-                let final_path =
-                    full_path.unwrap_or_else(|| std::path::Path::new(&file_path).to_path_buf());
+                // Validate file existence at compile time
+                if full_path.is_none() {
+                    // Build helpful error message with search locations
+                    let mut error_msg = format!(
+                        "Template file '{}' not found at compile time.\n\nSearched in:",
+                        file_path
+                    );
+
+                    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+                        let candidate = std::path::Path::new(&manifest_dir).join(&file_path);
+                        error_msg.push_str(&format!("\n  - {}", candidate.display()));
+                    }
+
+                    if let Ok(current_dir) = std::env::current_dir() {
+                        let candidate = current_dir.join(&file_path);
+                        error_msg.push_str(&format!("\n  - {}", candidate.display()));
+                    }
+
+                    error_msg.push_str("\n\nPlease ensure:");
+                    error_msg.push_str("\n  1. The template file exists");
+                    error_msg.push_str("\n  2. The path is relative to CARGO_MANIFEST_DIR");
+                    error_msg.push_str("\n  3. There are no typos in the path");
+
+                    return syn::Error::new(input.ident.span(), error_msg)
+                        .to_compile_error()
+                        .into();
+                }
+
+                let final_path = full_path.unwrap();
 
                 // Read the file at compile time
                 match std::fs::read_to_string(&final_path) {
@@ -660,9 +686,10 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                         return syn::Error::new(
                             input.ident.span(),
                             format!(
-                                "Failed to read template file '{}': {}",
-                                final_path.display(),
-                                e
+                                "Failed to read template file '{}': {}\n\nPath resolved to: {}",
+                                file_path,
+                                e,
+                                final_path.display()
                             ),
                         )
                         .to_compile_error()

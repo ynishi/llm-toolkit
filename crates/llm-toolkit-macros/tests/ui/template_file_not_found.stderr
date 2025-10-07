@@ -1,0 +1,14 @@
+error: Template file 'templates/does_not_exist.jinja' not found at compile time.
+
+       Searched in:
+         - $CARGO_MANIFEST_DIR/templates/does_not_exist.jinja
+         - $PWD/templates/does_not_exist.jinja
+
+       Please ensure:
+         1. The template file exists
+         2. The path is relative to CARGO_MANIFEST_DIR
+         3. There are no typos in the path
+ --> tests/ui/template_file_not_found.rs:6:8
+  |
+6 | struct MissingTemplateTest {
+  |        ^^^^^^^^^^^^^^^^^^^
