@@ -33,6 +33,7 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **Type-Safe Intent Definition** | Generate prompt builders and extractors from a single enum definition. | `#[define_intent]` macro | Implemented |
 | **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentFrame`, `IntentExtractor`) | Implemented |
 | **Agent API** | Define reusable AI agents with expertise and structured outputs. | `Agent` trait, `#[derive(Agent)]` macro | Implemented |
+| **Auto-JSON Enforcement** | Automatically add JSON schema instructions to agent prompts for better LLM compliance. | `#[derive(Agent)]` with `ToPrompt::prompt_schema()` integration | Implemented |
 | **Multi-Modal Payload** | Pass text and images to agents through a unified `Payload` interface with backward compatibility. | `Payload`, `PayloadContent` types | Implemented |
 | **Multi-Agent Orchestration** | Coordinate multiple agents to execute complex workflows with adaptive error recovery. | `Orchestrator`, `BlueprintWorkflow`, `StrategyMap` | Implemented |
 | **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
@@ -839,6 +840,62 @@ async fn main() {
 - ✅ Minimal boilerplate
 - ✅ Perfect for prototyping
 - ⚠️ Creates internal agent on each `execute()` call (stateless)
+
+**Automatic JSON Schema Enforcement:**
+
+When using `#[derive(Agent)]` with a structured output type (non-String), the macro automatically adds JSON schema instructions to the agent's expertise. This dramatically improves LLM compliance and reduces parse errors.
+
+```rust
+use llm_toolkit::{Agent, ToPrompt};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug, ToPrompt)]
+#[prompt(mode = "full")]
+struct ReviewResult {
+    /// Overall quality score from 0 to 100
+    quality_score: u8,
+
+    /// List of identified issues
+    issues: Vec<String>,
+
+    /// Actionable recommendations for improvement
+    recommendations: Vec<String>,
+}
+
+#[derive(Agent)]
+#[agent(
+    expertise = "Review code quality and provide detailed feedback",
+    output = "ReviewResult"
+)]
+struct CodeReviewAgent;
+
+// The agent's expertise() method automatically returns:
+// "Review code quality and provide detailed feedback
+//
+// IMPORTANT: Respond with valid JSON matching this schema:
+//
+// ### Schema for `ReviewResult`
+// {
+//   "quality_score": "number", // Overall quality score from 0 to 100,
+//   "issues": "string[]", // List of identified issues,
+//   "recommendations": "string[]" // Actionable recommendations for improvement
+// }"
+```
+
+**Schema Generation Strategy (3-Tier Auto-Inference):**
+
+1. **With `ToPrompt` + doc comments** → Detailed schema with field descriptions
+   - Requires: `#[derive(ToPrompt)]` + `#[prompt(mode = "full")]`
+   - Best experience: Full field-level documentation
+
+2. **With `ToPrompt` (no doc comments)** → Basic schema with field names
+   - Requires: `#[derive(ToPrompt)]` + `#[prompt(mode = "full")]`
+   - Good: Type-safe field names
+
+3. **String output** → No JSON enforcement
+   - For plain text responses
+
+**Recommendation:** Always use `#[derive(ToPrompt)]` with `#[prompt(mode = "full")]` for structured outputs to get the best LLM compliance.
 
 ##### 2. Advanced Agents with `#[agent(...)]` (Recommended for Production)
 

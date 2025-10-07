@@ -2985,6 +2985,51 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
+    // Check if output type is String (no JSON enforcement needed)
+    let output_type_str = quote!(#output_type).to_string().replace(" ", "");
+    let is_string_output = output_type_str == "String" || output_type_str == "&str";
+
+    // Generate enhanced expertise with JSON schema instruction
+    let enhanced_expertise = if is_string_output {
+        // Plain text output - no JSON enforcement
+        quote! { #expertise }
+    } else {
+        // Structured output - try to use ToPrompt::prompt_schema(), fallback to type name
+        let type_name = quote!(#output_type).to_string();
+        quote! {
+            {
+                use std::sync::OnceLock;
+                static EXPERTISE_CACHE: OnceLock<String> = OnceLock::new();
+
+                EXPERTISE_CACHE.get_or_init(|| {
+                    // Try to get detailed schema from ToPrompt
+                    let schema = <#output_type as #crate_path::prompt::ToPrompt>::prompt_schema();
+
+                    if schema.is_empty() {
+                        // Fallback: type name only
+                        format!(
+                            concat!(
+                                #expertise,
+                                "\n\nIMPORTANT: You must respond with valid JSON matching the {} type structure. ",
+                                "Do not include any text outside the JSON object."
+                            ),
+                            #type_name
+                        )
+                    } else {
+                        // Use detailed schema from ToPrompt
+                        format!(
+                            concat!(
+                                #expertise,
+                                "\n\nIMPORTANT: Respond with valid JSON matching this schema:\n\n{}"
+                            ),
+                            schema
+                        )
+                    }
+                }).as_str()
+            }
+        }
+    };
+
     // Generate agent initialization code based on backend
     let agent_init = match backend.as_str() {
         "gemini" => {
@@ -3035,7 +3080,7 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
             type Output = #output_type;
 
             fn expertise(&self) -> &str {
-                #expertise
+                #enhanced_expertise
             }
 
             async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {

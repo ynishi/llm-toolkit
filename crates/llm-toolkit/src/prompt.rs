@@ -203,6 +203,23 @@ impl_to_prompt_for_numbers!(
     i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64
 );
 
+// Implement ToPrompt for Vec<T> where T: ToPrompt
+impl<T: ToPrompt> ToPrompt for Vec<T> {
+    fn to_prompt_parts(&self) -> Vec<PromptPart> {
+        vec![PromptPart::Text(self.to_prompt())]
+    }
+
+    fn to_prompt(&self) -> String {
+        format!(
+            "[{}]",
+            self.iter()
+                .map(|item| item.to_prompt())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
 /// Renders a prompt from a template string and a serializable context.
 ///
 /// This is the underlying function for the `prompt!` macro.
