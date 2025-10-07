@@ -15,7 +15,10 @@ EXAMPLES := \
 	test_define_intent \
 	orchestrator_with_mock \
 	check_claude \
-	agent_derive
+	agent_derive \
+	agent_auto_json_test \
+	agent_with_toprompt_schema \
+	agent_retry_test
 
 # test-examplesターゲットで、リストをループ処理する
 test-examples:

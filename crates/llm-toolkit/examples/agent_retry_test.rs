@@ -19,11 +19,13 @@ struct TestOutput {
 }
 
 // Mock agent that fails N times before succeeding
+#[allow(dead_code)]
 struct FailingMockAgent {
     fail_count: Arc<AtomicU32>,
     failures_remaining: u32,
 }
 
+#[allow(dead_code)]
 impl FailingMockAgent {
     fn new(failures_before_success: u32) -> Self {
         Self {
@@ -59,6 +61,7 @@ impl AgentTrait for FailingMockAgent {
 }
 
 // Test Case 1: Default retry (max_retries = 3)
+#[allow(dead_code)]
 #[derive(Agent)]
 #[agent(
     expertise = "Test agent with default retry settings",
@@ -67,6 +70,7 @@ impl AgentTrait for FailingMockAgent {
 struct DefaultRetryAgent;
 
 // Test Case 2: Custom retry count
+#[allow(dead_code)]
 #[derive(Agent)]
 #[agent(
     expertise = "Test agent with custom retry count",
@@ -76,6 +80,7 @@ struct DefaultRetryAgent;
 struct CustomRetryAgent;
 
 // Test Case 3: No retry
+#[allow(dead_code)]
 #[derive(Agent)]
 #[agent(
     expertise = "Test agent with retry disabled",

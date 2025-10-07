@@ -67,3 +67,89 @@ impl AgentError {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_retryable_parse_error() {
+        let err = AgentError::ParseError("malformed JSON".to_string());
+        assert!(
+            err.is_retryable(),
+            "ParseError should be retryable (LLM output might be malformed)"
+        );
+    }
+
+    #[test]
+    fn test_is_retryable_process_error() {
+        let err = AgentError::ProcessError("process crashed".to_string());
+        assert!(
+            err.is_retryable(),
+            "ProcessError should be retryable (transient process issues)"
+        );
+    }
+
+    #[test]
+    fn test_is_retryable_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
+        let err = AgentError::IoError(io_err);
+        assert!(
+            err.is_retryable(),
+            "IoError should be retryable (temporary I/O failures)"
+        );
+    }
+
+    #[test]
+    fn test_is_not_retryable_execution_failed() {
+        let err = AgentError::ExecutionFailed("LLM logical error".to_string());
+        assert!(
+            !err.is_retryable(),
+            "ExecutionFailed should NOT be retryable (report to orchestrator)"
+        );
+    }
+
+    #[test]
+    fn test_is_not_retryable_serialization_failed() {
+        let err = AgentError::SerializationFailed("invalid type".to_string());
+        assert!(
+            !err.is_retryable(),
+            "SerializationFailed should NOT be retryable (code-level issue)"
+        );
+    }
+
+    #[test]
+    fn test_is_not_retryable_other() {
+        let err = AgentError::Other("unknown error".to_string());
+        assert!(
+            !err.is_retryable(),
+            "Other should NOT be retryable (unknown error, fail fast)"
+        );
+    }
+
+    #[test]
+    fn test_is_transient_backward_compatibility() {
+        // is_transient() should still work for backward compatibility
+        let process_err = AgentError::ProcessError("process issue".to_string());
+        assert!(
+            process_err.is_transient(),
+            "ProcessError should be transient (backward compatibility)"
+        );
+
+        let io_err = AgentError::IoError(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timeout",
+        ));
+        assert!(
+            io_err.is_transient(),
+            "IoError should be transient (backward compatibility)"
+        );
+
+        // But ParseError should NOT be transient (only retryable)
+        let parse_err = AgentError::ParseError("malformed".to_string());
+        assert!(
+            !parse_err.is_transient(),
+            "ParseError is retryable but not transient (semantic difference)"
+        );
+    }
+}
