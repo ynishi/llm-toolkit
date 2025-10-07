@@ -23,7 +23,8 @@ EXAMPLES := \
 	agent_model_selection \
 	agent_attribute \
 	execution_profile_demo \
-	agent_with_profile
+	agent_with_profile \
+	agent_string_output_test
 
 # test-examplesターゲットで、リストをループ処理する
 test-examples:

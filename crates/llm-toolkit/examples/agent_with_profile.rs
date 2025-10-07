@@ -1,11 +1,14 @@
 //! Example demonstrating #[agent(profile = ...)] attribute usage.
 
+use llm_toolkit::ToPrompt;
 use llm_toolkit::agent::Agent;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToPrompt)]
 struct Summary {
+    /// The main title of the summary
     title: String,
+    /// Key points extracted from the content
     key_points: Vec<String>,
 }
 

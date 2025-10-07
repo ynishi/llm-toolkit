@@ -5,6 +5,7 @@
 //!
 //! Run with: cargo run --example agent_custom_backend --features agent
 
+use llm_toolkit::ToPrompt;
 use llm_toolkit::agent::{Agent, AgentError, Payload};
 use serde::{Deserialize, Serialize};
 
@@ -58,13 +59,13 @@ impl Agent for OlamaAgent {
 // Output Types
 // ============================================================================
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, ToPrompt)]
 struct ArticleDraft {
     title: String,
     content: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, ToPrompt)]
 struct CodeReview {
     title: String,
     content: String,
