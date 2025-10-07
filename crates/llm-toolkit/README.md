@@ -900,6 +900,55 @@ struct CodeReviewAgent;
 
 **Recommendation:** Always use `#[derive(ToPrompt)]` with `#[prompt(mode = "full")]` for structured outputs to get the best LLM compliance.
 
+**Nested Schema Expansion for `Vec<T>`:**
+
+When your output struct contains `Vec<T>` where `T` implements `ToPrompt`, the schema automatically expands the nested type inline:
+
+```rust
+#[derive(Serialize, Deserialize, ToPrompt)]
+#[prompt(mode = "full")]
+pub struct EvaluationResult {
+    /// The rule being checked
+    pub rule: String,
+    /// Whether this specific rule passed
+    pub passed: bool,
+}
+
+#[derive(Serialize, Deserialize, ToPrompt)]
+#[prompt(mode = "full")]
+pub struct ProducerOutput {
+    /// Whether the evaluation passed all checks
+    pub evaluation_passed: bool,
+    /// List of evaluation results for each rule
+    pub results: Vec<EvaluationResult>,
+}
+
+// Generated schema for ProducerOutput:
+// ### Schema for `ProducerOutput`
+// {
+//   "evaluation_passed": "boolean", // Whether the evaluation passed all checks,
+//   "results": [
+//     {
+//       "rule": "string", // The rule being checked,
+//       "passed": "boolean", // Whether this specific rule passed
+//     }
+//   ], // List of evaluation results for each rule
+// }
+```
+
+**How it works:**
+
+- The macro detects `Vec<T>` fields at compile time
+- At runtime (first call only), it calls `T::prompt_schema()` to get the nested schema
+- The nested schema is inlined with proper indentation
+- Result is cached with `OnceLock` for performance (zero cost after first call)
+
+**Limitations:**
+
+- The nested type `T` must implement `ToPrompt` with `#[prompt(mode = "full")]`
+- Schema expansion happens at runtime on first call to `prompt_schema()` (then cached)
+- Deep nesting (e.g., `Vec<Vec<Vec<T>>>`) is supported but may be harder for LLMs to parse
+
 **Automatic Retry on Transient Errors:**
 
 All agents automatically retry on transient errors (ParseError, ProcessError, IoError) without any configuration:

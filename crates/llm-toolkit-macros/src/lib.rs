@@ -132,20 +132,12 @@ fn generate_schema_only_parts(
     fields: &syn::punctuated::Punctuated<syn::Field, syn::Token![,]>,
     crate_path: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
-    let mut schema_lines = vec![];
+    let mut field_schema_parts = vec![];
 
-    // Add header
-    if !struct_docs.is_empty() {
-        schema_lines.push(format!("### Schema for `{}`\n{}", struct_name, struct_docs));
-    } else {
-        schema_lines.push(format!("### Schema for `{}`", struct_name));
-    }
-
-    schema_lines.push("{".to_string());
-
-    // Process fields
+    // Process fields to build runtime schema generation
     for (i, field) in fields.iter().enumerate() {
         let field_name = field.ident.as_ref().unwrap();
+        let field_name_str = field_name.to_string();
         let attrs = parse_field_prompt_attrs(&field.attrs);
 
         // Skip if marked to skip
@@ -156,18 +148,10 @@ fn generate_schema_only_parts(
         // Get field documentation
         let field_docs = extract_doc_comments(&field.attrs);
 
-        // Determine the type representation
-        let type_str = format_type_for_schema(&field.ty);
+        // Check if this is a Vec<T> where T might implement ToPrompt
+        let (is_vec, inner_type) = extract_vec_inner_type(&field.ty);
 
-        // Build field line
-        let mut field_line = format!("  \"{}\": \"{}\"", field_name, type_str);
-
-        // Add comment if there's documentation
-        if !field_docs.is_empty() {
-            field_line.push_str(&format!(", // {}", field_docs));
-        }
-
-        // Add comma if not last field (accounting for skipped fields)
+        // Add comma logic
         let remaining_fields = fields
             .iter()
             .skip(i + 1)
@@ -176,21 +160,84 @@ fn generate_schema_only_parts(
                 !attrs.skip
             })
             .count();
+        let comma = if remaining_fields > 0 { "," } else { "" };
 
-        if remaining_fields > 0 {
-            field_line.push(',');
+        if is_vec {
+            // For Vec<T>, try to expand T's schema if T implements ToPrompt
+            let comment = if !field_docs.is_empty() {
+                format!(", // {}", field_docs)
+            } else {
+                String::new()
+            };
+
+            field_schema_parts.push(quote! {
+                {
+                    let inner_schema = <#inner_type as #crate_path::prompt::ToPrompt>::prompt_schema();
+                    if inner_schema.is_empty() {
+                        // Fallback: just show type name
+                        format!("  \"{}\": \"{}[]\"{}{}", #field_name_str, stringify!(#inner_type).to_lowercase(), #comment, #comma)
+                    } else {
+                        // Expand nested schema inline
+                        let inner_lines: Vec<&str> = inner_schema.lines()
+                            .skip_while(|line| line.starts_with("###") || line.trim() == "{")
+                            .take_while(|line| line.trim() != "}")
+                            .collect();
+                        let inner_content = inner_lines.join("\n");
+                        format!("  \"{}\": [\n    {{\n{}\n    }}\n  ]{}{}",
+                            #field_name_str,
+                            inner_content.lines()
+                                .map(|line| format!("  {}", line))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                            #comment,
+                            #comma
+                        )
+                    }
+                }
+            });
+        } else {
+            // Regular field - use static type formatting
+            let type_str = format_type_for_schema(&field.ty);
+            let comment = if !field_docs.is_empty() {
+                format!(", // {}", field_docs)
+            } else {
+                String::new()
+            };
+
+            field_schema_parts.push(quote! {
+                format!("  \"{}\": \"{}\"{}{}", #field_name_str, #type_str, #comment, #comma)
+            });
         }
-
-        schema_lines.push(field_line);
     }
 
-    schema_lines.push("}".to_string());
-
-    let schema_str = schema_lines.join("\n");
+    // Build header
+    let header = if !struct_docs.is_empty() {
+        format!("### Schema for `{}`\n{}", struct_name, struct_docs)
+    } else {
+        format!("### Schema for `{}`", struct_name)
+    };
 
     quote! {
-        vec![#crate_path::prompt::PromptPart::Text(#schema_str.to_string())]
+        {
+            let mut lines = vec![#header.to_string(), "{".to_string()];
+            #(lines.push(#field_schema_parts);)*
+            lines.push("}".to_string());
+            vec![#crate_path::prompt::PromptPart::Text(lines.join("\n"))]
+        }
     }
+}
+
+/// Extract inner type from Vec<T>, returns (is_vec, inner_type)
+fn extract_vec_inner_type(ty: &syn::Type) -> (bool, Option<&syn::Type>) {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(last_segment) = type_path.path.segments.last()
+        && last_segment.ident == "Vec"
+        && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+        && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+    {
+        return (true, Some(inner_type));
+    }
+    (false, None)
 }
 
 /// Format a type for schema representation
@@ -833,15 +880,20 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                         }
 
                         fn prompt_schema() -> String {
-                            let schema_parts = #schema_parts;
-                            schema_parts
-                                .into_iter()
-                                .filter_map(|part| match part {
-                                    #crate_path::prompt::PromptPart::Text(text) => Some(text),
-                                    _ => None,
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n")
+                            use std::sync::OnceLock;
+                            static SCHEMA_CACHE: OnceLock<String> = OnceLock::new();
+
+                            SCHEMA_CACHE.get_or_init(|| {
+                                let schema_parts = #schema_parts;
+                                schema_parts
+                                    .into_iter()
+                                    .filter_map(|part| match part {
+                                        #crate_path::prompt::PromptPart::Text(text) => Some(text),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            }).clone()
                         }
                     }
                 }
