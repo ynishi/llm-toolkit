@@ -37,6 +37,8 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **Built-in Retry** | Automatic retry on transient errors (ParseError, ProcessError, IoError) with configurable attempts. | `max_retries` attribute, `AgentError::is_retryable()` | Implemented |
 | **Multi-Modal Payload** | Pass text and images to agents through a unified `Payload` interface with backward compatibility. | `Payload`, `PayloadContent` types | Implemented |
 | **Multi-Agent Orchestration** | Coordinate multiple agents to execute complex workflows with adaptive error recovery. | `Orchestrator`, `BlueprintWorkflow`, `StrategyMap` | Implemented |
+| **Execution Profiles** | Declaratively configure agent behavior (Creative/Balanced/Deterministic) via semantic profiles. | `ExecutionProfile` enum, `profile` attribute, `.with_execution_profile()` | Implemented (v0.13.0) |
+| **Template File Validation** | Compile-time validation of template file paths with helpful error messages. | `template_file` attribute validation | Implemented (v0.13.0) |
 | **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
 
 ## Prompt Generation
