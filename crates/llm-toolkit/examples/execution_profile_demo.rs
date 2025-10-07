@@ -6,7 +6,7 @@
 use llm_toolkit::agent::impls::{ClaudeCodeAgent, GeminiAgent};
 use llm_toolkit::agent::{Agent, ExecutionProfile};
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logger to see the profile settings in action
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
