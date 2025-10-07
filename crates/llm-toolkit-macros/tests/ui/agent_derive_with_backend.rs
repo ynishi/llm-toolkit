@@ -1,7 +1,9 @@
 // Test that Agent derive macro works with backend attribute
+extern crate log;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, llm_toolkit::ToPrompt)]
+#[prompt(mode = "full")]
 pub struct TestOutput {
     pub result: String,
 }

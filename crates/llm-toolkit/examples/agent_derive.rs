@@ -9,7 +9,8 @@ use llm_toolkit::{Agent, agent::Agent as AgentTrait};
 use serde::{Deserialize, Serialize};
 
 // Define a structured output type for the agent
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, llm_toolkit::ToPrompt)]
+#[prompt(mode = "full")]
 struct ArticleSummary {
     title: String,
     key_points: Vec<String>,
@@ -25,7 +26,8 @@ struct ArticleSummary {
 struct ArticleSummarizerAgent;
 
 // Another example with a different output type
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, llm_toolkit::ToPrompt)]
+#[prompt(mode = "full")]
 struct CodeReview {
     overall_quality: String,
     issues: Vec<String>,

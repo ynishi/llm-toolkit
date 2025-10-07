@@ -136,10 +136,8 @@ mod tests {
             "ProcessError should be transient (backward compatibility)"
         );
 
-        let io_err = AgentError::IoError(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "timeout",
-        ));
+        let io_err =
+            AgentError::IoError(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"));
         assert!(
             io_err.is_transient(),
             "IoError should be transient (backward compatibility)"

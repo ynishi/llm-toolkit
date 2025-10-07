@@ -5,8 +5,8 @@
 //!
 //! Run with: cargo run --example agent_with_toprompt_schema --features agent,derive
 
-use llm_toolkit::{Agent, ToPrompt};
 use llm_toolkit::agent::Agent as AgentTrait;
+use llm_toolkit::{Agent, ToPrompt};
 use serde::{Deserialize, Serialize};
 
 // Case 1: With ToPrompt + mode - should get detailed schema
@@ -39,18 +39,12 @@ struct SimpleReview {
 }
 
 #[derive(Agent)]
-#[agent(
-    expertise = "Provide simple code review",
-    output = "SimpleReview"
-)]
+#[agent(expertise = "Provide simple code review", output = "SimpleReview")]
 struct SimpleReviewAgent;
 
 // Case 3: String output - no JSON enforcement
 #[derive(Agent)]
-#[agent(
-    expertise = "Explain code in plain language",
-    output = "String"
-)]
+#[agent(expertise = "Explain code in plain language", output = "String")]
 struct ExplainerAgent;
 
 #[tokio::main(flavor = "current_thread")]
@@ -116,10 +110,7 @@ async fn main() {
         !expertise3.contains("IMPORTANT"),
         "Should NOT have JSON instruction"
     );
-    assert!(
-        !expertise3.contains("JSON"),
-        "Should not mention JSON"
-    );
+    assert!(!expertise3.contains("JSON"), "Should not mention JSON");
     println!("\n✅ PASS: No JSON enforcement for String output");
 
     println!("\n{}", "=".repeat(80));

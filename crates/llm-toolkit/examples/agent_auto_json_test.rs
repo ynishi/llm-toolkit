@@ -10,7 +10,8 @@ use llm_toolkit::agent::Agent as AgentTrait;
 use serde::{Deserialize, Serialize};
 
 // Structured output - SHOULD get JSON enforcement
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, llm_toolkit::ToPrompt)]
+#[prompt(mode = "full")]
 struct ReviewResult {
     quality_score: u8,
     issues: Vec<String>,
@@ -26,10 +27,7 @@ struct CodeReviewAgent;
 
 // String output - should NOT get JSON enforcement
 #[derive(Agent)]
-#[agent(
-    expertise = "Explain code concepts in simple terms",
-    output = "String"
-)]
+#[agent(expertise = "Explain code concepts in simple terms", output = "String")]
 struct ExplainerAgent;
 
 #[tokio::main(flavor = "current_thread")]

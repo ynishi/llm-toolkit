@@ -5,12 +5,12 @@
 //!
 //! Run with: cargo run --example agent_retry_test --features agent
 
+use async_trait::async_trait;
 use llm_toolkit::Agent;
 use llm_toolkit::agent::{Agent as AgentTrait, AgentError, Payload};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use async_trait::async_trait;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Serialize, Deserialize, Debug, llm_toolkit::ToPrompt)]
 #[prompt(mode = "full")]

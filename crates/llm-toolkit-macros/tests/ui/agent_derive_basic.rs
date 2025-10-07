@@ -1,7 +1,9 @@
 // The trybuild environment needs explicit imports for all crates used by the macro expansion.
+extern crate log;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, llm_toolkit::ToPrompt)]
+#[prompt(mode = "full")]
 pub struct ArticleDraft {
     pub title: String,
     pub body: String,

@@ -365,6 +365,41 @@ mod tests {
     }
 
     #[test]
+    fn test_to_prompt_for_vec_of_strings() {
+        let items = vec!["apple", "banana", "cherry"];
+        assert_eq!(items.to_prompt(), "[apple, banana, cherry]");
+    }
+
+    #[test]
+    fn test_to_prompt_for_vec_of_numbers() {
+        let numbers = vec![1, 2, 3, 42];
+        assert_eq!(numbers.to_prompt(), "[1, 2, 3, 42]");
+    }
+
+    #[test]
+    fn test_to_prompt_for_empty_vec() {
+        let empty: Vec<String> = vec![];
+        assert_eq!(empty.to_prompt(), "[]");
+    }
+
+    #[test]
+    fn test_to_prompt_for_nested_vec() {
+        let nested = vec![vec![1, 2], vec![3, 4]];
+        assert_eq!(nested.to_prompt(), "[[1, 2], [3, 4]]");
+    }
+
+    #[test]
+    fn test_to_prompt_parts_for_vec() {
+        let items = vec!["a", "b", "c"];
+        let parts = items.to_prompt_parts();
+        assert_eq!(parts.len(), 1);
+        match &parts[0] {
+            PromptPart::Text(text) => assert_eq!(text, "[a, b, c]"),
+            _ => panic!("Expected Text variant"),
+        }
+    }
+
+    #[test]
     fn test_prompt_macro_no_args() {
         let prompt = prompt!("This is a static prompt.",).unwrap();
         assert_eq!(prompt, "This is a static prompt.");

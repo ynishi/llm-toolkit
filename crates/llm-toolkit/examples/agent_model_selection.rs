@@ -8,7 +8,8 @@
 use llm_toolkit::{Agent, agent::Agent as AgentTrait};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, llm_toolkit::ToPrompt)]
+#[prompt(mode = "full")]
 struct CodeAnalysis {
     language: String,
     complexity: String,

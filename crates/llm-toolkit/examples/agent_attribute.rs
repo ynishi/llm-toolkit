@@ -8,7 +8,8 @@
 use llm_toolkit::agent::impls::ClaudeCodeAgent;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, llm_toolkit::ToPrompt)]
+#[prompt(mode = "full")]
 struct TechnicalDoc {
     title: String,
     sections: Vec<String>,
