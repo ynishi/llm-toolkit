@@ -1,7 +1,7 @@
 // Test for the new attribute macro #[agent(...)]
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, llm_toolkit_macros::ToPrompt)]
 pub struct ArticleData {
     pub title: String,
     pub content: String,

@@ -65,6 +65,12 @@ pub use llm_toolkit_macros::define_intent;
 #[cfg(feature = "agent")]
 pub use llm_toolkit_macros::Agent;
 
+/// An attribute macro to define agent structs with automatic trait implementations.
+///
+/// This macro is available only when the `agent` feature is enabled.
+#[cfg(feature = "agent")]
+pub use llm_toolkit_macros::agent;
+
 pub mod extract;
 pub mod intent;
 pub mod multimodal;

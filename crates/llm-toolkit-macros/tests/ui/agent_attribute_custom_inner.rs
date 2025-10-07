@@ -41,7 +41,7 @@ impl Agent for OlamaAgent {
 }
 
 // Define output type
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, llm_toolkit_macros::ToPrompt)]
 struct ArticleData {
     title: String,
     body: String,
@@ -76,9 +76,11 @@ fn main() {
     // Test 3: Multiple agents sharing the same backend
     let _reviewer = CodeReviewerAgent::new(custom_olama);
 
-    // Test 4: Each agent has different expertise
+    // Test 4: Each agent has different expertise (with auto-added JSON schema instructions)
     let writer = ArticleWriterAgent::default();
     let reviewer = CodeReviewerAgent::default();
-    assert_eq!(writer.expertise(), "Writing articles with OlamaAgent backend");
-    assert_eq!(reviewer.expertise(), "Reviewing code with OlamaAgent backend");
+    assert!(writer.expertise().starts_with("Writing articles with OlamaAgent backend"));
+    assert!(writer.expertise().contains("IMPORTANT"));
+    assert!(reviewer.expertise().starts_with("Reviewing code with OlamaAgent backend"));
+    assert!(reviewer.expertise().contains("IMPORTANT"));
 }
