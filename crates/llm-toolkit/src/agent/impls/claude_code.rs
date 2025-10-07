@@ -63,6 +63,8 @@ pub struct ClaudeCodeAgent {
     claude_path: Option<PathBuf>,
     /// Model to use for generation
     model: Option<ClaudeModel>,
+    /// Execution profile (note: Claude CLI doesn't support parameter tuning)
+    execution_profile: crate::agent::ExecutionProfile,
 }
 
 impl ClaudeCodeAgent {
@@ -74,6 +76,7 @@ impl ClaudeCodeAgent {
         Self {
             claude_path: None,
             model: None,
+            execution_profile: crate::agent::ExecutionProfile::default(),
         }
     }
 
@@ -82,6 +85,7 @@ impl ClaudeCodeAgent {
         Self {
             claude_path: Some(path),
             model: None,
+            execution_profile: crate::agent::ExecutionProfile::default(),
         }
     }
 
@@ -101,6 +105,15 @@ impl ClaudeCodeAgent {
             "opus" | "opus-4" | "claude-opus-4" => ClaudeModel::Opus4,
             _ => ClaudeModel::Sonnet45, // Default fallback
         });
+        self
+    }
+
+    /// Sets the execution profile.
+    ///
+    /// Note: Claude CLI doesn't currently support temperature/top_p parameters,
+    /// so this setting is only used for logging and documentation purposes.
+    pub fn with_execution_profile(mut self, profile: crate::agent::ExecutionProfile) -> Self {
+        self.execution_profile = profile;
         self
     }
 
@@ -176,7 +189,19 @@ impl Agent for ClaudeCodeAgent {
 
         log::info!("🤖 ClaudeCodeAgent executing...");
         log::debug!("Intent length: {} chars", text_intent.len());
+        log::debug!("Execution profile: {:?}", self.execution_profile);
         log::trace!("Full intent: {}", text_intent);
+
+        if !matches!(
+            self.execution_profile,
+            crate::agent::ExecutionProfile::Balanced
+        ) {
+            log::warn!(
+                "ClaudeCodeAgent: Execution profile {:?} is set, but Claude CLI doesn't support \
+                 parameter tuning (temperature, top_p, etc.). Using default behavior.",
+                self.execution_profile
+            );
+        }
 
         if payload.has_images() {
             log::warn!(
@@ -297,6 +322,12 @@ where
         self.inner = self.inner.with_model_str(model);
         self
     }
+
+    /// Sets the execution profile.
+    pub fn with_execution_profile(mut self, profile: crate::agent::ExecutionProfile) -> Self {
+        self.inner = self.inner.with_execution_profile(profile);
+        self
+    }
 }
 
 impl<T> Default for ClaudeCodeJsonAgent<T>
@@ -381,5 +412,56 @@ mod tests {
         let path = PathBuf::from("/usr/local/bin/claude");
         let agent = ClaudeCodeAgent::with_path(path.clone());
         assert_eq!(agent.claude_path, Some(path));
+    }
+
+    #[test]
+    fn test_claude_code_agent_with_execution_profile() {
+        let agent =
+            ClaudeCodeAgent::new().with_execution_profile(crate::agent::ExecutionProfile::Creative);
+        assert!(matches!(
+            agent.execution_profile,
+            crate::agent::ExecutionProfile::Creative
+        ));
+    }
+
+    #[test]
+    fn test_claude_code_agent_default_profile() {
+        let agent = ClaudeCodeAgent::new();
+        assert!(matches!(
+            agent.execution_profile,
+            crate::agent::ExecutionProfile::Balanced
+        ));
+    }
+
+    #[test]
+    fn test_claude_code_agent_builder_pattern() {
+        let agent = ClaudeCodeAgent::new()
+            .with_model(ClaudeModel::Opus4)
+            .with_execution_profile(crate::agent::ExecutionProfile::Deterministic);
+
+        assert!(matches!(agent.model, Some(ClaudeModel::Opus4)));
+        assert!(matches!(
+            agent.execution_profile,
+            crate::agent::ExecutionProfile::Deterministic
+        ));
+    }
+
+    #[test]
+    fn test_claude_code_json_agent_with_execution_profile() {
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Serialize, Deserialize)]
+        struct TestOutput {
+            value: String,
+        }
+
+        let agent = ClaudeCodeJsonAgent::<TestOutput>::new()
+            .with_execution_profile(crate::agent::ExecutionProfile::Creative);
+
+        // Verify the inner agent has the profile set
+        assert!(matches!(
+            agent.inner.execution_profile,
+            crate::agent::ExecutionProfile::Creative
+        ));
     }
 }

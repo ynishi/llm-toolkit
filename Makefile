@@ -21,7 +21,9 @@ EXAMPLES := \
 	agent_retry_test \
 	agent_backend_switching \
 	agent_model_selection \
-	agent_attribute
+	agent_attribute \
+	execution_profile_demo \
+	agent_with_profile
 
 # test-examplesターゲットで、リストをループ処理する
 test-examples:

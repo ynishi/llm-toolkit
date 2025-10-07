@@ -2744,6 +2744,7 @@ struct AgentAttrs {
     inner: Option<String>,
     default_inner: Option<String>,
     max_retries: Option<u32>,
+    profile: Option<String>,
 }
 
 impl Parse for AgentAttrs {
@@ -2755,6 +2756,7 @@ impl Parse for AgentAttrs {
         let mut inner = None;
         let mut default_inner = None;
         let mut max_retries = None;
+        let mut profile = None;
 
         let pairs = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
 
@@ -2824,6 +2826,15 @@ impl Parse for AgentAttrs {
                         max_retries = Some(lit_int.base10_parse()?);
                     }
                 }
+                Meta::NameValue(nv) if nv.path.is_ident("profile") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = &nv.value
+                    {
+                        profile = Some(lit_str.value());
+                    }
+                }
                 _ => {}
             }
         }
@@ -2836,6 +2847,7 @@ impl Parse for AgentAttrs {
             inner,
             default_inner,
             max_retries,
+            profile,
         })
     }
 }
@@ -2856,6 +2868,7 @@ fn parse_agent_attrs(attrs: &[syn::Attribute]) -> syn::Result<AgentAttrs> {
         inner: None,
         default_inner: None,
         max_retries: None,
+        profile: None,
     })
 }
 
@@ -2864,6 +2877,7 @@ fn generate_backend_constructors(
     struct_name: &syn::Ident,
     backend: &str,
     _model: Option<&str>,
+    _profile: Option<&str>,
     crate_path: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     match backend {
@@ -2912,33 +2926,42 @@ fn generate_default_impl(
     struct_name: &syn::Ident,
     backend: &str,
     model: Option<&str>,
+    profile: Option<&str>,
     crate_path: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
+    // Parse profile string to ExecutionProfile
+    let profile_expr = if let Some(profile_str) = profile {
+        match profile_str.to_lowercase().as_str() {
+            "creative" => quote! { #crate_path::agent::ExecutionProfile::Creative },
+            "balanced" => quote! { #crate_path::agent::ExecutionProfile::Balanced },
+            "deterministic" => quote! { #crate_path::agent::ExecutionProfile::Deterministic },
+            _ => quote! { #crate_path::agent::ExecutionProfile::Balanced }, // Default fallback
+        }
+    } else {
+        quote! { #crate_path::agent::ExecutionProfile::default() }
+    };
+
     let agent_init = match backend {
         "gemini" => {
+            let mut builder = quote! { #crate_path::agent::impls::GeminiAgent::new() };
+
             if let Some(model_str) = model {
-                quote! {
-                    #crate_path::agent::impls::GeminiAgent::new()
-                        .with_model_str(#model_str)
-                }
-            } else {
-                quote! {
-                    #crate_path::agent::impls::GeminiAgent::new()
-                }
+                builder = quote! { #builder.with_model_str(#model_str) };
             }
+
+            builder = quote! { #builder.with_execution_profile(#profile_expr) };
+            builder
         }
         _ => {
             // Default to Claude
+            let mut builder = quote! { #crate_path::agent::impls::ClaudeCodeAgent::new() };
+
             if let Some(model_str) = model {
-                quote! {
-                    #crate_path::agent::impls::ClaudeCodeAgent::new()
-                        .with_model_str(#model_str)
-                }
-            } else {
-                quote! {
-                    #crate_path::agent::impls::ClaudeCodeAgent::new()
-                }
+                builder = quote! { #builder.with_model_str(#model_str) };
             }
+
+            builder = quote! { #builder.with_execution_profile(#profile_expr) };
+            builder
         }
     };
 
@@ -2980,6 +3003,7 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
         .backend
         .unwrap_or_else(|| String::from("claude"));
     let model = agent_attrs.model;
+    let _profile = agent_attrs.profile; // Not used in simple derive macro
     let max_retries = agent_attrs.max_retries.unwrap_or(3); // Default: 3 retries
 
     // Determine crate path
@@ -3201,6 +3225,7 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
         .backend
         .unwrap_or_else(|| String::from("claude"));
     let model = agent_attrs.model;
+    let profile = agent_attrs.profile;
 
     // Determine crate path
     let found_crate =
@@ -3266,10 +3291,20 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
         (quote! {}, default_impl)
     } else {
         // Built-in backend - generate backend-specific constructors
-        let backend_constructors =
-            generate_backend_constructors(struct_name, &backend, model.as_deref(), &crate_path);
-        let default_impl =
-            generate_default_impl(struct_name, &backend, model.as_deref(), &crate_path);
+        let backend_constructors = generate_backend_constructors(
+            struct_name,
+            &backend,
+            model.as_deref(),
+            profile.as_deref(),
+            &crate_path,
+        );
+        let default_impl = generate_default_impl(
+            struct_name,
+            &backend,
+            model.as_deref(),
+            profile.as_deref(),
+            &crate_path,
+        );
         (backend_constructors, default_impl)
     };
 

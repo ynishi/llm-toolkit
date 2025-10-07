@@ -65,6 +65,8 @@ pub struct GeminiAgent {
     system_prompt: Option<String>,
     /// Skip loading GEMINI.md memory file
     skip_memory: bool,
+    /// Execution profile for controlling behavior
+    execution_profile: crate::agent::ExecutionProfile,
 }
 
 impl GeminiAgent {
@@ -80,6 +82,7 @@ impl GeminiAgent {
             model: GeminiModel::default(),
             system_prompt: None,
             skip_memory: true,
+            execution_profile: crate::agent::ExecutionProfile::default(),
         }
     }
 
@@ -90,6 +93,7 @@ impl GeminiAgent {
             model: GeminiModel::default(),
             system_prompt: None,
             skip_memory: true,
+            execution_profile: crate::agent::ExecutionProfile::default(),
         }
     }
 
@@ -122,6 +126,17 @@ impl GeminiAgent {
     /// Default is `true` (skip memory for stateless execution).
     pub fn with_skip_memory(mut self, skip: bool) -> Self {
         self.skip_memory = skip;
+        self
+    }
+
+    /// Sets the execution profile.
+    ///
+    /// The profile will be converted to Gemini-specific parameters:
+    /// - Creative: temperature=0.9, top_p=0.95
+    /// - Balanced: temperature=0.7, top_p=0.9 (default)
+    /// - Deterministic: temperature=0.1, top_p=0.8
+    pub fn with_execution_profile(mut self, profile: crate::agent::ExecutionProfile) -> Self {
+        self.execution_profile = profile;
         self
     }
 
@@ -177,6 +192,24 @@ impl GeminiAgent {
 
         // Add model
         cmd.arg("--model").arg(self.model.as_str());
+
+        // Add execution profile parameters
+        let (temperature, top_p) = match self.execution_profile {
+            crate::agent::ExecutionProfile::Creative => (0.9, 0.95),
+            crate::agent::ExecutionProfile::Balanced => (0.7, 0.9),
+            crate::agent::ExecutionProfile::Deterministic => (0.1, 0.8),
+        };
+        cmd.arg("--temperature")
+            .arg(temperature.to_string())
+            .arg("--top-p")
+            .arg(top_p.to_string());
+
+        log::debug!(
+            "GeminiAgent: Using execution profile {:?} (temperature={}, top_p={})",
+            self.execution_profile,
+            temperature,
+            top_p
+        );
 
         // Add skip-memory flag if enabled
         if self.skip_memory {
@@ -287,6 +320,67 @@ mod tests {
     fn test_gemini_agent_with_system_prompt() {
         let agent = GeminiAgent::new().with_system_prompt("You are a helpful assistant");
 
+        assert!(agent.system_prompt.is_some());
+    }
+
+    #[test]
+    fn test_gemini_agent_with_execution_profile() {
+        let agent =
+            GeminiAgent::new().with_execution_profile(crate::agent::ExecutionProfile::Creative);
+
+        assert!(matches!(
+            agent.execution_profile,
+            crate::agent::ExecutionProfile::Creative
+        ));
+    }
+
+    #[test]
+    fn test_gemini_agent_default_profile() {
+        let agent = GeminiAgent::new();
+        assert!(matches!(
+            agent.execution_profile,
+            crate::agent::ExecutionProfile::Balanced
+        ));
+    }
+
+    #[test]
+    fn test_gemini_agent_execution_profile_parameters() {
+        // Test that different profiles result in different parameter conversions
+        let creative =
+            GeminiAgent::new().with_execution_profile(crate::agent::ExecutionProfile::Creative);
+        let balanced =
+            GeminiAgent::new().with_execution_profile(crate::agent::ExecutionProfile::Balanced);
+        let deterministic = GeminiAgent::new()
+            .with_execution_profile(crate::agent::ExecutionProfile::Deterministic);
+
+        // Build commands and verify parameters are set correctly
+        // (We can't easily test the actual command without mocking, but we can verify the profile is stored)
+        assert!(matches!(
+            creative.execution_profile,
+            crate::agent::ExecutionProfile::Creative
+        ));
+        assert!(matches!(
+            balanced.execution_profile,
+            crate::agent::ExecutionProfile::Balanced
+        ));
+        assert!(matches!(
+            deterministic.execution_profile,
+            crate::agent::ExecutionProfile::Deterministic
+        ));
+    }
+
+    #[test]
+    fn test_gemini_agent_builder_pattern_with_profile() {
+        let agent = GeminiAgent::new()
+            .with_model(GeminiModel::Pro)
+            .with_execution_profile(crate::agent::ExecutionProfile::Deterministic)
+            .with_system_prompt("Test prompt");
+
+        assert!(matches!(agent.model, GeminiModel::Pro));
+        assert!(matches!(
+            agent.execution_profile,
+            crate::agent::ExecutionProfile::Deterministic
+        ));
         assert!(agent.system_prompt.is_some());
     }
 }

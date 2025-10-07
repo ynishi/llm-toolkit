@@ -219,6 +219,21 @@ pub mod payload;
 #[cfg(feature = "agent")]
 pub mod impls;
 
+/// Defines the execution profile for an agent, controlling its behavior.
+///
+/// This enum provides a semantic way to configure agents for different tasks
+/// without exposing model-specific parameters like temperature directly.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum ExecutionProfile {
+    /// For tasks requiring creativity and diverse outputs.
+    Creative,
+    /// A balanced profile for general use cases.
+    #[default]
+    Balanced,
+    /// For tasks requiring precision, consistency, and predictable outputs.
+    Deterministic,
+}
+
 pub use error::AgentError;
 pub use payload::{Payload, PayloadContent};
 
