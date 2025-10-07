@@ -95,6 +95,26 @@ impl Payload {
         self
     }
 
+    /// Prepends text content to the beginning of this payload.
+    ///
+    /// This is useful for adding system instructions or context
+    /// before the user's original content.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// let payload = Payload::text("User question")
+    ///     .prepend_text("System instructions: ");
+    ///
+    /// assert_eq!(payload.to_text(), "System instructions: \nUser question");
+    /// ```
+    pub fn prepend_text(mut self, text: impl Into<String>) -> Self {
+        self.contents.insert(0, PayloadContent::Text(text.into()));
+        self
+    }
+
     /// Returns all text contents concatenated with newlines.
     ///
     /// This is useful for agents that only support text input.
@@ -204,5 +224,28 @@ mod tests {
         assert_eq!(payload.contents.len(), 3);
         assert!(payload.has_images());
         assert!(!payload.is_text_only());
+    }
+
+    #[test]
+    fn test_prepend_text() {
+        let payload = Payload::text("User question").prepend_text("System instructions");
+
+        assert_eq!(payload.contents.len(), 2);
+        assert_eq!(payload.to_text(), "System instructions\nUser question");
+    }
+
+    #[test]
+    fn test_prepend_text_with_multimodal() {
+        let payload = Payload::text("User question")
+            .with_image(PathBuf::from("/test.png"))
+            .prepend_text("System instructions");
+
+        assert_eq!(payload.contents.len(), 3);
+        assert!(payload.has_images());
+        // First element should be the prepended text
+        assert!(matches!(
+            &payload.contents[0],
+            PayloadContent::Text(s) if s == "System instructions"
+        ));
     }
 }

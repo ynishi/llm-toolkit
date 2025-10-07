@@ -3394,8 +3394,11 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
 
             async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
-                // Use the inner agent (no need to create a new one each time)
-                let response = self.inner.execute(intent).await?;
+                // Prepend expertise to the payload
+                let enhanced_payload = intent.prepend_text(self.expertise());
+
+                // Use the inner agent with the enhanced payload
+                let response = self.inner.execute(enhanced_payload).await?;
 
                 // Extract JSON from the response
                 let json_str = #crate_path::extract_json(&response)
