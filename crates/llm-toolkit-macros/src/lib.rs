@@ -2743,6 +2743,7 @@ struct AgentAttrs {
     model: Option<String>,
     inner: Option<String>,
     default_inner: Option<String>,
+    max_retries: Option<u32>,
 }
 
 impl Parse for AgentAttrs {
@@ -2753,6 +2754,7 @@ impl Parse for AgentAttrs {
         let mut model = None;
         let mut inner = None;
         let mut default_inner = None;
+        let mut max_retries = None;
 
         let pairs = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
 
@@ -2813,6 +2815,15 @@ impl Parse for AgentAttrs {
                         default_inner = Some(lit_str.value());
                     }
                 }
+                Meta::NameValue(nv) if nv.path.is_ident("max_retries") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Int(lit_int),
+                        ..
+                    }) = &nv.value
+                    {
+                        max_retries = Some(lit_int.base10_parse()?);
+                    }
+                }
                 _ => {}
             }
         }
@@ -2824,6 +2835,7 @@ impl Parse for AgentAttrs {
             model,
             inner,
             default_inner,
+            max_retries,
         })
     }
 }
@@ -2843,6 +2855,7 @@ fn parse_agent_attrs(attrs: &[syn::Attribute]) -> syn::Result<AgentAttrs> {
         model: None,
         inner: None,
         default_inner: None,
+        max_retries: None,
     })
 }
 
@@ -2967,6 +2980,7 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
         .backend
         .unwrap_or_else(|| String::from("claude"));
     let model = agent_attrs.model;
+    let max_retries = agent_attrs.max_retries.unwrap_or(3); // Default: 3 retries
 
     // Determine crate path
     let found_crate =
@@ -3087,16 +3101,56 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
                 // Create internal agent based on backend configuration
                 #agent_init
 
-                // Execute and get response
-                let response = agent.execute(intent).await?;
+                // Retry configuration
+                let max_retries: u32 = #max_retries;
+                let mut attempts = 0u32;
 
-                // Extract JSON from the response
-                let json_str = #crate_path::extract_json(&response)
-                    .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))?;
+                loop {
+                    attempts += 1;
 
-                // Deserialize into output type
-                serde_json::from_str(&json_str)
-                    .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))
+                    // Execute and get response
+                    let result = async {
+                        let response = agent.execute(intent.clone()).await?;
+
+                        // Extract JSON from the response
+                        let json_str = #crate_path::extract_json(&response)
+                            .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))?;
+
+                        // Deserialize into output type
+                        serde_json::from_str::<Self::Output>(&json_str)
+                            .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))
+                    }.await;
+
+                    match result {
+                        Ok(output) => return Ok(output),
+                        Err(e) if e.is_retryable() && attempts < max_retries => {
+                            // Log retry attempt
+                            log::warn!(
+                                "Agent execution failed (attempt {}/{}): {}. Retrying...",
+                                attempts,
+                                max_retries,
+                                e
+                            );
+
+                            // Simple fixed delay: 100ms * attempt number
+                            let delay_ms = 100 * attempts as u64;
+                            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+
+                            // Continue to next iteration
+                            continue;
+                        }
+                        Err(e) => {
+                            if attempts > 1 {
+                                log::error!(
+                                    "Agent execution failed after {} attempts: {}",
+                                    attempts,
+                                    e
+                                );
+                            }
+                            return Err(e);
+                        }
+                    }
+                }
             }
 
             async fn is_available(&self) -> Result<(), #crate_path::agent::AgentError> {

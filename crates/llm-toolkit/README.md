@@ -34,6 +34,7 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentFrame`, `IntentExtractor`) | Implemented |
 | **Agent API** | Define reusable AI agents with expertise and structured outputs. | `Agent` trait, `#[derive(Agent)]` macro | Implemented |
 | **Auto-JSON Enforcement** | Automatically add JSON schema instructions to agent prompts for better LLM compliance. | `#[derive(Agent)]` with `ToPrompt::prompt_schema()` integration | Implemented |
+| **Built-in Retry** | Automatic retry on transient errors (ParseError, ProcessError, IoError) with configurable attempts. | `max_retries` attribute, `AgentError::is_retryable()` | Implemented |
 | **Multi-Modal Payload** | Pass text and images to agents through a unified `Payload` interface with backward compatibility. | `Payload`, `PayloadContent` types | Implemented |
 | **Multi-Agent Orchestration** | Coordinate multiple agents to execute complex workflows with adaptive error recovery. | `Orchestrator`, `BlueprintWorkflow`, `StrategyMap` | Implemented |
 | **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
@@ -896,6 +897,62 @@ struct CodeReviewAgent;
    - For plain text responses
 
 **Recommendation:** Always use `#[derive(ToPrompt)]` with `#[prompt(mode = "full")]` for structured outputs to get the best LLM compliance.
+
+**Automatic Retry on Transient Errors:**
+
+All agents automatically retry on transient errors (ParseError, ProcessError, IoError) without any configuration:
+
+```rust
+#[derive(Agent)]
+#[agent(
+    expertise = "Extract data from documents",
+    output = "ExtractedData"
+)]
+struct DataExtractorAgent;
+
+// Automatically retries up to 3 times on:
+// - ParseError: LLM output malformed
+// - ProcessError: Process communication issues
+// - IoError: Temporary I/O failures
+//
+// Behavior:
+// - Attempt 1 fails → wait 100ms → retry
+// - Attempt 2 fails → wait 200ms → retry
+// - Attempt 3 fails → wait 300ms → retry
+// - All attempts exhausted → return error
+```
+
+**Customizing Retry Behavior:**
+
+```rust
+// Increase retry attempts for critical operations
+#[agent(
+    expertise = "...",
+    output = "MyOutput",
+    max_retries = 5  // Default is 3
+)]
+struct ResilientAgent;
+
+// Disable retry for fast-fail scenarios
+#[agent(
+    expertise = "...",
+    output = "MyOutput",
+    max_retries = 0  // No retry
+)]
+struct NoRetryAgent;
+```
+
+**Design Philosophy:**
+
+Agent-level retries are intentionally **simple and limited** (2-3 attempts, fixed delay):
+- **Fail fast**: Quickly report errors to the orchestrator
+- **Orchestrator is smarter**: Has broader context for complex error recovery
+  - Try different agents
+  - Redesign strategy
+  - Escalate to human
+- **System stability**: Simple local retries + complex orchestration at the top = robust system
+
+This design aligns with the Orchestrator's 3-stage error recovery (Tactical → Full Redesign → Human Escalation).
 
 ##### 2. Advanced Agents with `#[agent(...)]` (Recommended for Production)
 
