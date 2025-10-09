@@ -3558,3 +3558,53 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
+
+/// Derive macro for TypeMarker trait.
+///
+/// Automatically implements the TypeMarker trait and adds a `__type` field
+/// with a default value based on the struct name.
+///
+/// # Example
+///
+/// ```ignore
+/// use llm_toolkit::orchestrator::TypeMarker;
+/// use serde::{Serialize, Deserialize};
+///
+/// #[derive(Serialize, Deserialize, TypeMarker)]
+/// pub struct HighConceptResponse {
+///     pub reasoning: String,
+///     pub high_concept: String,
+/// }
+///
+/// // Expands to:
+/// // - Adds __type: String field with #[serde(default = "...")]
+/// // - Implements TypeMarker with TYPE_NAME = "HighConceptResponse"
+/// ```
+#[proc_macro_derive(TypeMarker)]
+pub fn derive_type_marker(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_name = &input.ident;
+    let type_name_str = struct_name.to_string();
+
+    // Get the crate path for llm_toolkit
+    let found_crate =
+        crate_name("llm-toolkit").expect("llm-toolkit should be present in `Cargo.toml`");
+    let crate_path = match found_crate {
+        FoundCrate::Itself => {
+            let ident = syn::Ident::new("llm_toolkit", proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+    };
+
+    let expanded = quote! {
+        impl #crate_path::orchestrator::TypeMarker for #struct_name {
+            const TYPE_NAME: &'static str = #type_name_str;
+        }
+    };
+
+    TokenStream::from(expanded)
+}

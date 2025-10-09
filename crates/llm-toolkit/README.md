@@ -1539,6 +1539,112 @@ println!("Full context: {:?}", context);
 
 **Note:** These methods are available after `execute()` completes. The context is preserved until the next `execute()` call.
 
+#### Type-Based Output Retrieval with `TypeMarker` (v0.13.7+)
+
+**Problem**: The orchestrator's strategy LLM generates non-deterministic step IDs (`step_1`, `world_generation`, `analysis_phase`, etc.), making it difficult to retrieve specific outputs by step ID. You want to retrieve outputs by *type*, not by guessing step names.
+
+**Solution**: Use the `TypeMarker` pattern to retrieve outputs based on their type, regardless of which step produced them.
+
+**How It Works:**
+
+1. Add a `__type` field to your response structures with `#[derive(TypeMarker)]`
+2. Use `orchestrator.get_typed_output::<T>()` to retrieve by type
+3. The orchestrator searches the context for any output with matching `__type` field
+
+**Example:**
+
+```rust
+use llm_toolkit::{TypeMarker, ToPrompt};
+use serde::{Deserialize, Serialize};
+
+// Define your response types with TypeMarker
+#[derive(Serialize, Deserialize, Debug, Clone, ToPrompt, TypeMarker)]
+#[prompt(mode = "full")]
+pub struct HighConceptResponse {
+    #[serde(default = "default_high_concept_type")]
+    __type: String,
+    pub reasoning: String,
+    pub high_concept: String,
+}
+
+fn default_high_concept_type() -> String {
+    "HighConceptResponse".to_string()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, ToPrompt, TypeMarker)]
+#[prompt(mode = "full")]
+pub struct ProfileResponse {
+    #[serde(default = "default_profile_type")]
+    __type: String,
+    pub name: String,
+    pub role: String,
+}
+
+fn default_profile_type() -> String {
+    "ProfileResponse".to_string()
+}
+
+// Register agents and execute
+orchestrator.add_agent_with_to_prompt(ConceptAgent::default());
+orchestrator.add_agent_with_to_prompt(ProfileAgent::default());
+
+let result = orchestrator.execute(&intent).await?;
+
+// Retrieve outputs by type - no need to know step IDs!
+let concept: HighConceptResponse = orchestrator.get_typed_output()?;
+let profile: ProfileResponse = orchestrator.get_typed_output()?;
+
+println!("Concept: {}", concept.high_concept);
+println!("Profile: {} - {}", profile.name, profile.role);
+```
+
+**Key Points:**
+
+- **`#[derive(TypeMarker)]`**: Automatically implements the `TypeMarker` trait, setting `TYPE_NAME` to the struct name
+- **`__type` field**: A marker field that the LLM includes in its JSON output (via automatic schema generation from `ToPrompt`)
+- **`#[serde(default = "...")]`**: Ensures the field is populated even if the LLM omits it
+- **`get_typed_output<T>()`**: Type-safe retrieval that returns `Result<T, OrchestratorError>`
+
+**Benefits:**
+
+- ✅ **No Step ID Guessing**: Retrieve outputs by type, not by unpredictable step names
+- ✅ **Type-Safe**: Compile-time verification of output types
+- ✅ **Automatic Schema**: The `ToPrompt` derive automatically includes `__type` in the JSON schema
+- ✅ **DRY Principle**: No manual JSON schema duplication
+- ✅ **Works with Dynamic Workflows**: Strategy LLM can name steps anything; your code still works
+
+**Common Pattern:**
+
+```rust
+// 1. Execute orchestrated workflow
+let result = orchestrator.execute(&intent).await?;
+
+// 2. Retrieve all needed outputs by type
+let world_concept: WorldConceptResponse = orchestrator.get_typed_output()?;
+let high_concept: HighConceptResponse = orchestrator.get_typed_output()?;
+let emblem: EmblemResponse = orchestrator.get_typed_output()?;
+let profile: ProfileResponse = orchestrator.get_typed_output()?;
+
+// 3. Assemble final result
+let spirit = Spirit {
+    world_concept: world_concept.into(),
+    high_concept: high_concept.high_concept,
+    emblems: vec![emblem.obvious_emblem, emblem.creative_emblem],
+    profile: profile.into(),
+};
+```
+
+**Comparison with Step-Based Retrieval:**
+
+```rust
+// ❌ Step-based retrieval (fragile)
+let concept_json = orchestrator.get_step_output("step_1")?; // What if it's "concept_generation"?
+let concept: HighConceptResponse = serde_json::from_value(concept_json.clone())?;
+
+// ✅ Type-based retrieval (robust)
+let concept: HighConceptResponse = orchestrator.get_typed_output()?; // Always works!
+```
+
 **Run the example:**
 ```bash
 cargo run --example orchestrator_basic --features agent,derive

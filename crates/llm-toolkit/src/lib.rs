@@ -71,6 +71,32 @@ pub use llm_toolkit_macros::Agent;
 #[cfg(feature = "agent")]
 pub use llm_toolkit_macros::agent;
 
+/// A derive macro to implement the `TypeMarker` trait for structs.
+///
+/// This macro is available only when the `agent` feature is enabled.
+/// It automatically generates a TypeMarker implementation that provides
+/// a type identifier string for type-based orchestrator output retrieval.
+///
+/// # Example
+///
+/// ```ignore
+/// use llm_toolkit::TypeMarker;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Serialize, Deserialize, TypeMarker)]
+/// struct MyResponse {
+///     #[serde(default = "default_type")]
+///     __type: String,
+///     result: String,
+/// }
+///
+/// fn default_type() -> String {
+///     "MyResponse".to_string()
+/// }
+/// ```
+#[cfg(feature = "agent")]
+pub use llm_toolkit_macros::TypeMarker;
+
 pub mod extract;
 pub mod intent;
 pub mod multimodal;
@@ -93,7 +119,9 @@ pub use prompt::{PromptPart, PromptSetError, ToPrompt, ToPromptFor, ToPromptSet}
 pub use agent::{Agent, AgentError};
 
 #[cfg(feature = "agent")]
-pub use orchestrator::{BlueprintWorkflow, Orchestrator, OrchestratorError, StrategyMap};
+pub use orchestrator::{
+    BlueprintWorkflow, Orchestrator, OrchestratorError, StrategyMap, TypeMarker,
+};
 
 use extract::ParseError;
 
