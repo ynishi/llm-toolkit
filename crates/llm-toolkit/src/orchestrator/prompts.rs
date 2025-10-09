@@ -429,6 +429,48 @@ impl FullRegenerateRequest {
     }
 }
 
+/// Request for semantic matching of a placeholder to appropriate step output.
+#[derive(Serialize, ToPrompt)]
+#[prompt(template = r##"
+# Semantic Step Matching Task
+
+You need to identify which previous step's output best matches the requested placeholder.
+
+## Placeholder
+{{ placeholder }}
+
+## Available Previous Steps
+{{ steps_info }}
+
+---
+
+## Your Task
+
+Analyze the placeholder name and the descriptions of previous steps, then return ONLY the step_id of the most appropriate match.
+
+**Guidelines:**
+1. Consider the semantic meaning of the placeholder (e.g., "concept_content" relates to conceptual or high-level descriptions)
+2. Match against step descriptions, expected outputs, and step IDs
+3. If multiple steps seem relevant, choose the most recent one
+4. Return ONLY the step_id (e.g., "step_1", "step_2"), nothing else
+
+**Important:** Return ONLY the step_id string, no explanation or additional text.
+"##)]
+pub struct SemanticMatchRequest {
+    pub placeholder: String,
+    pub steps_info: String,
+}
+
+impl SemanticMatchRequest {
+    /// Creates a new semantic match request.
+    pub fn new(placeholder: String, steps_info: String) -> Self {
+        Self {
+            placeholder,
+            steps_info,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
