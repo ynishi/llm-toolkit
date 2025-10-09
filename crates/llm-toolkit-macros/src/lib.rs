@@ -196,17 +196,60 @@ fn generate_schema_only_parts(
                 }
             });
         } else {
-            // Regular field - use static type formatting
-            let type_str = format_type_for_schema(&field.ty);
-            let comment = if !field_docs.is_empty() {
-                format!(", // {}", field_docs)
-            } else {
-                String::new()
-            };
+            // Check if this is a custom type that implements ToPrompt (nested object)
+            let field_type = &field.ty;
+            let is_primitive = is_primitive_type(field_type);
 
-            field_schema_parts.push(quote! {
-                format!("  \"{}\": \"{}\"{}{}", #field_name_str, #type_str, #comment, #comma)
-            });
+            if !is_primitive {
+                // Try to expand nested object schema
+                let comment = if !field_docs.is_empty() {
+                    format!(", // {}", field_docs)
+                } else {
+                    String::new()
+                };
+
+                field_schema_parts.push(quote! {
+                    {
+                        let nested_schema = <#field_type as #crate_path::prompt::ToPrompt>::prompt_schema();
+                        if nested_schema.is_empty() {
+                            // Fallback: just show type name
+                            let type_str = stringify!(#field_type).to_lowercase();
+                            format!("  \"{}\": \"{}\"{}{}", #field_name_str, type_str, #comment, #comma)
+                        } else {
+                            // Extract the inner schema content (skip header and outer braces)
+                            let nested_lines: Vec<&str> = nested_schema.lines()
+                                .skip_while(|line| line.starts_with("###") || line.trim() == "{")
+                                .take_while(|line| line.trim() != "}")
+                                .collect();
+
+                            if nested_lines.is_empty() {
+                                // Fallback if parsing fails
+                                let type_str = stringify!(#field_type).to_lowercase();
+                                format!("  \"{}\": \"{}\"{}{}", #field_name_str, type_str, #comment, #comma)
+                            } else {
+                                // Inline the nested schema
+                                let indented_content = nested_lines.iter()
+                                    .map(|line| format!("  {}", line))
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                format!("  \"{}\": {{\n{}\n  }}{}{}", #field_name_str, indented_content, #comment, #comma)
+                            }
+                        }
+                    }
+                });
+            } else {
+                // Primitive type - use static type formatting
+                let type_str = format_type_for_schema(&field.ty);
+                let comment = if !field_docs.is_empty() {
+                    format!(", // {}", field_docs)
+                } else {
+                    String::new()
+                };
+
+                field_schema_parts.push(quote! {
+                    format!("  \"{}\": \"{}\"{}{}", #field_name_str, #type_str, #comment, #comma)
+                });
+            }
         }
     }
 
@@ -238,6 +281,44 @@ fn extract_vec_inner_type(ty: &syn::Type) -> (bool, Option<&syn::Type>) {
         return (true, Some(inner_type));
     }
     (false, None)
+}
+
+/// Check if a type is a primitive type (should not be expanded as nested object)
+fn is_primitive_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(last_segment) = type_path.path.segments.last()
+    {
+        let type_name = last_segment.ident.to_string();
+        matches!(
+            type_name.as_str(),
+            "String"
+                | "str"
+                | "i8"
+                | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "f32"
+                | "f64"
+                | "bool"
+                | "Vec"
+                | "Option"
+                | "HashMap"
+                | "BTreeMap"
+                | "HashSet"
+                | "BTreeSet"
+        )
+    } else {
+        // References, arrays, etc. are considered primitive for now
+        true
+    }
 }
 
 /// Format a type for schema representation

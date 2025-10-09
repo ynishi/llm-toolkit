@@ -900,9 +900,9 @@ struct CodeReviewAgent;
 
 **Recommendation:** Always use `#[derive(ToPrompt)]` with `#[prompt(mode = "full")]` for structured outputs to get the best LLM compliance.
 
-**Nested Schema Expansion for `Vec<T>`:**
+**Nested Schema Expansion:**
 
-When your output struct contains `Vec<T>` where `T` implements `ToPrompt`, the schema automatically expands the nested type inline:
+The schema generation automatically expands nested types that implement `ToPrompt`, including both `Vec<T>` and regular nested objects:
 
 ```rust
 #[derive(Serialize, Deserialize, ToPrompt)]
@@ -943,11 +943,58 @@ pub struct ProducerOutput {
 - The nested schema is inlined with proper indentation
 - Result is cached with `OnceLock` for performance (zero cost after first call)
 
+**Nested Objects:**
+
+The same expansion works for regular nested objects (not just Vec):
+
+```rust
+#[derive(Serialize, Deserialize, ToPrompt)]
+#[prompt(mode = "full")]
+pub struct Emblem {
+    /// The name of the emblem
+    pub name: String,
+    /// A description of the emblem
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, ToPrompt)]
+#[prompt(mode = "full")]
+pub struct EmblemResponse {
+    /// An obvious, straightforward emblem
+    pub obvious_emblem: Emblem,
+    /// A creative, unexpected emblem
+    pub creative_emblem: Emblem,
+}
+
+// Generated schema for EmblemResponse:
+// ### Schema for `EmblemResponse`
+// {
+//   "obvious_emblem": {
+//     "name": "string", // The name of the emblem,
+//     "description": "string", // A description of the emblem
+//   }, // An obvious, straightforward emblem,
+//   "creative_emblem": {
+//     "name": "string", // The name of the emblem,
+//     "description": "string", // A description of the emblem
+//   }, // A creative, unexpected emblem
+// }
+```
+
+**How it works:**
+
+- The macro detects non-primitive types at compile time
+- For `Vec<T>`: expands as an array with T's schema inline
+- For nested objects: expands the object's schema inline
+- At runtime (first call only), it calls `T::prompt_schema()` to get the nested schema
+- The nested schema is inlined with proper indentation
+- Result is cached with `OnceLock` for performance (zero cost after first call)
+
 **Limitations:**
 
-- The nested type `T` must implement `ToPrompt` with `#[prompt(mode = "full")]`
+- The nested type must implement `ToPrompt` with `#[prompt(mode = "full")]`
 - Schema expansion happens at runtime on first call to `prompt_schema()` (then cached)
-- Deep nesting (e.g., `Vec<Vec<Vec<T>>>`) is supported but may be harder for LLMs to parse
+- Deep nesting is supported but may be harder for LLMs to parse
+- Primitive types (String, i32, bool, Vec, Option, HashMap, etc.) are not expanded
 
 **Automatic Retry on Transient Errors:**
 
