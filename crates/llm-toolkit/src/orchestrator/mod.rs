@@ -384,7 +384,10 @@ impl Orchestrator {
         self.context
             .iter()
             .filter_map(|(key, value)| {
-                if key.starts_with("step_") && key.ends_with("_output") && !key.ends_with("_output_prompt") {
+                if key.starts_with("step_")
+                    && key.ends_with("_output")
+                    && !key.ends_with("_output_prompt")
+                {
                     // Extract step_id from "step_{step_id}_output"
                     key.strip_prefix("step_")
                         .and_then(|s| s.strip_suffix("_output"))
@@ -1447,6 +1450,6 @@ mod tests {
         let _all_outputs = orch.get_all_step_outputs();
 
         // Before this fix, the above lines would not compile because context was private
-        assert!(true, "Context accessor methods are now public and accessible");
+        // The test passes if it compiles successfully (no assertion needed)
     }
 }
