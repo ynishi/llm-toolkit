@@ -1244,7 +1244,7 @@ async fn main() {
         5. Review and refine
     "#.to_string());
 
-    // Create orchestrator and add agents
+    // Create orchestrator (InnerValidatorAgent is automatically registered)
     let mut orchestrator = Orchestrator::new(blueprint);
     orchestrator.add_agent(Box::new(ClaudeCodeAgent::new()));
 
@@ -1297,7 +1297,7 @@ struct ResearchAgent;
 )]
 struct WriterAgent;
 
-// Add both to orchestrator
+// Add both to orchestrator (InnerValidatorAgent is automatically registered)
 let mut orchestrator = Orchestrator::new(blueprint);
 orchestrator.add_agent(Box::new(ResearchAgent));
 orchestrator.add_agent(Box::new(WriterAgent));
@@ -1313,7 +1313,7 @@ orchestrator.add_agent(Box::new(WriterAgent));
   - **Retry**: For transient errors
   - **Tactical Redesign**: Modify failed steps and continue
   - **Full Regenerate**: Start over with a new strategy
-- ✅ **Built-in Validation**: Optional validation steps with `InnerValidatorAgent`
+- ✅ **Built-in Validation**: Automatic registration of `InnerValidatorAgent` as a fallback validator
 - ✅ **Smart Context Management**: Automatic passing of outputs between steps with `ToPrompt` support
 
 #### Smart Context Management with `ToPrompt`

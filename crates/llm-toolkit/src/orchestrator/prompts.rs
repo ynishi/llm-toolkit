@@ -58,7 +58,7 @@ Generate a detailed execution strategy as a JSON object with the following struc
 4. Create clear, actionable intent templates
 5. Ensure steps build upon each other logically
 6. Use placeholders like `{previous_output}`, `{user_request}` in intent templates
-7. **Add Validation Steps**: For any step that produces a critical artifact (e.g., a final document, a piece of code, a detailed plan), you MUST add a dedicated validation step immediately after it. To do this, first look for a specialized validator agent in the 'Available Agents' list. If a suitable one exists, assign the validation step to it. If not, you MUST assign the validation step to the `InnerValidatorAgent`
+7. **Add Validation Steps**: For any step that produces a critical artifact (e.g., a final document, a piece of code, a detailed plan), you SHOULD add a dedicated validation step immediately after it. Select the most appropriate validator agent from the 'Available Agents' list (e.g., InnerValidatorAgent for general validation, or domain-specific validators if available)
 
 **Important:** Return ONLY the JSON object, no additional explanation.
 "##)]

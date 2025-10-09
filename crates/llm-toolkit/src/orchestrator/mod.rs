@@ -90,13 +90,6 @@ pub struct OrchestrationResult {
 #[cfg(feature = "agent")]
 use crate::agent::impls::{ClaudeCodeAgent, ClaudeCodeJsonAgent, InnerValidatorAgent};
 
-/// Represents the result of a validation step.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ValidationResult {
-    status: String,
-    reason: String,
-}
-
 /// The orchestrator coordinates multiple agents to execute complex workflows.
 ///
 /// The orchestrator maintains:
@@ -123,11 +116,6 @@ pub struct Orchestrator {
     #[cfg(feature = "agent")]
     internal_agent: Box<dyn Agent<Output = String>>,
 
-    /// Built-in validation agent for validating step outputs.
-    /// Always available for the strategy generation LLM to use.
-    #[cfg(feature = "agent")]
-    inner_validator_agent: Box<dyn Agent<Output = String>>,
-
     /// The currently active execution strategy.
     strategy_map: Option<StrategyMap>,
 
@@ -142,23 +130,29 @@ impl Orchestrator {
     /// Creates a new Orchestrator with a given blueprint.
     ///
     /// Uses default internal agents (ClaudeCodeAgent and ClaudeCodeJsonAgent).
+    /// InnerValidatorAgent is automatically registered as a fallback validator.
     #[cfg(feature = "agent")]
     pub fn new(blueprint: BlueprintWorkflow) -> Self {
-        Self {
+        let mut orchestrator = Self {
             blueprint,
             agents: HashMap::new(),
             internal_json_agent: Box::new(ClaudeCodeJsonAgent::new()),
             internal_agent: Box::new(ClaudeCodeAgent::new()),
-            inner_validator_agent: Box::new(InnerValidatorAgent::new()),
             strategy_map: None,
             context: HashMap::new(),
             current_task: None,
-        }
+        };
+
+        // Register InnerValidatorAgent as a standard agent
+        orchestrator.add_agent(InnerValidatorAgent::new());
+
+        orchestrator
     }
 
     /// Creates a new Orchestrator with custom internal agents.
     ///
     /// This allows you to inject mock or alternative agents for testing or custom LLM backends.
+    /// InnerValidatorAgent is automatically registered as a fallback validator.
     ///
     /// # Arguments
     ///
@@ -171,16 +165,20 @@ impl Orchestrator {
         internal_agent: Box<dyn Agent<Output = String>>,
         internal_json_agent: Box<dyn Agent<Output = StrategyMap>>,
     ) -> Self {
-        Self {
+        let mut orchestrator = Self {
             blueprint,
             agents: HashMap::new(),
             internal_json_agent,
             internal_agent,
-            inner_validator_agent: Box::new(InnerValidatorAgent::new()),
             strategy_map: None,
             context: HashMap::new(),
             current_task: None,
-        }
+        };
+
+        // Register InnerValidatorAgent as a standard agent
+        orchestrator.add_agent(InnerValidatorAgent::new());
+
+        orchestrator
     }
 
     /// Creates a new Orchestrator without the internal agent (for testing).
@@ -266,20 +264,11 @@ impl Orchestrator {
     /// Returns a formatted string describing all available agents and their expertise.
     #[cfg(feature = "agent")]
     pub fn format_agent_list(&self) -> String {
-        let mut agent_list: Vec<String> = self
-            .agents
+        self.agents
             .iter()
             .map(|(name, agent)| format!("- {}: {}", name, agent.expertise()))
-            .collect();
-
-        // Always include the InnerValidatorAgent
-        agent_list.push(format!(
-            "- {}: {}",
-            self.inner_validator_agent.name(),
-            self.inner_validator_agent.expertise()
-        ));
-
-        agent_list.join("\n")
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Returns a formatted string describing all available agents and their expertise.
@@ -530,39 +519,6 @@ impl Orchestrator {
 
         self.strategy_map = Some(strategy);
         Ok(())
-    }
-
-    /// Collects context information for a given step.
-    ///
-    /// Gathers previous step outputs and other relevant context data.
-    fn collect_context(&self, step_index: usize) -> HashMap<String, JsonValue> {
-        let mut context = HashMap::new();
-
-        // Add all previous step outputs
-        if let Some(strategy) = &self.strategy_map {
-            for i in 0..step_index {
-                if i < strategy.steps.len() {
-                    let prev_step = &strategy.steps[i];
-                    let key = format!("step_{}_output", prev_step.step_id);
-                    if let Some(output) = self.context.get(&key) {
-                        context.insert(key, output.clone());
-                        // Also provide as "previous_output" for convenience
-                        if i == step_index - 1 {
-                            context.insert("previous_output".to_string(), output.clone());
-                        }
-                    }
-                }
-            }
-        }
-
-        // Add any other context from self.context
-        for (key, value) in &self.context {
-            if !key.starts_with("step_") {
-                context.insert(key.clone(), value.clone());
-            }
-        }
-
-        context
     }
 
     /// Extracts placeholders from intent template (e.g., {{ concept_content }}).
@@ -996,94 +952,7 @@ impl Orchestrator {
 
                     final_result = output;
                     steps_executed += 1;
-
-                    // Check if this step requires validation
-                    let requires_validation = step.requires_validation;
                     step_index += 1;
-
-                    // If validation is required, the next step should be the validation step
-                    if requires_validation {
-                        if step_index >= self.strategy_map.as_ref().unwrap().steps.len() {
-                            log::warn!("Step requires validation but no validation step found");
-                            continue;
-                        }
-
-                        // Execute validation step
-                        let validation_result = self.execute_validation_step(step_index).await?;
-
-                        // Parse validation result
-                        if let Some(validation_status) =
-                            self.parse_validation_result(&validation_result)
-                        {
-                            if validation_status.status == "FAIL" {
-                                log::warn!(
-                                    "Validation failed for step {}: {}",
-                                    step_index,
-                                    validation_status.reason
-                                );
-
-                                // Treat validation failure as if the original step failed
-                                let validation_error = crate::agent::AgentError::ExecutionFailed(
-                                    format!("Validation failed: {}", validation_status.reason),
-                                );
-
-                                // Trigger redesign for the original step (step_index - 1)
-                                match self
-                                    .determine_redesign_strategy(
-                                        &validation_error,
-                                        step_index - 1,
-                                        &goal,
-                                    )
-                                    .await?
-                                {
-                                    RedesignStrategy::Retry => {
-                                        log::info!(
-                                            "Retrying step {} after validation failure",
-                                            step_index
-                                        );
-                                        redesigns_triggered += 1;
-                                        step_index -= 1; // Go back to the original step
-                                        continue;
-                                    }
-                                    RedesignStrategy::TacticalRedesign => {
-                                        log::info!(
-                                            "Performing tactical redesign from step {} after validation failure",
-                                            step_index
-                                        );
-                                        redesigns_triggered += 1;
-                                        self.tactical_redesign(&validation_error, step_index - 1)
-                                            .await?;
-                                        step_index -= 1; // Go back to the original step
-                                        continue;
-                                    }
-                                    RedesignStrategy::FullRegenerate => {
-                                        log::info!(
-                                            "Performing full strategy regeneration after validation failure"
-                                        );
-                                        redesigns_triggered += 1;
-                                        self.full_regenerate(&validation_error, step_index - 1)
-                                            .await?;
-                                        step_index = 0;
-                                        self.context.clear();
-                                        continue;
-                                    }
-                                }
-                            } else {
-                                log::info!("Validation passed for step {}", step_index);
-                                // Store validation result as JSON string
-                                let validation_step =
-                                    &self.strategy_map.as_ref().unwrap().steps[step_index];
-                                self.context.insert(
-                                    format!("step_{}_output", validation_step.step_id),
-                                    JsonValue::String(validation_result),
-                                );
-                                step_index += 1; // Move to next step
-                            }
-                        } else {
-                            log::warn!("Failed to parse validation result, continuing anyway");
-                            step_index += 1;
-                        }
-                    }
                 }
                 Err(e) => {
                     log::warn!("Step {} failed: {}", step_index + 1, e);
@@ -1122,63 +991,6 @@ impl Orchestrator {
         }
 
         Ok((final_result, steps_executed, redesigns_triggered))
-    }
-
-    /// Executes a validation step.
-    #[cfg(feature = "agent")]
-    async fn execute_validation_step(
-        &mut self,
-        validation_step_index: usize,
-    ) -> Result<String, OrchestratorError> {
-        let step = {
-            let strategy = self
-                .strategy_map
-                .as_ref()
-                .ok_or_else(OrchestratorError::no_strategy)?;
-            if validation_step_index >= strategy.steps.len() {
-                return Err(OrchestratorError::ExecutionFailed(
-                    "Validation step index out of bounds".to_string(),
-                ));
-            }
-            strategy.steps[validation_step_index].clone()
-        };
-
-        log::info!(
-            "Executing validation step {}: {}",
-            validation_step_index + 1,
-            step.description
-        );
-
-        // Collect context
-        let context = self.collect_context(validation_step_index);
-
-        // Build intent for validation
-        let intent = self.build_intent(&step, &context).await?;
-
-        log::debug!("Validation intent:\n{}", intent);
-
-        // Execute the inner validator agent
-        let result = self.inner_validator_agent.execute(intent.into()).await?;
-
-        log::debug!("Validation result:\n{}", result);
-
-        Ok(result)
-    }
-
-    /// Executes a validation step (stub for non-agent feature).
-    #[cfg(not(feature = "agent"))]
-    async fn execute_validation_step(
-        &mut self,
-        _validation_step_index: usize,
-    ) -> Result<String, OrchestratorError> {
-        Err(OrchestratorError::ExecutionFailed(
-            "Validation not available without agent feature".to_string(),
-        ))
-    }
-
-    /// Parses validation result JSON.
-    fn parse_validation_result(&self, result: &str) -> Option<ValidationResult> {
-        serde_json::from_str(result).ok()
     }
 
     /// Determines the appropriate redesign strategy after an error.
@@ -1404,7 +1216,9 @@ mod tests {
     fn test_orchestrator_creation() {
         let blueprint = BlueprintWorkflow::new("Test workflow".to_string());
         let orch = Orchestrator::new(blueprint);
-        assert_eq!(orch.list_agents().len(), 0);
+        // InnerValidatorAgent is automatically registered
+        assert_eq!(orch.list_agents().len(), 1);
+        assert!(orch.get_agent("InnerValidatorAgent").is_some());
     }
 
     #[test]
@@ -1413,8 +1227,10 @@ mod tests {
         let mut orch = Orchestrator::new(blueprint);
 
         orch.add_agent(ClaudeCodeAgent::new());
-        assert_eq!(orch.list_agents().len(), 1);
+        // InnerValidatorAgent (auto-registered) + ClaudeCodeAgent
+        assert_eq!(orch.list_agents().len(), 2);
         assert!(orch.get_agent("ClaudeCodeAgent").is_some());
+        assert!(orch.get_agent("InnerValidatorAgent").is_some());
     }
 
     #[test]
