@@ -292,6 +292,110 @@ impl Orchestrator {
             .join("\n")
     }
 
+    /// Returns a reference to the orchestrator's runtime context.
+    ///
+    /// The context contains intermediate results from executed steps, stored as JSON values.
+    /// Keys follow the pattern:
+    /// - `step_{step_id}_output`: JSON representation of step output
+    /// - `step_{step_id}_output_prompt`: ToPrompt representation (if available)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let context = orchestrator.context();
+    /// if let Some(output) = context.get("step_1_output") {
+    ///     println!("Step 1 output: {}", output);
+    /// }
+    /// ```
+    pub fn context(&self) -> &HashMap<String, JsonValue> {
+        &self.context
+    }
+
+    /// Returns the output of a specific step by step_id.
+    ///
+    /// This is a convenience method for accessing step outputs from the context.
+    ///
+    /// # Arguments
+    ///
+    /// * `step_id` - The step ID (e.g., "step_1", "step_2")
+    ///
+    /// # Returns
+    ///
+    /// The JSON output of the step, or `None` if the step hasn't been executed yet.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // After executing a workflow
+    /// if let Some(concept) = orchestrator.get_step_output("step_1") {
+    ///     // Deserialize if you know the type
+    ///     let concept: HighConceptResponse = serde_json::from_value(concept.clone())?;
+    /// }
+    /// ```
+    pub fn get_step_output(&self, step_id: &str) -> Option<&JsonValue> {
+        self.context.get(&format!("step_{}_output", step_id))
+    }
+
+    /// Returns the ToPrompt representation of a step's output, if available.
+    ///
+    /// This returns the human-readable prompt version of the output, which is only
+    /// available if the output type implements `ToPrompt` and the agent was registered
+    /// with `add_agent_with_to_prompt()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `step_id` - The step ID (e.g., "step_1", "step_2")
+    ///
+    /// # Returns
+    ///
+    /// The prompt representation as a string, or `None` if not available.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Get human-readable version of step output
+    /// if let Some(prompt) = orchestrator.get_step_output_prompt("step_1") {
+    ///     println!("Step 1 output (human-readable):\n{}", prompt);
+    /// }
+    /// ```
+    pub fn get_step_output_prompt(&self, step_id: &str) -> Option<&str> {
+        self.context
+            .get(&format!("step_{}_output_prompt", step_id))
+            .and_then(|v| v.as_str())
+    }
+
+    /// Returns all step outputs as a map of step_id to JSON value.
+    ///
+    /// This filters the context to only include step outputs (not prompt versions).
+    ///
+    /// # Returns
+    ///
+    /// A HashMap where keys are step IDs and values are the JSON outputs.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let all_outputs = orchestrator.get_all_step_outputs();
+    /// for (step_id, output) in all_outputs {
+    ///     println!("{}: {:?}", step_id, output);
+    /// }
+    /// ```
+    pub fn get_all_step_outputs(&self) -> HashMap<String, &JsonValue> {
+        self.context
+            .iter()
+            .filter_map(|(key, value)| {
+                if key.starts_with("step_") && key.ends_with("_output") && !key.ends_with("_output_prompt") {
+                    // Extract step_id from "step_{step_id}_output"
+                    key.strip_prefix("step_")
+                        .and_then(|s| s.strip_suffix("_output"))
+                        .map(|step_id| (step_id.to_string(), value))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Executes the workflow with the given task description.
     ///
     /// This is the main entry point for orchestration. The orchestrator will:
@@ -1318,5 +1422,31 @@ mod tests {
         orch.add_agent(ClaudeCodeAgent::new());
         let list = orch.format_agent_list();
         assert!(list.contains("ClaudeCodeAgent"));
+    }
+
+    #[test]
+    fn test_context_initially_empty() {
+        let blueprint = BlueprintWorkflow::new("Test".to_string());
+        let orch = Orchestrator::new(blueprint);
+
+        // Initially context should be empty
+        assert!(orch.context().is_empty());
+        assert!(orch.get_step_output("step_1").is_none());
+        assert!(orch.get_all_step_outputs().is_empty());
+    }
+
+    #[test]
+    fn test_context_accessors_available() {
+        let blueprint = BlueprintWorkflow::new("Test".to_string());
+        let orch = Orchestrator::new(blueprint);
+
+        // Verify all accessor methods are callable (main fix - these were not accessible before)
+        let _context = orch.context();
+        let _step_output = orch.get_step_output("step_1");
+        let _step_prompt = orch.get_step_output_prompt("step_1");
+        let _all_outputs = orch.get_all_step_outputs();
+
+        // Before this fix, the above lines would not compile because context was private
+        assert!(true, "Context accessor methods are now public and accessible");
     }
 }
