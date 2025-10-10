@@ -3726,12 +3726,16 @@ pub fn type_marker(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Create new fields with __type prepended
     let mut new_fields = vec![];
 
+    // Convert function name to string literal for serde attribute
+    let default_fn_name_str = default_fn_name.to_string();
+    let default_fn_name_lit = syn::LitStr::new(&default_fn_name_str, default_fn_name.span());
+
     // Add __type field first
     // Note: We don't use skip_serializing here because:
     // 1. ToPrompt already excludes __type from LLM prompts at macro generation time
     // 2. Orchestrator needs __type in serialized JSON for type-based retrieval (get_typed_output)
     new_fields.push(quote! {
-        #[serde(default = stringify!(#default_fn_name))]
+        #[serde(default = #default_fn_name_lit)]
         __type: String
     });
 

@@ -1547,33 +1547,87 @@ println!("Full context: {:?}", context);
 
 **How It Works:**
 
-1. Add `#[derive(TypeMarker)]` to your response structures (optionally with `#[prompt(type_marker)]`)
-2. The `__type` field is **excluded from schema** but automatically added during deserialization
-   - LLMs don't see `__type` in the schema (prevents `"__type": "string"` misinterpretation)
-   - Deserialization adds `__type` via `#[serde(default)]` based on the struct name
-3. Use `orchestrator.get_typed_output::<T>()` to retrieve by type
-4. The orchestrator searches the context for any output with matching `__type` field
+There are two ways to add `__type` field for type-based retrieval:
 
-**Example:**
+**Method 1: Using `#[type_marker]` attribute macro (Recommended with ToPrompt)**
+
+```rust
+use llm_toolkit::{type_marker, ToPrompt};
+use serde::{Deserialize, Serialize};
+
+// IMPORTANT: #[type_marker] must be placed BEFORE #[derive(...)]
+#[type_marker]
+#[derive(Serialize, Deserialize, Debug, Clone, ToPrompt)]
+#[prompt(mode = "full")]
+pub struct HighConceptResponse {
+    pub reasoning: String,
+    pub high_concept: String,
+}
+```
+
+The `#[type_marker]` attribute macro automatically:
+- Adds `__type: String` field with `#[serde(default = "default_high_concept_response_type")]`
+- Generates the default function that returns the struct name
+- Implements the `TypeMarker` trait
+- The `__type` field is **automatically excluded from LLM schema** (ToPrompt skips fields named `__type`)
+
+**Method 2: Manual `__type` field definition**
 
 ```rust
 use llm_toolkit::{TypeMarker, ToPrompt};
 use serde::{Deserialize, Serialize};
 
-// Define your response types with TypeMarker
 #[derive(Serialize, Deserialize, Debug, Clone, ToPrompt, TypeMarker)]
-#[prompt(mode = "full", type_marker)]  // 👈 type_marker enables type-based retrieval
+#[prompt(mode = "full")]
+pub struct HighConceptResponse {
+    #[serde(default = "default_high_concept_type")]
+    __type: String,
+    pub reasoning: String,
+    pub high_concept: String,
+}
+
+fn default_high_concept_type() -> String {
+    "HighConceptResponse".to_string()
+}
+```
+
+**Complete Example:**
+
+```rust
+use llm_toolkit::{type_marker, ToPrompt, Agent};
+use serde::{Deserialize, Serialize};
+
+// Define your response types
+#[type_marker]
+#[derive(Serialize, Deserialize, Debug, Clone, ToPrompt)]
+#[prompt(mode = "full")]
 pub struct HighConceptResponse {
     pub reasoning: String,
     pub high_concept: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToPrompt, TypeMarker)]
-#[prompt(mode = "full", type_marker)]  // 👈 type_marker enables type-based retrieval
+#[type_marker]
+#[derive(Serialize, Deserialize, Debug, Clone, ToPrompt)]
+#[prompt(mode = "full")]
 pub struct ProfileResponse {
     pub name: String,
     pub role: String,
 }
+
+// Define agents
+#[derive(Agent)]
+#[agent(
+    expertise = "Generate high-level concepts",
+    output = "HighConceptResponse"
+)]
+struct ConceptAgent;
+
+#[derive(Agent)]
+#[agent(
+    expertise = "Create character profiles",
+    output = "ProfileResponse"
+)]
+struct ProfileAgent;
 
 // Register agents and execute
 orchestrator.add_agent_with_to_prompt(ConceptAgent::default());
@@ -1591,30 +1645,13 @@ println!("Profile: {} - {}", profile.name, profile.role);
 
 **Key Points:**
 
-- **`#[derive(TypeMarker)]`**: Automatically implements the `TypeMarker` trait, setting `TYPE_NAME` to the struct name
-- **`#[prompt(type_marker)]`**: Enables type-based retrieval without exposing `__type` in the schema
+- **`#[type_marker]`**: Attribute macro that automatically adds `__type` field and implements `TypeMarker`
+  - ⚠️ **Must be placed FIRST** (before `#[derive(...)]`) due to Rust macro processing order
+  - Generates: field, default function, and trait implementation
   - The `__type` field is **excluded from the JSON schema** sent to LLMs (prevents confusion)
-  - LLMs previously misinterpreted `"__type": "string"` as "output the literal string 'string'"
-  - The field is automatically added during deserialization via `#[serde(default)]`
-- **No manual field definition needed**: The `__type` field is handled automatically
+- **`#[derive(TypeMarker)]`**: Only implements the trait (use with manual `__type` field)
 - **`get_typed_output<T>()`**: Type-safe retrieval that returns `Result<T, OrchestratorError>`
-
-**Alternative: Manual `__type` Field** (for advanced use cases):
-
-```rust
-#[derive(Serialize, Deserialize, Debug, Clone, ToPrompt, TypeMarker)]
-#[prompt(mode = "full")]
-pub struct HighConceptResponse {
-    #[serde(default = "default_high_concept_type")]
-    __type: String,  // Manual definition for more control
-    pub reasoning: String,
-    pub high_concept: String,
-}
-
-fn default_high_concept_type() -> String {
-    "HighConceptResponse".to_string()
-}
-```
+- **Schema exclusion**: ToPrompt automatically skips fields named `__type` (Line 154 in macro implementation)
 
 **Benefits:**
 
