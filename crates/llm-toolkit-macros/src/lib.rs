@@ -131,8 +131,16 @@ fn generate_schema_only_parts(
     struct_docs: &str,
     fields: &syn::punctuated::Punctuated<syn::Field, syn::Token![,]>,
     crate_path: &proc_macro2::TokenStream,
+    has_type_marker: bool,
 ) -> proc_macro2::TokenStream {
     let mut field_schema_parts = vec![];
+
+    // Add __type field if TypeMarker is derived
+    if has_type_marker {
+        field_schema_parts.push(quote! {
+            format!("  \"__type\": \"string\",")
+        });
+    }
 
     // Process fields to build runtime schema generation
     for (i, field) in fields.iter().enumerate() {
@@ -647,6 +655,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             let mut template_file_attr = None;
             let mut mode_attr = None;
             let mut validate_attr = false;
+            let mut type_marker_attr = false;
 
             for attr in &input.attrs {
                 if attr.path().is_ident("prompt") {
@@ -683,6 +692,17 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                     {
                                         validate_attr = lit_bool.value();
                                     }
+                                }
+                                Meta::NameValue(nv) if nv.path.is_ident("type_marker") => {
+                                    if let syn::Expr::Lit(expr_lit) = nv.value
+                                        && let syn::Lit::Bool(lit_bool) = expr_lit.lit
+                                    {
+                                        type_marker_attr = lit_bool.value();
+                                    }
+                                }
+                                Meta::Path(path) if path.is_ident("type_marker") => {
+                                    // Support both #[prompt(type_marker)] and #[prompt(type_marker = true)]
+                                    type_marker_attr = true;
                                 }
                                 _ => {}
                             }
@@ -909,9 +929,14 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     }
                 });
 
-                // Generate schema-only parts
-                let schema_parts =
-                    generate_schema_only_parts(&struct_name_str, &struct_docs, fields, &crate_path);
+                // Generate schema-only parts (type_marker_attr comes from prompt attribute parsing above)
+                let schema_parts = generate_schema_only_parts(
+                    &struct_name_str,
+                    &struct_docs,
+                    fields,
+                    &crate_path,
+                    type_marker_attr,
+                );
 
                 // Generate example parts
                 let example_parts = generate_example_only_parts(fields, has_default, &crate_path);

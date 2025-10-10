@@ -1539,7 +1539,7 @@ println!("Full context: {:?}", context);
 
 **Note:** These methods are available after `execute()` completes. The context is preserved until the next `execute()` call.
 
-#### Type-Based Output Retrieval with `TypeMarker` (v0.13.7+)
+#### Type-Based Output Retrieval with `TypeMarker` (v0.13.9+)
 
 **Problem**: The orchestrator's strategy LLM generates non-deterministic step IDs (`step_1`, `world_generation`, `analysis_phase`, etc.), making it difficult to retrieve specific outputs by step ID. You want to retrieve outputs by *type*, not by guessing step names.
 
@@ -1547,9 +1547,10 @@ println!("Full context: {:?}", context);
 
 **How It Works:**
 
-1. Add a `__type` field to your response structures with `#[derive(TypeMarker)]`
-2. Use `orchestrator.get_typed_output::<T>()` to retrieve by type
-3. The orchestrator searches the context for any output with matching `__type` field
+1. Add `#[derive(TypeMarker)]` and `#[prompt(type_marker)]` to your response structures
+2. The `__type` field is automatically added to the JSON schema
+3. Use `orchestrator.get_typed_output::<T>()` to retrieve by type
+4. The orchestrator searches the context for any output with matching `__type` field
 
 **Example:**
 
@@ -1559,29 +1560,17 @@ use serde::{Deserialize, Serialize};
 
 // Define your response types with TypeMarker
 #[derive(Serialize, Deserialize, Debug, Clone, ToPrompt, TypeMarker)]
-#[prompt(mode = "full")]
+#[prompt(mode = "full", type_marker)]  // 👈 type_marker automatically adds __type to schema
 pub struct HighConceptResponse {
-    #[serde(default = "default_high_concept_type")]
-    __type: String,
     pub reasoning: String,
     pub high_concept: String,
 }
 
-fn default_high_concept_type() -> String {
-    "HighConceptResponse".to_string()
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, ToPrompt, TypeMarker)]
-#[prompt(mode = "full")]
+#[prompt(mode = "full", type_marker)]  // 👈 type_marker automatically adds __type to schema
 pub struct ProfileResponse {
-    #[serde(default = "default_profile_type")]
-    __type: String,
     pub name: String,
     pub role: String,
-}
-
-fn default_profile_type() -> String {
-    "ProfileResponse".to_string()
 }
 
 // Register agents and execute
@@ -1601,16 +1590,33 @@ println!("Profile: {} - {}", profile.name, profile.role);
 **Key Points:**
 
 - **`#[derive(TypeMarker)]`**: Automatically implements the `TypeMarker` trait, setting `TYPE_NAME` to the struct name
-- **`__type` field**: A marker field that the LLM includes in its JSON output (via automatic schema generation from `ToPrompt`)
-- **`#[serde(default = "...")]`**: Ensures the field is populated even if the LLM omits it
+- **`#[prompt(type_marker)]`**: Automatically adds `__type: "string"` field to the JSON schema sent to the LLM
+- **No manual field definition needed**: The `__type` field is handled automatically in the schema
 - **`get_typed_output<T>()`**: Type-safe retrieval that returns `Result<T, OrchestratorError>`
+
+**Alternative: Manual `__type` Field** (for advanced use cases):
+
+```rust
+#[derive(Serialize, Deserialize, Debug, Clone, ToPrompt, TypeMarker)]
+#[prompt(mode = "full")]
+pub struct HighConceptResponse {
+    #[serde(default = "default_high_concept_type")]
+    __type: String,  // Manual definition for more control
+    pub reasoning: String,
+    pub high_concept: String,
+}
+
+fn default_high_concept_type() -> String {
+    "HighConceptResponse".to_string()
+}
+```
 
 **Benefits:**
 
 - ✅ **No Step ID Guessing**: Retrieve outputs by type, not by unpredictable step names
 - ✅ **Type-Safe**: Compile-time verification of output types
-- ✅ **Automatic Schema**: The `ToPrompt` derive automatically includes `__type` in the JSON schema
-- ✅ **DRY Principle**: No manual JSON schema duplication
+- ✅ **Automatic Schema**: The `type_marker` attribute automatically includes `__type` in the JSON schema
+- ✅ **DRY Principle**: No manual field definition or JSON schema duplication needed
 - ✅ **Works with Dynamic Workflows**: Strategy LLM can name steps anything; your code still works
 
 **Common Pattern:**
@@ -1645,8 +1651,12 @@ let concept: HighConceptResponse = serde_json::from_value(concept_json.clone())?
 let concept: HighConceptResponse = orchestrator.get_typed_output()?; // Always works!
 ```
 
-**Run the example:**
+**Run the examples:**
 ```bash
+# See TypeMarker schema generation in action
+cargo run --example type_marker_schema_test --features agent,derive
+
+# Full orchestrator example
 cargo run --example orchestrator_basic --features agent,derive
 ```
 
