@@ -15,7 +15,7 @@
 
 use llm_toolkit::agent::impls::ClaudeCodeAgent;
 use llm_toolkit::orchestrator::{BlueprintWorkflow, Orchestrator, StrategyMap, StrategyStep};
-use llm_toolkit::{type_marker, Agent, ToPrompt};
+use llm_toolkit::{Agent, ToPrompt, type_marker};
 use serde::{Deserialize, Serialize};
 
 // Define output type using #[type_marker] attribute macro
@@ -66,7 +66,10 @@ impl llm_toolkit::agent::Agent for SimpleStrategyAgent {
         "SimpleStrategyAgent".to_string()
     }
 
-    async fn execute(&self, _intent: llm_toolkit::agent::Payload) -> Result<Self::Output, llm_toolkit::agent::AgentError> {
+    async fn execute(
+        &self,
+        _intent: llm_toolkit::agent::Payload,
+    ) -> Result<Self::Output, llm_toolkit::agent::AgentError> {
         let mut strategy = StrategyMap::new("Analyze customer feedback data".to_string());
 
         strategy.add_step(StrategyStep::new(
@@ -125,7 +128,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     orchestrator.add_agent(data_analyzer);
 
     println!("📋 Setup complete:");
-    println!("   - Registered {} agents", orchestrator.list_agents().len());
+    println!(
+        "   - Registered {} agents",
+        orchestrator.list_agents().len()
+    );
 
     // Debug: Show registered agent names
     println!("   - Agent names:");
@@ -172,7 +178,10 @@ Please provide:
                 }
 
                 // Show pretty JSON
-                println!("   JSON:\n{}\n", serde_json::to_string_pretty(output).unwrap_or_default());
+                println!(
+                    "   JSON:\n{}\n",
+                    serde_json::to_string_pretty(output).unwrap_or_default()
+                );
             }
 
             println!("🔍 Retrieving typed output using get_typed_output()...\n");

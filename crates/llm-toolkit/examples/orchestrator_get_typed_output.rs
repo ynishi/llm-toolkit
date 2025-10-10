@@ -11,7 +11,7 @@
 use async_trait::async_trait;
 use llm_toolkit::agent::{Agent, AgentError, Payload};
 use llm_toolkit::orchestrator::{BlueprintWorkflow, Orchestrator, StrategyMap, StrategyStep};
-use llm_toolkit::{type_marker, ToPrompt, TypeMarker};
+use llm_toolkit::{ToPrompt, TypeMarker, type_marker};
 use serde::{Deserialize, Serialize};
 
 // Define output types with TypeMarker
@@ -69,7 +69,11 @@ impl Agent for MockTypedAgent {
     }
 
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
-        println!("🔍 {} executing with intent: {}", self.name, intent.to_text().chars().take(80).collect::<String>());
+        println!(
+            "🔍 {} executing with intent: {}",
+            self.name,
+            intent.to_text().chars().take(80).collect::<String>()
+        );
 
         // Return mock structured data
         // The __type field is added automatically by #[type_marker] but must be specified when creating instances
@@ -163,7 +167,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     println!("📋 Setup complete:");
-    println!("   - Registered {} agents", orchestrator.list_agents().len());
+    println!(
+        "   - Registered {} agents",
+        orchestrator.list_agents().len()
+    );
     println!("   - Using mock agents (no external dependencies)\n");
 
     let task = "Analyze Q4 customer feedback data";
@@ -180,7 +187,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("📦 All step outputs in context:");
             let all_outputs = orchestrator.get_all_step_outputs();
             for (step_id, output) in &all_outputs {
-                println!("   - {}: {}", step_id, serde_json::to_string(output).unwrap_or_default().chars().take(100).collect::<String>());
+                println!(
+                    "   - {}: {}",
+                    step_id,
+                    serde_json::to_string(output)
+                        .unwrap_or_default()
+                        .chars()
+                        .take(100)
+                        .collect::<String>()
+                );
 
                 // Check if __type field exists
                 if let Some(type_value) = output.get("__type") {

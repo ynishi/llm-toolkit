@@ -95,7 +95,7 @@ pub use llm_toolkit_macros::agent;
 /// }
 /// ```
 #[cfg(feature = "agent")]
-pub use llm_toolkit_macros::{type_marker, TypeMarker};
+pub use llm_toolkit_macros::{TypeMarker, type_marker};
 
 pub mod extract;
 pub mod intent;

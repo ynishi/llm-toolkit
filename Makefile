@@ -14,6 +14,7 @@ EXAMPLES := \
 	define_intent_comprehensive \
 	test_define_intent \
 	orchestrator_with_mock \
+	orchestrator_get_typed_output \
 	check_claude \
 	agent_derive \
 	agent_auto_json_test \

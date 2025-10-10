@@ -936,6 +936,15 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     }
                 });
 
+                // Note: type_marker_attr is used as a marker/flag indicating this struct uses the TypeMarker pattern
+                // When type_marker is set (via #[prompt(type_marker)]), it indicates:
+                // - This struct is used for type-based retrieval in Orchestrator
+                // - The __type field must be manually defined by the user (for custom configurations)
+                // - The __type field will be automatically excluded from LLM schema (see Line 154)
+                //
+                // For standard cases, users should use #[type_marker] attribute macro instead,
+                // which automatically adds the __type field.
+
                 // Generate schema-only parts (type_marker_attr comes from prompt attribute parsing above)
                 let schema_parts = generate_schema_only_parts(
                     &struct_name_str,

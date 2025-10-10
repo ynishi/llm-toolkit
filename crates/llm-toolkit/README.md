@@ -1549,7 +1549,7 @@ println!("Full context: {:?}", context);
 
 There are two ways to add `__type` field for type-based retrieval:
 
-**Method 1: Using `#[type_marker]` attribute macro (Recommended with ToPrompt)**
+**Method 1: Using `#[type_marker]` attribute macro (Recommended)**
 
 ```rust
 use llm_toolkit::{type_marker, ToPrompt};
@@ -1571,17 +1571,22 @@ The `#[type_marker]` attribute macro automatically:
 - Implements the `TypeMarker` trait
 - The `__type` field is **automatically excluded from LLM schema** (ToPrompt skips fields named `__type`)
 
-**Method 2: Manual `__type` field definition**
+**Method 2: Manual `__type` field definition (For custom configurations)**
+
+Use this method when you need special configurations:
+- Custom field name or type
+- Complex default function logic
+- Integration with existing code
 
 ```rust
 use llm_toolkit::{TypeMarker, ToPrompt};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToPrompt, TypeMarker)]
-#[prompt(mode = "full")]
+#[prompt(mode = "full", type_marker)]  // 👈 Optional marker to document TypeMarker usage
 pub struct HighConceptResponse {
     #[serde(default = "default_high_concept_type")]
-    __type: String,
+    __type: String,  // Manually defined for custom configuration
     pub reasoning: String,
     pub high_concept: String,
 }
@@ -1590,6 +1595,8 @@ fn default_high_concept_type() -> String {
     "HighConceptResponse".to_string()
 }
 ```
+
+**Note:** The `#[prompt(type_marker)]` parameter is optional and serves as documentation/marker. The `__type` field will be automatically excluded from LLM schema regardless.
 
 **Complete Example:**
 
