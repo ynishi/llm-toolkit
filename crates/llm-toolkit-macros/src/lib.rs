@@ -3640,3 +3640,127 @@ pub fn derive_type_marker(input: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
+
+/// Attribute macro that adds a `__type` field to a struct and implements TypeMarker.
+///
+/// This macro transforms a struct by:
+/// 1. Adding a `__type: String` field with `#[serde(default = "...", skip_serializing)]`
+/// 2. Generating a default function that returns the struct's type name
+/// 3. Implementing the `TypeMarker` trait
+///
+/// # Example
+///
+/// ```ignore
+/// use llm_toolkit_macros::type_marker;
+/// use serde::{Serialize, Deserialize};
+///
+/// #[type_marker]
+/// #[derive(Serialize, Deserialize, Debug)]
+/// pub struct WorldConceptResponse {
+///     pub concept: String,
+/// }
+///
+/// // Expands to:
+/// #[derive(Serialize, Deserialize, Debug)]
+/// pub struct WorldConceptResponse {
+///     #[serde(default = "default_world_concept_response_type", skip_serializing)]
+///     __type: String,
+///     pub concept: String,
+/// }
+///
+/// fn default_world_concept_response_type() -> String {
+///     "WorldConceptResponse".to_string()
+/// }
+///
+/// impl TypeMarker for WorldConceptResponse {
+///     const TYPE_NAME: &'static str = "WorldConceptResponse";
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn type_marker(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as syn::DeriveInput);
+    let struct_name = &input.ident;
+    let vis = &input.vis;
+    let type_name_str = struct_name.to_string();
+
+    // Generate default function name (snake_case)
+    let default_fn_name = syn::Ident::new(
+        &format!("default_{}_type", to_snake_case(&type_name_str)),
+        struct_name.span(),
+    );
+
+    // Get the crate path for llm_toolkit
+    let found_crate =
+        crate_name("llm-toolkit").expect("llm-toolkit should be present in `Cargo.toml`");
+    let crate_path = match found_crate {
+        FoundCrate::Itself => {
+            let ident = syn::Ident::new("llm_toolkit", proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+    };
+
+    // Extract struct fields
+    let fields = match &input.data {
+        syn::Data::Struct(data_struct) => match &data_struct.fields {
+            syn::Fields::Named(fields) => &fields.named,
+            _ => {
+                return syn::Error::new_spanned(
+                    struct_name,
+                    "type_marker only works with structs with named fields",
+                )
+                .to_compile_error()
+                .into();
+            }
+        },
+        _ => {
+            return syn::Error::new_spanned(struct_name, "type_marker only works with structs")
+                .to_compile_error()
+                .into();
+        }
+    };
+
+    // Create new fields with __type prepended
+    let mut new_fields = vec![];
+
+    // Add __type field first
+    // Note: We don't use skip_serializing here because:
+    // 1. ToPrompt already excludes __type from LLM prompts at macro generation time
+    // 2. Orchestrator needs __type in serialized JSON for type-based retrieval (get_typed_output)
+    new_fields.push(quote! {
+        #[serde(default = stringify!(#default_fn_name))]
+        __type: String
+    });
+
+    // Add original fields
+    for field in fields {
+        new_fields.push(quote! { #field });
+    }
+
+    // Get original attributes (like #[derive(...)])
+    let attrs = &input.attrs;
+    let generics = &input.generics;
+
+    let expanded = quote! {
+        // Generate the default function
+        fn #default_fn_name() -> String {
+            #type_name_str.to_string()
+        }
+
+        // Generate the struct with __type field
+        #(#attrs)*
+        #vis struct #struct_name #generics {
+            #(#new_fields),*
+        }
+
+        // Implement TypeMarker trait
+        impl #crate_path::orchestrator::TypeMarker for #struct_name {
+            const TYPE_NAME: &'static str = #type_name_str;
+        }
+    };
+
+    TokenStream::from(expanded)
+}
