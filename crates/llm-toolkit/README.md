@@ -1547,8 +1547,10 @@ println!("Full context: {:?}", context);
 
 **How It Works:**
 
-1. Add `#[derive(TypeMarker)]` and `#[prompt(type_marker)]` to your response structures
-2. The `__type` field is automatically added to the JSON schema
+1. Add `#[derive(TypeMarker)]` to your response structures (optionally with `#[prompt(type_marker)]`)
+2. The `__type` field is **excluded from schema** but automatically added during deserialization
+   - LLMs don't see `__type` in the schema (prevents `"__type": "string"` misinterpretation)
+   - Deserialization adds `__type` via `#[serde(default)]` based on the struct name
 3. Use `orchestrator.get_typed_output::<T>()` to retrieve by type
 4. The orchestrator searches the context for any output with matching `__type` field
 
@@ -1560,14 +1562,14 @@ use serde::{Deserialize, Serialize};
 
 // Define your response types with TypeMarker
 #[derive(Serialize, Deserialize, Debug, Clone, ToPrompt, TypeMarker)]
-#[prompt(mode = "full", type_marker)]  // 👈 type_marker automatically adds __type to schema
+#[prompt(mode = "full", type_marker)]  // 👈 type_marker enables type-based retrieval
 pub struct HighConceptResponse {
     pub reasoning: String,
     pub high_concept: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToPrompt, TypeMarker)]
-#[prompt(mode = "full", type_marker)]  // 👈 type_marker automatically adds __type to schema
+#[prompt(mode = "full", type_marker)]  // 👈 type_marker enables type-based retrieval
 pub struct ProfileResponse {
     pub name: String,
     pub role: String,
@@ -1590,8 +1592,11 @@ println!("Profile: {} - {}", profile.name, profile.role);
 **Key Points:**
 
 - **`#[derive(TypeMarker)]`**: Automatically implements the `TypeMarker` trait, setting `TYPE_NAME` to the struct name
-- **`#[prompt(type_marker)]`**: Automatically adds `__type: "string"` field to the JSON schema sent to the LLM
-- **No manual field definition needed**: The `__type` field is handled automatically in the schema
+- **`#[prompt(type_marker)]`**: Enables type-based retrieval without exposing `__type` in the schema
+  - The `__type` field is **excluded from the JSON schema** sent to LLMs (prevents confusion)
+  - LLMs previously misinterpreted `"__type": "string"` as "output the literal string 'string'"
+  - The field is automatically added during deserialization via `#[serde(default)]`
+- **No manual field definition needed**: The `__type` field is handled automatically
 - **`get_typed_output<T>()`**: Type-safe retrieval that returns `Result<T, OrchestratorError>`
 
 **Alternative: Manual `__type` Field** (for advanced use cases):
@@ -1615,7 +1620,8 @@ fn default_high_concept_type() -> String {
 
 - ✅ **No Step ID Guessing**: Retrieve outputs by type, not by unpredictable step names
 - ✅ **Type-Safe**: Compile-time verification of output types
-- ✅ **Automatic Schema**: The `type_marker` attribute automatically includes `__type` in the JSON schema
+- ✅ **Clean Schema**: `__type` is excluded from schema to prevent LLM confusion
+- ✅ **Automatic Deserialization**: `__type` is added during JSON parsing via `#[serde(default)]`
 - ✅ **DRY Principle**: No manual field definition or JSON schema duplication needed
 - ✅ **Works with Dynamic Workflows**: Strategy LLM can name steps anything; your code still works
 

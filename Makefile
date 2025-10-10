@@ -25,7 +25,8 @@ EXAMPLES := \
 	execution_profile_demo \
 	agent_with_profile \
 	agent_string_output_test \
-	type_marker_schema_test
+	type_marker_schema_test \
+	test_type_output
 
 # test-examplesターゲットで、リストをループ処理する
 test-examples:

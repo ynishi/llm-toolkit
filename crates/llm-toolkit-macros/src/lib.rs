@@ -71,6 +71,13 @@ fn generate_example_only_parts(
         let field_name_str = field_name.to_string();
         let attrs = parse_field_prompt_attrs(&field.attrs);
 
+        // Skip __type field - it's metadata that shouldn't be in examples
+        // It's typically marked with #[serde(skip_serializing)] or #[serde(default)]
+        // and won't appear in actual JSON output
+        if field_name_str == "__type" {
+            continue;
+        }
+
         // Skip if marked to skip
         if attrs.skip {
             continue;
@@ -131,22 +138,22 @@ fn generate_schema_only_parts(
     struct_docs: &str,
     fields: &syn::punctuated::Punctuated<syn::Field, syn::Token![,]>,
     crate_path: &proc_macro2::TokenStream,
-    has_type_marker: bool,
+    _has_type_marker: bool,
 ) -> proc_macro2::TokenStream {
     let mut field_schema_parts = vec![];
-
-    // Add __type field if TypeMarker is derived
-    if has_type_marker {
-        field_schema_parts.push(quote! {
-            format!("  \"__type\": \"string\",")
-        });
-    }
 
     // Process fields to build runtime schema generation
     for (i, field) in fields.iter().enumerate() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
         let attrs = parse_field_prompt_attrs(&field.attrs);
+
+        // Skip __type field - it's metadata that shouldn't be in the schema
+        // LLMs misinterpret "__type": "string" as "output the literal string 'string'"
+        // The __type field will be automatically added during deserialization via #[serde(default)]
+        if field_name_str == "__type" {
+            continue;
+        }
 
         // Skip if marked to skip
         if attrs.skip {
