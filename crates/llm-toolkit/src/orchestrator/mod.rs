@@ -54,6 +54,7 @@
 //! ```
 
 pub mod blueprint;
+pub mod config;
 pub mod error;
 pub mod strategy;
 
@@ -62,6 +63,7 @@ pub mod strategy;
 pub mod prompts;
 
 pub use blueprint::BlueprintWorkflow;
+pub use config::OrchestratorConfig;
 pub use error::OrchestratorError;
 pub use strategy::{RedesignStrategy, StrategyMap, StrategyStep};
 
@@ -158,6 +160,9 @@ pub struct Orchestrator {
 
     /// The original task description (stored for regeneration).
     current_task: Option<String>,
+
+    /// Configuration for orchestrator execution behavior.
+    config: OrchestratorConfig,
 }
 
 impl Orchestrator {
@@ -175,6 +180,7 @@ impl Orchestrator {
             strategy_map: None,
             context: HashMap::new(),
             current_task: None,
+            config: OrchestratorConfig::default(),
         };
 
         // Register InnerValidatorAgent as a standard agent
@@ -207,6 +213,7 @@ impl Orchestrator {
             strategy_map: None,
             context: HashMap::new(),
             current_task: None,
+            config: OrchestratorConfig::default(),
         };
 
         // Register InnerValidatorAgent as a standard agent
@@ -224,7 +231,72 @@ impl Orchestrator {
             strategy_map: None,
             context: HashMap::new(),
             current_task: None,
+            config: OrchestratorConfig::default(),
         }
+    }
+
+    /// Sets the orchestrator configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The configuration to use
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use llm_toolkit::orchestrator::OrchestratorConfig;
+    ///
+    /// let config = OrchestratorConfig {
+    ///     max_step_remediations: 5,
+    ///     ..Default::default()
+    /// };
+    ///
+    /// let mut orchestrator = Orchestrator::new(blueprint);
+    /// orchestrator.set_config(config);
+    /// ```
+    pub fn set_config(&mut self, config: OrchestratorConfig) {
+        self.config = config;
+    }
+
+    /// Returns a reference to the current configuration.
+    pub fn config(&self) -> &OrchestratorConfig {
+        &self.config
+    }
+
+    /// Sets the maximum number of remediations allowed per step.
+    ///
+    /// This is a convenience method that modifies the configuration in place.
+    ///
+    /// # Arguments
+    ///
+    /// * `max` - Maximum number of remediations (redesigns/retries) per step
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut orchestrator = Orchestrator::new(blueprint);
+    /// orchestrator.set_max_step_remediations(5);
+    /// ```
+    pub fn set_max_step_remediations(&mut self, max: usize) {
+        self.config.max_step_remediations = max;
+    }
+
+    /// Sets the maximum total number of redesigns allowed for the entire workflow.
+    ///
+    /// This is a convenience method that modifies the configuration in place.
+    ///
+    /// # Arguments
+    ///
+    /// * `max` - Maximum total number of redesigns
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut orchestrator = Orchestrator::new(blueprint);
+    /// orchestrator.set_max_total_redesigns(15);
+    /// ```
+    pub fn set_max_total_redesigns(&mut self, max: usize) {
+        self.config.max_total_redesigns = max;
     }
 
     /// Adds an agent to the orchestrator's registry.
@@ -996,6 +1068,7 @@ impl Orchestrator {
         let mut step_index = 0;
         let mut steps_executed = 0;
         let mut redesigns_triggered = 0;
+        let mut step_remediation_count: HashMap<usize, usize> = HashMap::new();
 
         loop {
             // Get current strategy info
@@ -1058,6 +1131,34 @@ impl Orchestrator {
                 Err(e) => {
                     log::warn!("Step {} failed: {}", step_index + 1, e);
 
+                    // Increment step remediation count
+                    let remediation_count = step_remediation_count.entry(step_index).or_insert(0);
+                    *remediation_count += 1;
+
+                    // Check step-level remediation limit
+                    if *remediation_count >= self.config.max_step_remediations {
+                        log::error!(
+                            "Step {} exceeded maximum remediation attempts ({})",
+                            step_index + 1,
+                            self.config.max_step_remediations
+                        );
+                        return Err(OrchestratorError::MaxStepRemediationsExceeded {
+                            step_index,
+                            max_remediations: self.config.max_step_remediations,
+                        });
+                    }
+
+                    // Check total redesign limit
+                    if redesigns_triggered >= self.config.max_total_redesigns {
+                        log::error!(
+                            "Total redesigns exceeded maximum limit ({})",
+                            self.config.max_total_redesigns
+                        );
+                        return Err(OrchestratorError::MaxTotalRedesignsExceeded(
+                            self.config.max_total_redesigns,
+                        ));
+                    }
+
                     // Determine redesign strategy
                     match self
                         .determine_redesign_strategy(&e, step_index, &goal)
@@ -1084,6 +1185,8 @@ impl Orchestrator {
                             step_index = 0;
                             // Clear context to start fresh
                             self.context.clear();
+                            // Clear step remediation counts on full regeneration
+                            step_remediation_count.clear();
                             continue;
                         }
                     }
@@ -1128,8 +1231,36 @@ impl Orchestrator {
 
         log::debug!("Redesign decision prompt:\n{}", prompt);
 
-        // Ask internal agent for decision
-        let decision = self.internal_agent.execute(prompt.into()).await?;
+        // Ask internal agent for decision with fallback handling
+        let decision = match self.internal_agent.execute(prompt.into()).await {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!(
+                    "Internal agent failed to determine redesign strategy: {}",
+                    e
+                );
+                log::warn!("Attempting fallback: defaulting to FullRegenerate strategy");
+
+                // Fallback attempt: Try once more with a simpler prompt
+                let fallback_prompt = format!(
+                    "The previous step failed with error: {}. Should we regenerate the entire strategy? Answer with 'FULL' or 'TACTICAL'.",
+                    error
+                );
+
+                match self.internal_agent.execute(fallback_prompt.into()).await {
+                    Ok(d) => d,
+                    Err(fallback_error) => {
+                        log::error!(
+                            "Internal agent failed on fallback attempt: {}",
+                            fallback_error
+                        );
+                        return Err(OrchestratorError::InternalAgentUnrecoverable(
+                            fallback_error.to_string(),
+                        ));
+                    }
+                }
+            }
+        };
 
         let decision_upper = decision.trim().to_uppercase();
 
@@ -1194,8 +1325,34 @@ impl Orchestrator {
 
         log::debug!("Tactical redesign prompt:\n{}", prompt);
 
-        // Get new steps from LLM
-        let response = self.internal_agent.execute(prompt.into()).await?;
+        // Get new steps from LLM with fallback handling
+        let response = match self.internal_agent.execute(prompt.into()).await {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("Internal agent failed during tactical redesign: {}", e);
+                log::warn!("Attempting fallback: requesting simpler redesign");
+
+                // Fallback attempt: Try with a simpler prompt
+                let fallback_prompt = format!(
+                    "Generate alternative steps to replace step {} which failed with: {}. Return a JSON array of steps.",
+                    failed_step_index + 1,
+                    error
+                );
+
+                match self.internal_agent.execute(fallback_prompt.into()).await {
+                    Ok(r) => r,
+                    Err(fallback_error) => {
+                        log::error!(
+                            "Internal agent failed on fallback attempt during tactical redesign: {}",
+                            fallback_error
+                        );
+                        return Err(OrchestratorError::InternalAgentUnrecoverable(
+                            fallback_error.to_string(),
+                        ));
+                    }
+                }
+            }
+        };
 
         // Parse JSON array of StrategyStep
         let new_steps: Vec<StrategyStep> = serde_json::from_str(&response).map_err(|e| {

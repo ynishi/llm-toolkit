@@ -33,6 +33,21 @@ pub enum OrchestratorError {
     /// Generic error for other cases.
     #[error("Orchestrator error: {0}")]
     Other(String),
+
+    /// Step exceeded maximum remediation attempts.
+    #[error("Step {step_index} exceeded maximum remediation attempts ({max_remediations})")]
+    MaxStepRemediationsExceeded {
+        step_index: usize,
+        max_remediations: usize,
+    },
+
+    /// Total number of redesigns exceeded the maximum limit.
+    #[error("Total number of redesigns exceeded the maximum limit ({0})")]
+    MaxTotalRedesignsExceeded(usize),
+
+    /// The internal agent failed to recover even after a fallback attempt.
+    #[error("The internal agent failed to recover even after a fallback attempt: {0}")]
+    InternalAgentUnrecoverable(String),
 }
 
 impl OrchestratorError {

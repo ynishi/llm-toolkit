@@ -1362,6 +1362,49 @@ orchestrator.add_agent(Box::new(WriterAgent));
   - **Full Regenerate**: Start over with a new strategy
 - ✅ **Built-in Validation**: Automatic registration of `InnerValidatorAgent` as a fallback validator
 - ✅ **Smart Context Management**: Automatic passing of outputs between steps with `ToPrompt` support
+- ✅ **Configurable Error Recovery Limits**: Control retry behavior to prevent infinite loops
+
+#### Configuring Error Recovery Limits
+
+The orchestrator provides configurable limits for error recovery to prevent infinite loops and control API costs:
+
+```rust
+use llm_toolkit::orchestrator::{Orchestrator, OrchestratorConfig};
+
+let mut orchestrator = Orchestrator::new(blueprint);
+
+// Method 1: Set entire configuration at once
+let config = OrchestratorConfig {
+    max_step_remediations: 5,     // Allow up to 5 retries per step
+    max_total_redesigns: 15,       // Allow up to 15 total redesigns
+};
+orchestrator.set_config(config);
+
+// Method 2: Modify individual limits
+orchestrator.set_max_step_remediations(5);
+orchestrator.set_max_total_redesigns(15);
+
+// Method 3: Use partial configuration with defaults
+let config = OrchestratorConfig {
+    max_step_remediations: 5,
+    ..Default::default()  // Use default for max_total_redesigns (10)
+};
+orchestrator.set_config(config);
+```
+
+**Default Limits:**
+- `max_step_remediations`: 3 (prevents infinite loops on a single failing step)
+- `max_total_redesigns`: 10 (controls overall workflow redesign attempts)
+
+**When Limits Are Exceeded:**
+- **Step limit exceeded**: Returns `OrchestratorError::MaxStepRemediationsExceeded`
+- **Total limit exceeded**: Returns `OrchestratorError::MaxTotalRedesignsExceeded`
+
+**Choosing Good Values:**
+- **Small workflows (2-3 steps)**: Default values work well
+- **Large workflows (5+ steps)**: Consider increasing `max_total_redesigns` to 15-20
+- **Critical steps**: If certain steps are known to be unstable, increase `max_step_remediations` to 5
+- **Cost-sensitive**: Reduce both limits to fail faster
 
 #### Smart Context Management with `ToPrompt`
 
