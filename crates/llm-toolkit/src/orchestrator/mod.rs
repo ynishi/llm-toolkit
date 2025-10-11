@@ -1057,6 +1057,22 @@ impl Orchestrator {
     /// Executes the current strategy step by step.
     ///
     /// Includes context injection, intent generation, and error handling with redesign.
+    ///
+    /// # Error Recovery with Limits
+    ///
+    /// The orchestrator implements two-level circuit breakers:
+    /// - **Step-level**: `max_step_remediations` limits retries per individual step
+    /// - **Total-level**: `max_total_redesigns` limits redesigns across entire workflow
+    ///
+    /// When a step fails:
+    /// 1. Increment step's failure counter
+    /// 2. Check if step limit exceeded → return error if so
+    /// 3. Check if total limit exceeded → return error if so
+    /// 4. Determine redesign strategy (Retry/TacticalRedesign/FullRegenerate)
+    /// 5. Execute chosen strategy and continue
+    ///
+    /// # Returns
+    ///
     /// Returns (final_output, steps_executed, redesigns_triggered).
     async fn execute_strategy(&mut self) -> Result<(JsonValue, usize, usize), OrchestratorError> {
         // Check strategy exists
@@ -1132,10 +1148,15 @@ impl Orchestrator {
                     log::warn!("Step {} failed: {}", step_index + 1, e);
 
                     // Increment step remediation count
+                    // This counts the number of failures for this specific step.
+                    // Example: If step 2 fails 3 times, step_remediation_count[2] = 3
                     let remediation_count = step_remediation_count.entry(step_index).or_insert(0);
                     *remediation_count += 1;
 
                     // Check step-level remediation limit
+                    // Example: If max_step_remediations=3 and this is the 3rd failure,
+                    // the step has been attempted 3 times total (initial + 2 retries),
+                    // so we stop here.
                     if *remediation_count >= self.config.max_step_remediations {
                         log::error!(
                             "Step {} exceeded maximum remediation attempts ({})",
@@ -1149,6 +1170,11 @@ impl Orchestrator {
                     }
 
                     // Check total redesign limit
+                    // Note: redesigns_triggered is incremented AFTER strategy selection,
+                    // so we check BEFORE incrementing. This means:
+                    // - Initial strategy execution: redesigns_triggered = 0 (not counted)
+                    // - After 10 redesigns: redesigns_triggered = 10 → stops here
+                    // Result: max_total_redesigns=10 allows 11 total executions
                     if redesigns_triggered >= self.config.max_total_redesigns {
                         log::error!(
                             "Total redesigns exceeded maximum limit ({})",
@@ -1186,6 +1212,9 @@ impl Orchestrator {
                             // Clear context to start fresh
                             self.context.clear();
                             // Clear step remediation counts on full regeneration
+                            // This is important: When we regenerate the entire strategy,
+                            // step indices may change (step 0 might become a different task),
+                            // so we reset all step-level counters to start fresh.
                             step_remediation_count.clear();
                             continue;
                         }

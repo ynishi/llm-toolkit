@@ -29,12 +29,27 @@ pub struct OrchestratorConfig {
     /// - Full regeneration (regenerate entire strategy)
     ///
     /// This limit prevents infinite loops on a single problematic step.
+    ///
+    /// **Counting behavior:**
+    /// - Each failure increments the step's remediation counter
+    /// - When counter reaches this limit, orchestrator stops with `MaxStepRemediationsExceeded`
+    /// - Example: `max_step_remediations = 3` allows 3 total attempts (initial + 2 retries)
+    ///
+    /// **Default:** 3 (allows initial attempt + 2 retries)
     pub max_step_remediations: usize,
 
     /// Maximum total number of redesigns allowed for the entire workflow.
     ///
     /// This is a global limit across all steps to prevent runaway execution
     /// and control API costs.
+    ///
+    /// **Counting behavior:**
+    /// - Initial strategy generation is NOT counted
+    /// - Each Retry/TacticalRedesign/FullRegenerate increments the counter
+    /// - When counter reaches this limit, orchestrator stops with `MaxTotalRedesignsExceeded`
+    /// - Example: `max_total_redesigns = 10` allows 11 total executions (initial + 10 redesigns)
+    ///
+    /// **Default:** 10 (allows initial strategy + 10 redesigns)
     pub max_total_redesigns: usize,
 }
 
