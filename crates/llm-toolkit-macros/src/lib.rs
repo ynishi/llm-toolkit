@@ -143,7 +143,7 @@ fn generate_schema_only_parts(
     let mut field_schema_parts = vec![];
 
     // Process fields to build runtime schema generation
-    for (_i, field) in fields.iter().enumerate() {
+    for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
         let attrs = parse_field_prompt_attrs(&field.attrs);
@@ -544,7 +544,8 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     PromptAttribute::None => {
                         let docs = extract_doc_comments(&variant.attrs);
                         if !docs.is_empty() {
-                            variant_lines.push(format!("  | \"{}\"  // {}", variant_name_str, docs));
+                            variant_lines
+                                .push(format!("  | \"{}\"  // {}", variant_name_str, docs));
                         } else {
                             variant_lines.push(format!("  | \"{}\"", variant_name_str));
                         }
@@ -574,10 +575,10 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             }
 
             // Add semicolon to last variant
-            if let Some(last) = lines.last_mut() {
-                if !last.ends_with(';') {
-                    last.push(';');
-                }
+            if let Some(last) = lines.last_mut()
+                && !last.ends_with(';')
+            {
+                last.push(';');
             }
 
             // Add example value (first non-skipped variant)
