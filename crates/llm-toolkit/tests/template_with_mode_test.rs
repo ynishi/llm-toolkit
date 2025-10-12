@@ -31,6 +31,6 @@ fn test_template_with_field_mode() {
     assert!(output.contains("Normal:"));
     assert!(output.contains("Schema:"));
 
-    // The schema_only mode should show the schema
-    assert!(output.contains("Schema for `Inner`"));
+    // The schema_only mode should show the schema (TypeScript format)
+    assert!(output.contains("type Inner = {"));
 }

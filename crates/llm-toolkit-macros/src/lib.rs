@@ -143,7 +143,7 @@ fn generate_schema_only_parts(
     let mut field_schema_parts = vec![];
 
     // Process fields to build runtime schema generation
-    for (i, field) in fields.iter().enumerate() {
+    for (_i, field) in fields.iter().enumerate() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
         let attrs = parse_field_prompt_attrs(&field.attrs);
@@ -166,48 +166,19 @@ fn generate_schema_only_parts(
         // Check if this is a Vec<T> where T might implement ToPrompt
         let (is_vec, inner_type) = extract_vec_inner_type(&field.ty);
 
-        // Add comma logic
-        let remaining_fields = fields
-            .iter()
-            .skip(i + 1)
-            .filter(|f| {
-                let attrs = parse_field_prompt_attrs(&f.attrs);
-                !attrs.skip
-            })
-            .count();
-        let comma = if remaining_fields > 0 { "," } else { "" };
-
         if is_vec {
-            // For Vec<T>, try to expand T's schema if T implements ToPrompt
+            // For Vec<T>, use TypeScript array syntax: T[]
+            // Format: field_name: TypeName[];  // comment
             let comment = if !field_docs.is_empty() {
-                format!(", // {}", field_docs)
+                format!("  // {}", field_docs)
             } else {
                 String::new()
             };
 
             field_schema_parts.push(quote! {
                 {
-                    let inner_schema = <#inner_type as #crate_path::prompt::ToPrompt>::prompt_schema();
-                    if inner_schema.is_empty() {
-                        // Fallback: just show type name
-                        format!("  \"{}\": \"{}[]\"{}{}", #field_name_str, stringify!(#inner_type).to_lowercase(), #comment, #comma)
-                    } else {
-                        // Expand nested schema inline
-                        let inner_lines: Vec<&str> = inner_schema.lines()
-                            .skip_while(|line| line.starts_with("###") || line.trim() == "{")
-                            .take_while(|line| line.trim() != "}")
-                            .collect();
-                        let inner_content = inner_lines.join("\n");
-                        format!("  \"{}\": [\n    {{\n{}\n    }}\n  ]{}{}",
-                            #field_name_str,
-                            inner_content.lines()
-                                .map(|line| format!("  {}", line))
-                                .collect::<Vec<_>>()
-                                .join("\n"),
-                            #comment,
-                            #comma
-                        )
-                    }
+                    let type_name = stringify!(#inner_type);
+                    format!("  {}: {}[];{}", #field_name_str, type_name, #comment)
                 }
             });
         } else {
@@ -216,68 +187,63 @@ fn generate_schema_only_parts(
             let is_primitive = is_primitive_type(field_type);
 
             if !is_primitive {
-                // Try to expand nested object schema
+                // For nested objects, use TypeScript type reference (no inline expansion)
+                // Format: field_name: TypeName;  // comment
                 let comment = if !field_docs.is_empty() {
-                    format!(", // {}", field_docs)
+                    format!("  // {}", field_docs)
                 } else {
                     String::new()
                 };
 
                 field_schema_parts.push(quote! {
                     {
-                        let nested_schema = <#field_type as #crate_path::prompt::ToPrompt>::prompt_schema();
-                        if nested_schema.is_empty() {
-                            // Fallback: just show type name
-                            let type_str = stringify!(#field_type).to_lowercase();
-                            format!("  \"{}\": \"{}\"{}{}", #field_name_str, type_str, #comment, #comma)
-                        } else {
-                            // Extract the inner schema content (skip header and outer braces)
-                            let nested_lines: Vec<&str> = nested_schema.lines()
-                                .skip_while(|line| line.starts_with("###") || line.trim() == "{")
-                                .take_while(|line| line.trim() != "}")
-                                .collect();
-
-                            if nested_lines.is_empty() {
-                                // Fallback if parsing fails
-                                let type_str = stringify!(#field_type).to_lowercase();
-                                format!("  \"{}\": \"{}\"{}{}", #field_name_str, type_str, #comment, #comma)
-                            } else {
-                                // Inline the nested schema
-                                let indented_content = nested_lines.iter()
-                                    .map(|line| format!("  {}", line))
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
-                                format!("  \"{}\": {{\n{}\n  }}{}{}", #field_name_str, indented_content, #comment, #comma)
-                            }
-                        }
+                        let type_name = stringify!(#field_type);
+                        format!("  {}: {};{}", #field_name_str, type_name, #comment)
                     }
                 });
             } else {
-                // Primitive type - use static type formatting
+                // Primitive type - use TypeScript formatting
+                // Format: field_name: type;  // comment
                 let type_str = format_type_for_schema(&field.ty);
                 let comment = if !field_docs.is_empty() {
-                    format!(", // {}", field_docs)
+                    format!("  // {}", field_docs)
                 } else {
                     String::new()
                 };
 
                 field_schema_parts.push(quote! {
-                    format!("  \"{}\": \"{}\"{}{}", #field_name_str, #type_str, #comment, #comma)
+                    format!("  {}: {};{}", #field_name_str, #type_str, #comment)
                 });
             }
         }
     }
 
-    // Build header
-    let header = if !struct_docs.is_empty() {
-        format!("### Schema for `{}`\n{}", struct_name, struct_docs)
-    } else {
-        format!("### Schema for `{}`", struct_name)
-    };
+    // Build TypeScript-style type definition
+    // Format:
+    // /**
+    //  * Struct description
+    //  */
+    // type StructName = {
+    //   field1: type1;  // comment1
+    //   field2: type2;  // comment2
+    // }
+
+    let mut header_lines = Vec::new();
+
+    // Add JSDoc comment if struct has description
+    if !struct_docs.is_empty() {
+        header_lines.push("/**".to_string());
+        header_lines.push(format!(" * {}", struct_docs));
+        header_lines.push(" */".to_string());
+    }
+
+    // Add type definition line
+    header_lines.push(format!("type {} = {{", struct_name));
 
     quote! {
         {
-            let mut lines = vec![#header.to_string(), "{".to_string()];
+            let mut lines = vec![];
+            #(lines.push(#header_lines.to_string());)*
             #(lines.push(#field_schema_parts);)*
             lines.push("}".to_string());
             vec![#crate_path::prompt::PromptPart::Text(lines.join("\n"))]
@@ -548,27 +514,79 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             let enum_name = &input.ident;
             let enum_docs = extract_doc_comments(&input.attrs);
 
-            // Collect variant names for compact representation
-            let mut variant_names = Vec::new();
+            // Generate TypeScript-style union type with descriptions
+            // Format:
+            // /**
+            //  * Enum description
+            //  */
+            // type EnumName =
+            //   | "Variant1"  // Description1
+            //   | "Variant2"  // Description2
+            //   | "Variant3"; // Description3
+            //
+            // Example value: "Variant1"
+
+            let mut variant_lines = Vec::new();
+            let mut first_variant_name = None;
+
             for variant in &data_enum.variants {
                 let variant_name = &variant.ident;
+                let variant_name_str = variant_name.to_string();
 
-                // Skip variants marked with #[prompt(skip)]
                 match parse_prompt_attribute(&variant.attrs) {
                     PromptAttribute::Skip => continue,
-                    _ => variant_names.push(variant_name.to_string()),
+                    PromptAttribute::Description(desc) => {
+                        variant_lines.push(format!("  | \"{}\"  // {}", variant_name_str, desc));
+                        if first_variant_name.is_none() {
+                            first_variant_name = Some(variant_name_str);
+                        }
+                    }
+                    PromptAttribute::None => {
+                        let docs = extract_doc_comments(&variant.attrs);
+                        if !docs.is_empty() {
+                            variant_lines.push(format!("  | \"{}\"  // {}", variant_name_str, docs));
+                        } else {
+                            variant_lines.push(format!("  | \"{}\"", variant_name_str));
+                        }
+                        if first_variant_name.is_none() {
+                            first_variant_name = Some(variant_name_str);
+                        }
+                    }
                 }
             }
 
-            // Generate compact single-line schema for better LLM JSON inference
-            // Format: "EnumName (enum: Variant1 | Variant2 | Variant3)"
-            // or with description: "EnumName: description (enum: Variant1 | Variant2)"
-            let variants_list = variant_names.join(" | ");
-            let prompt_string = if !enum_docs.is_empty() {
-                format!("{}: {} (enum: {})", enum_name, enum_docs, variants_list)
-            } else {
-                format!("{} (enum: {})", enum_name, variants_list)
-            };
+            // Build complete TypeScript-style schema
+            let mut lines = Vec::new();
+
+            // Add JSDoc comment if enum has description
+            if !enum_docs.is_empty() {
+                lines.push("/**".to_string());
+                lines.push(format!(" * {}", enum_docs));
+                lines.push(" */".to_string());
+            }
+
+            // Add type definition header
+            lines.push(format!("type {} =", enum_name));
+
+            // Add all variant lines
+            for line in &variant_lines {
+                lines.push(line.clone());
+            }
+
+            // Add semicolon to last variant
+            if let Some(last) = lines.last_mut() {
+                if !last.ends_with(';') {
+                    last.push(';');
+                }
+            }
+
+            // Add example value (first non-skipped variant)
+            if let Some(first_name) = first_variant_name {
+                lines.push("".to_string()); // Empty line
+                lines.push(format!("Example value: \"{}\"", first_name));
+            }
+
+            let prompt_string = lines.join("\n");
             let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
             // Generate match arms for instance-level to_prompt()

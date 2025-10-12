@@ -25,21 +25,17 @@ fn test_nested_vec_schema_expansion() {
 
     println!("Generated schema:\n{}", schema);
 
-    // Check that schema contains the header
-    assert!(schema.contains("### Schema for `ProducerOutput`"));
+    // Check TypeScript-style type definition
+    assert!(schema.contains("type ProducerOutput = {"));
 
-    // Check that evaluation_passed field is present
-    assert!(schema.contains("\"evaluation_passed\": \"boolean\""));
+    // Check that evaluation_passed field is present (TypeScript format)
+    assert!(schema.contains("evaluation_passed: boolean;"));
 
-    // Check that results field is present as an array
-    assert!(schema.contains("\"results\": ["));
+    // Check that results field uses TypeScript array syntax
+    assert!(schema.contains("results: EvaluationResult[];"));
 
-    // Check that nested EvaluationResult schema is expanded inline
-    assert!(schema.contains("\"rule\": \"string\""));
-    assert!(schema.contains("\"passed\": \"boolean\""));
-
-    // The nested schema should be indented
-    assert!(schema.contains("    \"rule\": \"string\""));
+    // Note: Nested types are referenced by name only, not expanded inline
+    assert!(!schema.contains("rule: string"));
 }
 
 #[test]
@@ -48,20 +44,21 @@ fn test_evaluation_result_schema() {
 
     println!("EvaluationResult schema:\n{}", schema);
 
-    assert!(schema.contains("### Schema for `EvaluationResult`"));
-    assert!(schema.contains("\"rule\": \"string\""));
-    assert!(schema.contains("\"passed\": \"boolean\""));
+    assert!(schema.contains("type EvaluationResult = {"));
+    assert!(schema.contains("rule: string;"));
+    assert!(schema.contains("passed: boolean;"));
 }
 
 #[test]
 fn test_nested_schema_with_comments() {
     let schema = ProducerOutput::prompt_schema();
 
-    // Check that field comments are preserved
+    // Check that field comments are preserved (TypeScript format)
     assert!(schema.contains("// Whether the evaluation passed all checks"));
     assert!(schema.contains("// List of evaluation results for each rule"));
 
-    // Check that nested field comments are included
-    assert!(schema.contains("// The rule being checked"));
-    assert!(schema.contains("// Whether this specific rule passed"));
+    // Note: Nested type comments are NOT included in parent's schema
+    // (they're in EvaluationResult's own schema)
+    assert!(!schema.contains("// The rule being checked"));
+    assert!(!schema.contains("// Whether this specific rule passed"));
 }

@@ -76,12 +76,12 @@ fn test_template_with_mode_syntax() {
 
     // Check that user_concept uses default (full) mode
     assert!(output.contains("USER CONCEPT:"));
-    // Full mode should contain schema information
-    assert!(output.contains("Schema for `Concept`"));
+    // Full mode should contain schema information (TypeScript format)
+    assert!(output.contains("type Concept = {"));
 
     // Check that style_guide uses schema_only mode
     assert!(output.contains("STYLE GUIDE (Schema Only):"));
-    assert!(output.contains("Schema for `StyleGuide`"));
+    assert!(output.contains("type StyleGuide = {"));
     // Schema only mode should NOT contain actual values
     assert!(!output.contains("warm tones"));
     assert!(!output.contains("birds eye view"));

@@ -21,14 +21,13 @@ mod tests {
         let prompt = instance.to_prompt();
         assert_eq!(prompt, "First: First variant with doc");
 
-        // Test schema prompt (all variants) - compact single-line format
+        // Test schema prompt (all variants) - TypeScript union type format
         let schema = TestEnum::prompt_schema();
-        assert!(schema.contains("TestEnum"));
-        assert!(schema.contains("(enum:"));
-        assert!(schema.contains("First"));
-        assert!(schema.contains("Second"));
-        assert!(schema.contains("Fourth"));
-        assert!(schema.contains("|")); // Pipe separator
+        assert!(schema.contains("type TestEnum ="));
+        assert!(schema.contains("| \"First\"  // First variant with doc"));
+        assert!(schema.contains("| \"Second\"  // Custom description"));
+        assert!(schema.contains("| \"Fourth\""));
+        assert!(schema.contains("Example value: \"First\""));
 
         // Check that skipped variant is not included
         assert!(!schema.contains("Third"));
@@ -57,20 +56,20 @@ mod tests {
         let prompt = instance.to_prompt();
         assert_eq!(prompt, "WithDoc: Uses doc comment");
 
-        // Test schema prompt (all variants) - compact single-line format
+        // Test schema prompt (all variants) - TypeScript union type format
         let schema = PriorityTest::prompt_schema();
 
         // Verify skip works
         assert!(!schema.contains("SkipMe"));
 
-        // Verify variants are present in compact format
-        assert!(schema.contains("(enum:"));
-        assert!(schema.contains("CustomOverride"));
-        assert!(schema.contains("WithDoc"));
-        assert!(schema.contains("PlainName"));
-        assert!(schema.contains("|")); // Pipe separator
+        // Verify variants are present in TypeScript format
+        assert!(schema.contains("type PriorityTest ="));
+        assert!(schema.contains("| \"CustomOverride\"  // Custom override"));
+        assert!(schema.contains("| \"WithDoc\"  // Uses doc comment"));
+        assert!(schema.contains("| \"PlainName\""));
+        assert!(schema.contains("Example value:"));
 
-        // Verify doc comment should not appear in compact format
+        // Verify custom description overrides doc comment
         assert!(!schema.contains("This doc comment should be ignored"));
     }
 
@@ -102,17 +101,15 @@ mod tests {
         let prompt = instance.to_prompt();
         assert_eq!(prompt, "A");
 
-        // Test schema prompt (all variants are skipped, so schema shows empty enum)
+        // Test schema prompt (all variants are skipped, so schema shows empty type definition)
         let schema = AllSkipped::prompt_schema();
-        assert!(schema.contains("AllSkipped"));
-        assert!(schema.contains("(enum:"));
-        assert!(schema.contains(")")); // Empty enum: "(enum: )"
-        // Verify skipped variants don't appear in the variants list
-        // Note: "AllSkipped" contains "A", so we need more specific checks
-        let enum_part = schema.split("(enum:").nth(1).unwrap_or("");
-        assert!(!enum_part.contains("A"));
-        assert!(!enum_part.contains("B"));
-        assert!(!enum_part.contains("C"));
+        assert!(schema.contains("type AllSkipped ="));
+        // With all variants skipped, there should be no variant definitions
+        // The type line should exist but with no variants following it
+        // Note: "AllSkipped" type name contains "A", so check for quoted variants specifically
+        assert!(!schema.contains("\"A\""));
+        assert!(!schema.contains("\"B\""));
+        assert!(!schema.contains("\"C\""));
     }
 
     #[test]
