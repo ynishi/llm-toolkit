@@ -548,44 +548,27 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             let enum_name = &input.ident;
             let enum_docs = extract_doc_comments(&input.attrs);
 
-            let mut prompt_lines = Vec::new();
-
-            // Add enum description
-            if !enum_docs.is_empty() {
-                prompt_lines.push(format!("{}: {}", enum_name, enum_docs));
-            } else {
-                prompt_lines.push(format!("{}:", enum_name));
-            }
-            prompt_lines.push(String::new()); // Empty line
-            prompt_lines.push("Possible values:".to_string());
-
-            // Add each variant with its documentation based on priority
+            // Collect variant names for compact representation
+            let mut variant_names = Vec::new();
             for variant in &data_enum.variants {
                 let variant_name = &variant.ident;
 
-                // Apply fallback logic with priority
+                // Skip variants marked with #[prompt(skip)]
                 match parse_prompt_attribute(&variant.attrs) {
-                    PromptAttribute::Skip => {
-                        // Skip this variant completely
-                        continue;
-                    }
-                    PromptAttribute::Description(desc) => {
-                        // Use custom description from #[prompt("...")]
-                        prompt_lines.push(format!("- {}: {}", variant_name, desc));
-                    }
-                    PromptAttribute::None => {
-                        // Fall back to doc comment or just variant name
-                        let variant_docs = extract_doc_comments(&variant.attrs);
-                        if !variant_docs.is_empty() {
-                            prompt_lines.push(format!("- {}: {}", variant_name, variant_docs));
-                        } else {
-                            prompt_lines.push(format!("- {}", variant_name));
-                        }
-                    }
+                    PromptAttribute::Skip => continue,
+                    _ => variant_names.push(variant_name.to_string()),
                 }
             }
 
-            let prompt_string = prompt_lines.join("\n");
+            // Generate compact single-line schema for better LLM JSON inference
+            // Format: "EnumName (enum: Variant1 | Variant2 | Variant3)"
+            // or with description: "EnumName: description (enum: Variant1 | Variant2)"
+            let variants_list = variant_names.join(" | ");
+            let prompt_string = if !enum_docs.is_empty() {
+                format!("{}: {} (enum: {})", enum_name, enum_docs, variants_list)
+            } else {
+                format!("{} (enum: {})", enum_name, variants_list)
+            };
             let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
             // Generate match arms for instance-level to_prompt()
