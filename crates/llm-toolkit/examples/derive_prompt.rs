@@ -14,5 +14,17 @@ fn main() {
         role: "World-Class Pro Engineer",
     };
 
-    println!("{}", user.to_prompt());
+    let output = user.to_prompt();
+    println!("{}", output);
+
+    // E2E Test Assertions
+    let expected = "User Yui is a World-Class Pro Engineer.";
+    if output != expected {
+        eprintln!("❌ ASSERTION FAILED:");
+        eprintln!("  Expected: {}", expected);
+        eprintln!("  Got:      {}", output);
+        std::process::exit(1);
+    }
+
+    println!("✅ E2E Test: PASSED");
 }

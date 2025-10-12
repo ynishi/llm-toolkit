@@ -1319,6 +1319,81 @@ async fn main() {
 }
 ```
 
+#### Customizing Internal Agents with `with_internal_agents`
+
+By default, `Orchestrator::new()` uses `ClaudeCodeAgent` and `ClaudeCodeJsonAgent` as internal agents for strategy generation and redesign decisions. You can inject custom internal agents for testing, different LLM backends, or specialized behavior.
+
+**Why customize internal agents?**
+- **Testing**: Use mock agents to test orchestration logic without external API calls
+- **Different LLM providers**: Use Gemini, Ollama, or custom backends for strategy generation
+- **Cost optimization**: Use cheaper models for internal decision-making
+- **Offline execution**: Run workflows completely offline with mock agents
+
+**Usage:**
+
+```rust
+use llm_toolkit::orchestrator::{BlueprintWorkflow, Orchestrator};
+use llm_toolkit::agent::{Agent, AgentError, Payload};
+
+// Define custom internal agents (e.g., mock agents for testing)
+struct MockStrategyAgent;
+
+#[async_trait::async_trait]
+impl Agent for MockStrategyAgent {
+    type Output = StrategyMap;
+
+    fn expertise(&self) -> &str {
+        "Mock strategy generator for testing"
+    }
+
+    async fn execute(&self, intent: Payload) -> Result<StrategyMap, AgentError> {
+        // Return a predefined strategy for testing
+        let mut strategy = StrategyMap::new("Mock workflow".to_string());
+        strategy.add_step(/* ... */);
+        Ok(strategy)
+    }
+}
+
+struct MockDecisionAgent;
+
+#[async_trait::async_trait]
+impl Agent for MockDecisionAgent {
+    type Output = String;
+
+    fn expertise(&self) -> &str {
+        "Mock decision maker for testing"
+    }
+
+    async fn execute(&self, intent: Payload) -> Result<String, AgentError> {
+        Ok("RETRY".to_string())  // Simple retry strategy
+    }
+}
+
+// Create orchestrator with custom internal agents
+let orchestrator = Orchestrator::with_internal_agents(
+    blueprint,
+    Box::new(MockDecisionAgent),      // For intent generation & redesign decisions
+    Box::new(MockStrategyAgent),      // For StrategyMap generation
+);
+
+// The orchestrator now uses your custom agents for all internal operations
+let result = orchestrator.execute(task).await;
+```
+
+**Default Internal Agents:**
+
+When using `Orchestrator::new()`, the following internal agents are used:
+- **Strategy Generation**: `ClaudeCodeJsonAgent` - Generates `StrategyMap` from blueprint
+- **Intent & Redesign**: `ClaudeCodeAgent` - Generates agent intents and makes redesign decisions
+
+**Complete Offline Example:**
+
+See `examples/orchestrator_with_mock.rs` for a complete example that runs entirely offline with mock agents:
+
+```bash
+cargo run --example orchestrator_with_mock --features agent,derive
+```
+
 #### Advanced: Custom Agents with Orchestrator
 
 You can combine custom agents (defined with `#[derive(Agent)]`) with the orchestrator:
@@ -1430,6 +1505,91 @@ Result: max_total_redesigns=10 allows up to 11 total strategy executions
 - **Large workflows (5+ steps)**: Consider increasing `max_total_redesigns` to 15-20
 - **Critical steps**: If certain steps are known to be unstable, increase `max_step_remediations` to 5
 - **Cost-sensitive**: Reduce both limits to fail faster (e.g., max_step_remediations=2, max_total_redesigns=5)
+
+#### Using Predefined Strategies
+
+By default, the orchestrator automatically generates execution strategies from your blueprint using an internal LLM. However, you can also provide a predefined strategy to:
+
+- **Reuse known-good strategies** that have been validated
+- **Test specific execution paths** with deterministic workflows
+- **Implement custom strategy generation logic** outside the orchestrator
+- **Skip strategy generation costs** when you already know the optimal plan
+
+**Basic Usage:**
+
+```rust
+use llm_toolkit::orchestrator::{Orchestrator, StrategyMap, StrategyStep};
+
+// Create orchestrator
+let mut orchestrator = Orchestrator::new(blueprint);
+orchestrator.add_agent(ClaudeCodeAgent::new());
+
+// Define a custom strategy manually
+let mut strategy = StrategyMap::new("Write a technical article".to_string());
+
+strategy.add_step(StrategyStep::new(
+    "step_1".to_string(),
+    "Create article outline".to_string(),
+    "ClaudeCodeAgent".to_string(),
+    "Create an outline for: {{ task }}".to_string(),
+    "Article outline".to_string(),
+));
+
+strategy.add_step(StrategyStep::new(
+    "step_2".to_string(),
+    "Write introduction".to_string(),
+    "ClaudeCodeAgent".to_string(),
+    "Based on {{ previous_output }}, write an introduction".to_string(),
+    "Introduction paragraph".to_string(),
+));
+
+// Set the predefined strategy
+orchestrator.set_strategy_map(strategy);
+
+// Execute - strategy generation is skipped
+let result = orchestrator.execute("Rust ownership system").await;
+```
+
+**Retrieving Current Strategy:**
+
+```rust
+// Check if strategy is set
+if let Some(strategy) = orchestrator.strategy_map() {
+    println!("Strategy has {} steps", strategy.steps.len());
+    for (i, step) in strategy.steps.iter().enumerate() {
+        println!("Step {}: {}", i + 1, step.description);
+    }
+}
+```
+
+**Backward Compatibility:**
+
+When no predefined strategy is set, the orchestrator behaves exactly as before - automatically generating strategies from the blueprint:
+
+```rust
+// Traditional usage - automatic strategy generation
+let mut orchestrator = Orchestrator::new(blueprint);
+orchestrator.add_agent(ClaudeCodeAgent::new());
+let result = orchestrator.execute(task).await; // Auto-generates strategy
+```
+
+**When to Use Predefined Strategies:**
+
+| Scenario | Use Auto-Generation | Use Predefined Strategy |
+|----------|---------------------|------------------------|
+| Exploring new workflows | ✅ Yes | ❌ No |
+| Production with validated flows | ❌ No | ✅ Yes |
+| Testing specific error scenarios | ❌ No | ✅ Yes |
+| Cost optimization (reuse strategies) | ❌ No | ✅ Yes |
+| Prototyping and experimentation | ✅ Yes | ❌ No |
+
+**Example Code:**
+
+See the complete example at `examples/orchestrator_with_predefined_strategy.rs`:
+
+```bash
+cargo run --example orchestrator_with_predefined_strategy --features agent,derive
+```
 
 #### Smart Context Management with `ToPrompt`
 

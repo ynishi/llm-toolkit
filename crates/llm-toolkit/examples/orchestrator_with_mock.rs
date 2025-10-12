@@ -143,24 +143,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let result = orchestrator.execute(task).await;
 
-    match result.status {
-        llm_toolkit::orchestrator::OrchestrationStatus::Success => {
-            println!("\n✅ Workflow completed!\n");
-            if let Some(output) = result.final_output {
-                let output_str =
-                    serde_json::to_string_pretty(&output).unwrap_or_else(|_| output.to_string());
-                println!("📄 Final Result:\n{}\n", output_str);
-            }
+    // E2E Test Assertions
+    println!("🔍 Validating results...\n");
+
+    // Assert: Status should be Success
+    if result.status != llm_toolkit::orchestrator::OrchestrationStatus::Success {
+        eprintln!("❌ ASSERTION FAILED: Expected Success status");
+        if let Some(error) = result.error_message {
+            eprintln!("   Error: {}", error);
         }
-        llm_toolkit::orchestrator::OrchestrationStatus::Failure => {
-            if let Some(error) = result.error_message {
-                eprintln!("\n❌ Workflow failed: {}\n", error);
-            } else {
-                eprintln!("\n❌ Workflow failed\n");
-            }
-            std::process::exit(1);
-        }
+        std::process::exit(1);
     }
+
+    // Assert: Should have executed 2 steps
+    if result.steps_executed != 2 {
+        eprintln!(
+            "❌ ASSERTION FAILED: Expected 2 steps executed, got {}",
+            result.steps_executed
+        );
+        std::process::exit(1);
+    }
+
+    // Assert: Should have 0 redesigns (no errors)
+    if result.redesigns_triggered != 0 {
+        eprintln!(
+            "❌ ASSERTION FAILED: Expected 0 redesigns, got {}",
+            result.redesigns_triggered
+        );
+        std::process::exit(1);
+    }
+
+    // Assert: Final output should exist
+    let output = result
+        .final_output
+        .expect("❌ ASSERTION FAILED: Expected final output");
+
+    // Assert: Output should be a string containing the mock response prefix
+    let output_str = serde_json::to_string_pretty(&output).unwrap_or_else(|_| output.to_string());
+    if !output_str.contains("📝 Generated") {
+        eprintln!(
+            "❌ ASSERTION FAILED: Expected output to contain '📝 Generated'\n   Got: {}",
+            output_str
+        );
+        std::process::exit(1);
+    }
+
+    // All assertions passed!
+    println!("✅ All assertions passed!\n");
+    println!("📊 Execution Summary:");
+    println!("  Status: {:?}", result.status);
+    println!("  Steps executed: {}", result.steps_executed);
+    println!("  Redesigns triggered: {}", result.redesigns_triggered);
+    println!("\n📄 Final Result:\n{}\n", output_str);
+
+    println!("✨ E2E Test: PASSED");
 
     Ok(())
 }

@@ -92,5 +92,5 @@ fn main() {
         ResponseWithPromptTypeMarker::TYPE_NAME
     );
 
-    println!("\n✅ All cases passed!");
+    println!("\n✅ E2E Test: PASSED");
 }

@@ -1,6 +1,6 @@
-.PHONY: preflight publish test-example-derive-prompt-enum
+.PHONY: preflight publish test-examples test-examples-offline
 
-# 実行したいExampleの名前をリストとして変数に定義
+# 全Example（外部API依存含む）
 EXAMPLES := \
 	derive_prompt_enum \
 	derive_prompt_for \
@@ -29,12 +29,40 @@ EXAMPLES := \
 	type_marker_schema_test \
 	test_type_output
 
-# test-examplesターゲットで、リストをループ処理する
+# 外部API依存なしのExample（E2Eテストとして実行可能）
+OFFLINE_EXAMPLES := \
+	derive_prompt \
+	derive_prompt_enum \
+	derive_prompt_for \
+	derive_prompt_format_with \
+	derive_prompt_set \
+	examples_section_test \
+	multimodal_prompt \
+	to_prompt_for_test \
+	external_template \
+	define_intent_comprehensive \
+	test_define_intent \
+	orchestrator_with_mock \
+	type_marker_schema_test \
+	test_type_output
+
+# 全Exampleを実行（外部API依存含む）
 test-examples:
 	@for name in $(EXAMPLES); do \
 		echo "Running $$name example..."; \
 		cargo run --example $$name --package llm-toolkit --features="derive agent"; \
 	done
+
+# 外部API依存なしのExampleのみを実行（E2Eテスト）
+test-examples-offline:
+	@echo "🧪 Running offline examples (E2E tests - no external API dependencies)..."
+	@for name in $(OFFLINE_EXAMPLES); do \
+		echo ""; \
+		echo "▶ Running $$name..."; \
+		cargo run --example $$name --package llm-toolkit --features="derive agent" || exit 1; \
+	done
+	@echo ""
+	@echo "✅ All offline examples passed!"
 
 # Run checks for all workspace members
 preflight: test-examples
