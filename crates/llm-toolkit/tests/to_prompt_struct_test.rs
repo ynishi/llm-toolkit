@@ -32,14 +32,14 @@ fn test_struct_schema_only_mode() {
     assert_eq!(schema.len(), 1);
 
     if let llm_toolkit::prompt::PromptPart::Text(text) = &schema[0] {
-        // Check that the schema contains struct name
-        assert!(text.contains("Schema for `Concept`"));
-        // Check that it contains the doc comment
+        // Check that the schema contains struct name (TypeScript format)
+        assert!(text.contains("type Concept = {"));
+        // Check that it contains the doc comment (JSDoc format)
         assert!(text.contains("A concept for image generation"));
-        // Check field names and types
-        assert!(text.contains("\"prompt\": \"string\""));
-        assert!(text.contains("\"negative_prompt\": \"string | null\""));
-        assert!(text.contains("\"style\": \"string\""));
+        // Check field names and types (TypeScript format)
+        assert!(text.contains("prompt: string;"));
+        assert!(text.contains("negative_prompt: string | null;"));
+        assert!(text.contains("style: string;"));
         // Check field doc comments
         assert!(text.contains("The main idea for the art to be generated"));
         assert!(text.contains("Elements to exclude from the generation"));
@@ -57,10 +57,10 @@ fn test_struct_to_prompt_with_mode() {
         style: "test style".to_string(),
     };
 
-    // Test to_prompt_with_mode
+    // Test to_prompt_with_mode (TypeScript format)
     let schema_str = concept.to_prompt_with_mode("schema_only");
-    assert!(schema_str.contains("Schema for `Concept`"));
-    assert!(schema_str.contains("\"prompt\": \"string\""));
+    assert!(schema_str.contains("type Concept = {"));
+    assert!(schema_str.contains("prompt: string;"));
 }
 
 #[derive(ToPrompt, Serialize)]
@@ -86,13 +86,13 @@ fn test_struct_without_example_attribute() {
         is_active: true,
     };
 
-    // Should generate schema when using schema_only mode
+    // Should generate schema when using schema_only mode (TypeScript format)
     let schema = profile.to_prompt_with_mode("schema_only");
-    assert!(schema.contains("Schema for `UserProfile`"));
-    assert!(schema.contains("\"id\": \"number\""));
-    assert!(schema.contains("\"name\": \"string\""));
-    assert!(schema.contains("\"email\": \"string | null\""));
-    assert!(schema.contains("\"is_active\": \"boolean\""));
+    assert!(schema.contains("type UserProfile = {"));
+    assert!(schema.contains("id: number;"));
+    assert!(schema.contains("name: string;"));
+    assert!(schema.contains("email: string | null;"));
+    assert!(schema.contains("is_active: boolean;"));
 }
 
 #[test]
@@ -120,17 +120,17 @@ fn test_example_only_mode_with_examples() {
 fn test_full_mode_combines_schema_and_example() {
     let concept = Concept::default();
 
-    // Test full mode - should combine schema and example
+    // Test full mode - should combine schema and example (TypeScript format)
     let full_output = concept.to_prompt_with_mode("full");
 
     // Should contain both schema and example sections
-    assert!(full_output.contains("Schema for `Concept`"));
+    assert!(full_output.contains("type Concept = {"));
     assert!(full_output.contains("### Example"));
     assert!(full_output.contains("Here is an example of a valid `Concept` object"));
 
-    // Should contain schema information
-    assert!(full_output.contains("\"prompt\": \"string\""));
-    assert!(full_output.contains("\"negative_prompt\": \"string | null\""));
+    // Should contain schema information (TypeScript format)
+    assert!(full_output.contains("prompt: string;"));
+    assert!(full_output.contains("negative_prompt: string | null;"));
 
     // Should contain example JSON
     assert!(full_output.contains("a cinematic, dynamic shot of a futuristic city at night"));

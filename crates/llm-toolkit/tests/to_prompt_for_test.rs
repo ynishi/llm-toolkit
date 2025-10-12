@@ -95,11 +95,11 @@ fn test_mode_placeholders() {
 
     let result = config.to_prompt_for_with_mode(&target, "full");
 
-    // Check schema section
+    // Check schema section (TypeScript format)
     assert!(result.contains("## Schema"));
-    assert!(result.contains("Schema for `WithModes`"));
-    assert!(result.contains("\"field1\": \"string\""));
-    assert!(result.contains("\"field2\": \"number\""));
+    assert!(result.contains("type WithModes = {"));
+    assert!(result.contains("field1: string;"));
+    assert!(result.contains("field2: number;"));
 
     // Check example section
     assert!(result.contains("## Example"));
@@ -122,8 +122,8 @@ fn test_mixed_placeholders() {
 
     assert!(result.contains("Config for TestConfig:"));
     assert!(result.contains("Full:"));
-    // Since MixedPlaceholders has mode support, {self} will use the mode-based output
-    assert!(result.contains("Schema for `MixedPlaceholders`"));
+    // Since MixedPlaceholders has mode support, {self} will use the mode-based output (TypeScript format)
+    assert!(result.contains("type MixedPlaceholders = {"));
     assert!(result.contains("\"name\": \"TestConfig\""));
     assert!(result.contains("\"value\": 999"));
     assert!(result.contains("Schema:"));
@@ -144,9 +144,9 @@ fn test_mode_parameter_affects_self_placeholder() {
     // For structs with mode support, the mode parameter should affect {self:mode} placeholders
     let result = config.to_prompt_for_with_mode(&target, "full");
 
-    // Check that both schema_only and example_only modes are in the output
+    // Check that both schema_only and example_only modes are in the output (TypeScript format)
     assert!(result.contains("## Schema"));
-    assert!(result.contains("Schema for `WithModes`"));
+    assert!(result.contains("type WithModes = {"));
     assert!(result.contains("## Example"));
     assert!(result.contains("\"field1\": \"test\""));
 }

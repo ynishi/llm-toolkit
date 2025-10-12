@@ -25,21 +25,16 @@ fn test_nested_object_schema_expansion() {
 
     println!("Generated schema:\n{}", schema);
 
-    // Schema should contain nested object structure, not just "emblem" string
+    // Schema should use TypeScript type references (not inline expansion)
     assert!(schema.contains("obvious_emblem"));
     assert!(schema.contains("creative_emblem"));
 
-    // Should expand nested Emblem schema inline
-    assert!(schema.contains("name"));
-    assert!(schema.contains("description"));
+    // Should reference Emblem type, not expand inline
+    assert!(schema.contains("obvious_emblem: Emblem;"));
+    assert!(schema.contains("creative_emblem: Emblem;"));
 
-    // Should NOT contain just the type name as a string value
-    assert!(!schema.contains(r#""obvious_emblem": "emblem""#));
-    assert!(!schema.contains(r#""creative_emblem": "emblem""#));
-
-    // Should contain nested object braces (JSON style with quotes)
-    assert!(schema.contains(r#""obvious_emblem": {"#));
-    assert!(schema.contains(r#""creative_emblem": {"#));
+    // Nested type definition is NOT included in parent schema
+    // Each type has its own schema via Type::prompt_schema()
 }
 
 #[test]
@@ -66,11 +61,10 @@ fn test_nested_object_with_primitives() {
 
     println!("Schema with mixed types:\n{}", schema);
 
-    // Primitives should be simple strings
-    assert!(schema.contains(r#""id": "number""#));
-    assert!(schema.contains(r#""name": "string""#));
+    // Primitives use TypeScript format
+    assert!(schema.contains("id: number;"));
+    assert!(schema.contains("name: string;"));
 
-    // Nested object should be expanded (JSON style)
-    assert!(schema.contains(r#""inner": {"#));
-    assert!(schema.contains(r#""value": "string""#));
+    // Nested object should use type reference (TypeScript style)
+    assert!(schema.contains("inner: Inner;"));
 }
