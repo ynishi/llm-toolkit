@@ -247,14 +247,10 @@ let intent = UserIntent::Greeting;
 let prompt = intent.to_prompt();
 // Output: "Greeting: User wants to greet or say hello"
 
-// Type-level: describe all possible variants
+// Type-level: describe all possible variants (compact single-line format)
 let schema = UserIntent::prompt_schema();
 // Output:
-// UserIntent: Represents different user intents for a chatbot
-//
-// Possible values:
-// - Greeting: User wants to greet or say hello
-// - Help: User is asking for help or assistance
+// UserIntent: Represents different user intents for a chatbot (enum: Greeting | Help)
 ```
 
 **When to use which:**
@@ -299,16 +295,10 @@ assert_eq!(action1.to_prompt(), "CreateDocument: User wants to create a new docu
 let action2 = UserAction::InternalDebugAction;
 assert_eq!(action2.to_prompt(), "InternalDebugAction");  // Skipped variants show name only
 
-// Type-level schema
+// Type-level schema (compact single-line format)
 let schema = UserAction::prompt_schema();
 // Output:
-// UserAction: Represents different actions a user can take in the system
-//
-// Possible values:
-// - CreateDocument: User wants to create a new document
-// - Search: User is searching for existing content
-// - UpdateProfile: Custom: User is updating their profile settings and preferences
-// - DeleteItem
+// UserAction: Represents different actions a user can take in the system (enum: CreateDocument | Search | UpdateProfile | DeleteItem)
 //
 // Note: InternalDebugAction is excluded from schema due to #[prompt(skip)]
 ```
