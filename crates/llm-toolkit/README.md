@@ -247,15 +247,28 @@ let intent = UserIntent::Greeting;
 let prompt = intent.to_prompt();
 // Output: "Greeting: User wants to greet or say hello"
 
-// Type-level: describe all possible variants (compact single-line format)
+// Type-level: describe all possible variants (TypeScript union type format)
 let schema = UserIntent::prompt_schema();
 // Output:
-// UserIntent: Represents different user intents for a chatbot (enum: Greeting | Help)
+// /**
+//  * Represents different user intents for a chatbot
+//  */
+// type UserIntent =
+//   | "Greeting"  // User wants to greet or say hello
+//   | "Help"  // User is asking for help or assistance;
+//
+// Example value: "Greeting"
 ```
 
 **When to use which:**
 - **`value.to_prompt()`** - When you need to describe a specific enum value to the LLM (e.g., "The user selected: Greeting")
 - **`Enum::prompt_schema()`** - When you need to explain all possible options to the LLM (e.g., "Choose one of these intents...")
+
+**TypeScript Format Benefits:**
+- Clear union type syntax that LLMs understand well
+- Each variant includes its description as an inline comment
+- Example value shows the correct JSON format
+- JSDoc comments for type-level documentation
 
 #### Advanced Attribute Controls
 
@@ -295,10 +308,19 @@ assert_eq!(action1.to_prompt(), "CreateDocument: User wants to create a new docu
 let action2 = UserAction::InternalDebugAction;
 assert_eq!(action2.to_prompt(), "InternalDebugAction");  // Skipped variants show name only
 
-// Type-level schema (compact single-line format)
+// Type-level schema (TypeScript union type format)
 let schema = UserAction::prompt_schema();
 // Output:
-// UserAction: Represents different actions a user can take in the system (enum: CreateDocument | Search | UpdateProfile | DeleteItem)
+// /**
+//  * Represents different actions a user can take in the system
+//  */
+// type UserAction =
+//   | "CreateDocument"  // User wants to create a new document
+//   | "Search"  // User is searching for existing content
+//   | "UpdateProfile"  // Custom: User is updating their profile settings and preferences
+//   | "DeleteItem";
+//
+// Example value: "CreateDocument"
 //
 // Note: InternalDebugAction is excluded from schema due to #[prompt(skip)]
 ```
@@ -867,11 +889,13 @@ struct CodeReviewAgent;
 //
 // IMPORTANT: Respond with valid JSON matching this schema:
 //
-// ### Schema for `ReviewResult`
-// {
-//   "quality_score": "number", // Overall quality score from 0 to 100,
-//   "issues": "string[]", // List of identified issues,
-//   "recommendations": "string[]" // Actionable recommendations for improvement
+// /**
+//  * (struct documentation if present)
+//  */
+// type ReviewResult = {
+//   quality_score: number;  // Overall quality score from 0 to 100
+//   issues: string[];  // List of identified issues
+//   recommendations: string[];  // Actionable recommendations for improvement
 // }"
 ```
 
@@ -914,16 +938,16 @@ pub struct ProducerOutput {
 }
 
 // Generated schema for ProducerOutput:
-// ### Schema for `ProducerOutput`
-// {
-//   "evaluation_passed": "boolean", // Whether the evaluation passed all checks,
-//   "results": [
-//     {
-//       "rule": "string", // The rule being checked,
-//       "passed": "boolean", // Whether this specific rule passed
-//     }
-//   ], // List of evaluation results for each rule
+// /**
+//  * (documentation if present)
+//  */
+// type ProducerOutput = {
+//   evaluation_passed: boolean;  // Whether the evaluation passed all checks
+//   results: EvaluationResult[];  // List of evaluation results for each rule
 // }
+//
+// Note: Nested types like EvaluationResult use type references, not inline expansion.
+// Call EvaluationResult::prompt_schema() separately to get its schema.
 ```
 
 **How it works:**
@@ -957,34 +981,37 @@ pub struct EmblemResponse {
 }
 
 // Generated schema for EmblemResponse:
-// ### Schema for `EmblemResponse`
-// {
-//   "obvious_emblem": {
-//     "name": "string", // The name of the emblem,
-//     "description": "string", // A description of the emblem
-//   }, // An obvious, straightforward emblem,
-//   "creative_emblem": {
-//     "name": "string", // The name of the emblem,
-//     "description": "string", // A description of the emblem
-//   }, // A creative, unexpected emblem
+// /**
+//  * (documentation if present)
+//  */
+// type EmblemResponse = {
+//   obvious_emblem: Emblem;  // An obvious, straightforward emblem
+//   creative_emblem: Emblem;  // A creative, unexpected emblem
 // }
+//
+// Note: Nested types like Emblem use type references, not inline expansion.
+// Call Emblem::prompt_schema() separately to get its schema.
 ```
 
 **How it works:**
 
-- The macro detects non-primitive types at compile time
-- For `Vec<T>`: expands as an array with T's schema inline
-- For nested objects: expands the object's schema inline
-- At runtime (first call only), it calls `T::prompt_schema()` to get the nested schema
-- The nested schema is inlined with proper indentation
-- Result is cached with `OnceLock` for performance (zero cost after first call)
+- The macro detects field types at compile time
+- For `Vec<T>`: generates TypeScript array syntax `T[]` (type reference, not expanded)
+- For nested objects: generates TypeScript type reference `TypeName` (not expanded inline)
+- For primitives: generates TypeScript primitive types (`string`, `number`, `boolean`, etc.)
+- Each type generates its own independent schema via `Type::prompt_schema()`
+
+**Benefits:**
+
+- **Clean, readable schemas** - TypeScript-style syntax that LLMs understand well
+- **Type references prevent clutter** - Nested types referenced by name, not expanded inline
+- **Modular schema design** - Each type has its own schema that can be called separately
+- **Industry-standard format** - Uses familiar TypeScript syntax for better LLM comprehension
 
 **Limitations:**
 
-- The nested type must implement `ToPrompt` with `#[prompt(mode = "full")]`
-- Schema expansion happens at runtime on first call to `prompt_schema()` (then cached)
-- Deep nesting is supported but may be harder for LLMs to parse
-- Primitive types (String, i32, bool, Vec, Option, HashMap, etc.) are not expanded
+- Nested types use references only - call `Type::prompt_schema()` separately to get full schema
+- Primitive types are formatted as TypeScript primitives (String → string, u64 → number, etc.)
 
 **Automatic Retry on Transient Errors:**
 
