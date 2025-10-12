@@ -1461,8 +1461,26 @@ impl Orchestrator {
             }
         };
 
+        // Extract JSON from response (handles markdown code blocks)
+        let json_str = crate::extract_json(&response).map_err(|e| {
+            log::error!(
+                "Failed to extract JSON from tactical redesign response. Error: {}\nResponse was: {}",
+                e,
+                response
+            );
+            OrchestratorError::StrategyGenerationFailed(format!(
+                "Failed to extract JSON from redesign response: {}",
+                e
+            ))
+        })?;
+
         // Parse JSON array of StrategyStep
-        let new_steps: Vec<StrategyStep> = serde_json::from_str(&response).map_err(|e| {
+        let new_steps: Vec<StrategyStep> = serde_json::from_str(&json_str).map_err(|e| {
+            log::error!(
+                "Failed to parse redesigned steps. Error: {}\nJSON was: {}",
+                e,
+                json_str
+            );
             OrchestratorError::StrategyGenerationFailed(format!(
                 "Failed to parse redesigned steps: {}",
                 e
