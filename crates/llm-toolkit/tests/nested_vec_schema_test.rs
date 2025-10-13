@@ -34,8 +34,16 @@ fn test_nested_vec_schema_expansion() {
     // Check that results field uses TypeScript array syntax
     assert!(schema.contains("results: EvaluationResult[];"));
 
-    // Note: Nested types are referenced by name only, not expanded inline
-    assert!(!schema.contains("rule: string"));
+    // ✅ NEW BEHAVIOR: Nested type definitions are now included
+    // The schema should include the EvaluationResult type definition
+    assert!(
+        schema.contains("type EvaluationResult = {"),
+        "Schema should include nested type definition"
+    );
+    assert!(
+        schema.contains("rule: string"),
+        "Schema should include fields from nested type"
+    );
 }
 
 #[test]
@@ -57,8 +65,14 @@ fn test_nested_schema_with_comments() {
     assert!(schema.contains("// Whether the evaluation passed all checks"));
     assert!(schema.contains("// List of evaluation results for each rule"));
 
-    // Note: Nested type comments are NOT included in parent's schema
-    // (they're in EvaluationResult's own schema)
-    assert!(!schema.contains("// The rule being checked"));
-    assert!(!schema.contains("// Whether this specific rule passed"));
+    // ✅ NEW BEHAVIOR: Nested type comments ARE now included in parent's schema
+    // The full type definition is embedded, including all comments
+    assert!(
+        schema.contains("// The rule being checked"),
+        "Schema should include comments from nested type"
+    );
+    assert!(
+        schema.contains("// Whether this specific rule passed"),
+        "Schema should include all fields from nested type"
+    );
 }

@@ -916,7 +916,7 @@ struct CodeReviewAgent;
 
 **Nested Schema Expansion:**
 
-The schema generation automatically expands nested types that implement `ToPrompt`, including both `Vec<T>` and regular nested objects:
+The schema generation automatically includes complete type definitions for nested types that implement `ToPrompt`, including both `Vec<T>` and regular nested objects. This ensures LLMs receive all necessary schema information in a single call:
 
 ```rust
 #[derive(Serialize, Deserialize, ToPrompt)]
@@ -937,25 +937,26 @@ pub struct ProducerOutput {
     pub results: Vec<EvaluationResult>,
 }
 
-// Generated schema for ProducerOutput:
-// /**
-//  * (documentation if present)
-//  */
+// Generated schema for ProducerOutput (single call):
+// type EvaluationResult = {
+//   rule: string;  // The rule being checked
+//   passed: boolean;  // Whether this specific rule passed
+// }
+//
 // type ProducerOutput = {
 //   evaluation_passed: boolean;  // Whether the evaluation passed all checks
 //   results: EvaluationResult[];  // List of evaluation results for each rule
 // }
-//
-// Note: Nested types like EvaluationResult use type references, not inline expansion.
-// Call EvaluationResult::prompt_schema() separately to get its schema.
 ```
 
 **How it works:**
 
-- The macro detects `Vec<T>` fields at compile time
-- At runtime (first call only), it calls `T::prompt_schema()` to get the nested schema
-- The nested schema is inlined with proper indentation
+- The macro detects nested types (both `Vec<T>` and regular fields) at compile time
+- At runtime (first call only), it collects `prompt_schema()` from all nested types
+- Nested type definitions are placed **before** the main type definition
+- Duplicates are automatically removed (same type used multiple times)
 - Result is cached with `OnceLock` for performance (zero cost after first call)
+- LLM receives complete schema information with all necessary type definitions
 
 **Nested Objects:**
 
@@ -980,38 +981,43 @@ pub struct EmblemResponse {
     pub creative_emblem: Emblem,
 }
 
-// Generated schema for EmblemResponse:
-// /**
-//  * (documentation if present)
-//  */
+// Generated schema for EmblemResponse (single call):
+// type Emblem = {
+//   name: string;  // The name of the emblem
+//   description: string;  // A description of the emblem
+// }
+//
 // type EmblemResponse = {
 //   obvious_emblem: Emblem;  // An obvious, straightforward emblem
 //   creative_emblem: Emblem;  // A creative, unexpected emblem
 // }
-//
-// Note: Nested types like Emblem use type references, not inline expansion.
-// Call Emblem::prompt_schema() separately to get its schema.
 ```
 
 **How it works:**
 
 - The macro detects field types at compile time
-- For `Vec<T>`: generates TypeScript array syntax `T[]` (type reference, not expanded)
-- For nested objects: generates TypeScript type reference `TypeName` (not expanded inline)
+- For `Vec<T>`: generates TypeScript array syntax `T[]` and includes `T` definition
+- For nested objects: generates TypeScript type reference `TypeName` and includes its full definition
 - For primitives: generates TypeScript primitive types (`string`, `number`, `boolean`, etc.)
-- Each type generates its own independent schema via `Type::prompt_schema()`
+- All type definitions are bundled together in the correct dependency order
 
 **Benefits:**
 
-- **Clean, readable schemas** - TypeScript-style syntax that LLMs understand well
-- **Type references prevent clutter** - Nested types referenced by name, not expanded inline
-- **Modular schema design** - Each type has its own schema that can be called separately
-- **Industry-standard format** - Uses familiar TypeScript syntax for better LLM comprehension
+- ✅ **Complete schema information** - LLM receives all type definitions in one call
+- ✅ **Zero manual work** - No need to manually concatenate schemas
+- ✅ **Type-driven design** - Rust types directly translate to LLM-friendly schemas
+- ✅ **Prevents parse errors** - LLM knows exactly what fields are required in nested objects
+- ✅ **Clean, readable output** - TypeScript-style syntax that LLMs understand well
+- ✅ **Industry-standard format** - Uses familiar TypeScript syntax for better LLM comprehension
 
-**Limitations:**
+**Why This Matters:**
 
-- Nested types use references only - call `Type::prompt_schema()` separately to get full schema
-- Primitive types are formatted as TypeScript primitives (String → string, u64 → number, etc.)
+Without complete type definitions, LLMs guess field names and types, leading to parse errors like:
+- `missing field 'age'` - LLM didn't know the field was required
+- Wrong field names - LLM invented fields not in the schema
+- Wrong types - LLM used `string` instead of `number`
+
+With complete type definitions included, the LLM has perfect information and generates correct output.
 
 **Automatic Retry on Transient Errors:**
 

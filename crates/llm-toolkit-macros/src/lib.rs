@@ -141,6 +141,7 @@ fn generate_schema_only_parts(
     _has_type_marker: bool,
 ) -> proc_macro2::TokenStream {
     let mut field_schema_parts = vec![];
+    let mut nested_type_collectors = vec![];
 
     // Process fields to build runtime schema generation
     for field in fields.iter() {
@@ -181,13 +182,22 @@ fn generate_schema_only_parts(
                     format!("  {}: {}[];{}", #field_name_str, type_name, #comment)
                 }
             });
+
+            // Collect nested type schema if not primitive
+            if let Some(inner) = inner_type
+                && !is_primitive_type(inner)
+            {
+                nested_type_collectors.push(quote! {
+                    <#inner as #crate_path::prompt::ToPrompt>::prompt_schema()
+                });
+            }
         } else {
             // Check if this is a custom type that implements ToPrompt (nested object)
             let field_type = &field.ty;
             let is_primitive = is_primitive_type(field_type);
 
             if !is_primitive {
-                // For nested objects, use TypeScript type reference (no inline expansion)
+                // For nested objects, use TypeScript type reference AND collect nested schema
                 // Format: field_name: TypeName;  // comment
                 let comment = if !field_docs.is_empty() {
                     format!("  // {}", field_docs)
@@ -200,6 +210,11 @@ fn generate_schema_only_parts(
                         let type_name = stringify!(#field_type);
                         format!("  {}: {};{}", #field_name_str, type_name, #comment)
                     }
+                });
+
+                // Collect nested type schema for type definitions section
+                nested_type_collectors.push(quote! {
+                    <#field_type as #crate_path::prompt::ToPrompt>::prompt_schema()
                 });
             } else {
                 // Primitive type - use TypeScript formatting
@@ -218,14 +233,18 @@ fn generate_schema_only_parts(
         }
     }
 
-    // Build TypeScript-style type definition
+    // Build TypeScript-style type definitions with nested types first
     // Format:
+    // type NestedType1 = { ... }
+    //
+    // type NestedType2 = { ... }
+    //
     // /**
     //  * Struct description
     //  */
     // type StructName = {
-    //   field1: type1;  // comment1
-    //   field2: type2;  // comment2
+    //   field1: NestedType1;  // comment1
+    //   field2: NestedType2;  // comment2
     // }
 
     let mut header_lines = Vec::new();
@@ -242,11 +261,30 @@ fn generate_schema_only_parts(
 
     quote! {
         {
-            let mut lines = vec![];
+            let mut all_lines: Vec<String> = Vec::new();
+
+            // Collect nested type definitions
+            let nested_schemas: Vec<String> = vec![#(#nested_type_collectors),*];
+            let mut seen_types = std::collections::HashSet::<String>::new();
+
+            for schema in nested_schemas {
+                if !schema.is_empty() {
+                    // Avoid duplicates by checking if we've seen this schema
+                    if seen_types.insert(schema.clone()) {
+                        all_lines.push(schema);
+                        all_lines.push(String::new());  // Empty line separator
+                    }
+                }
+            }
+
+            // Add main type definition
+            let mut lines: Vec<String> = Vec::new();
             #(lines.push(#header_lines.to_string());)*
             #(lines.push(#field_schema_parts);)*
             lines.push("}".to_string());
-            vec![#crate_path::prompt::PromptPart::Text(lines.join("\n"))]
+            all_lines.push(lines.join("\n"));
+
+            vec![#crate_path::prompt::PromptPart::Text(all_lines.join("\n"))]
         }
     }
 }
