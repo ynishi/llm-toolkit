@@ -34,7 +34,7 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentFrame`, `IntentExtractor`) | Implemented |
 | **Agent API** | Define reusable AI agents with expertise and structured outputs. | `Agent` trait, `#[derive(Agent)]` macro | Implemented |
 | **Auto-JSON Enforcement** | Automatically add JSON schema instructions to agent prompts for better LLM compliance. | `#[derive(Agent)]` with `ToPrompt::prompt_schema()` integration | Implemented |
-| **Built-in Retry** | Automatic retry on transient errors (ParseError, ProcessError, IoError) with configurable attempts. | `max_retries` attribute, `AgentError::is_retryable()` | Implemented |
+| **Built-in Retry** | Intelligent retry with 3-priority delay system: server retry_after (Priority 1), 429 exponential backoff (Priority 2), linear backoff (Priority 3). Includes RetryAgent decorator and Full Jitter. | `max_retries` attribute, `RetryAgent`, `retry_after` field | Implemented |
 | **Multi-Modal Payload** | Pass text and images to agents through a unified `Payload` interface with backward compatibility. | `Payload`, `PayloadContent` types | Implemented |
 | **Multi-Agent Orchestration** | Coordinate multiple agents to execute complex workflows with adaptive error recovery. | `Orchestrator`, `BlueprintWorkflow`, `StrategyMap` | Implemented |
 | **Execution Profiles** | Declaratively configure agent behavior (Creative/Balanced/Deterministic) via semantic profiles. | `ExecutionProfile` enum, `profile` attribute, `.with_execution_profile()` | Implemented (v0.13.0) |
@@ -1027,14 +1027,19 @@ struct DataExtractorAgent;
 
 // Automatically retries up to 3 times on:
 // - ParseError: LLM output malformed
-// - ProcessError: Process communication issues
+// - ProcessError: Process communication issues (including 429 rate limiting)
 // - IoError: Temporary I/O failures
 //
-// Behavior:
-// - Attempt 1 fails → wait 100ms → retry
-// - Attempt 2 fails → wait 200ms → retry
-// - Attempt 3 fails → wait 300ms → retry
-// - All attempts exhausted → return error
+// Intelligent Retry Delay (3-Priority System):
+// Priority 1: Server-provided retry_after (e.g., 90s from Retry-After header)
+// Priority 2: 429 fallback - exponential backoff capped at 60s (2^attempt, max 60s)
+// Priority 3: Other errors - linear backoff (100ms × attempt)
+// All delays use Full Jitter (random 0~delay) to prevent thundering herd
+//
+// Example with 429 rate limiting:
+// - Attempt 1 fails (429 + retry_after=60s) → wait ~30s (jittered) → retry
+// - Attempt 2 fails (429, no retry_after) → wait ~1-2s (exponential + jitter) → retry
+// - Attempt 3 fails → return error
 ```
 
 **Customizing Retry Behavior:**
@@ -1057,9 +1062,36 @@ struct ResilientAgent;
 struct NoRetryAgent;
 ```
 
+**RetryAgent Wrapper - Add Retry to Any Agent:**
+
+For production use cases where you need more control over retry behavior, use the `RetryAgent` decorator to wrap any existing agent:
+
+```rust
+use llm_toolkit::agent::impls::{ClaudeCodeAgent, RetryAgent};
+
+// Wrap any agent with retry logic
+let base_agent = ClaudeCodeAgent::new();
+let retry_agent = RetryAgent::new(base_agent, 5); // Max 5 retries
+
+// The wrapper handles all retry logic automatically
+let result = retry_agent.execute(payload).await?;
+
+// RetryAgent follows the same 3-priority delay system:
+// - Server retry_after takes highest priority
+// - 429 errors use exponential backoff (capped at 60s)
+// - Other errors use linear backoff (100ms × attempt)
+```
+
+**Benefits of RetryAgent:**
+- ✅ **Decorator Pattern**: Wrap any `Agent` implementation without modification
+- ✅ **Unified Retry Logic**: Same retry mechanism used by macros (DRY principle)
+- ✅ **Production-Ready**: Full control over max_retries and retry behavior
+- ✅ **429 Rate Limiting**: Intelligent handling of server-provided retry delays
+- ✅ **Zero Configuration**: Works out-of-the-box with sensible defaults
+
 **Design Philosophy:**
 
-Agent-level retries are intentionally **simple and limited** (2-3 attempts, fixed delay):
+Agent-level retries are intentionally **simple and limited** (2-3 attempts by default):
 - **Fail fast**: Quickly report errors to the orchestrator
 - **Orchestrator is smarter**: Has broader context for complex error recovery
   - Try different agents
@@ -1068,6 +1100,30 @@ Agent-level retries are intentionally **simple and limited** (2-3 attempts, fixe
 - **System stability**: Simple local retries + complex orchestration at the top = robust system
 
 This design aligns with the Orchestrator's 3-stage error recovery (Tactical → Full Redesign → Human Escalation).
+
+**Advanced: Server-Provided Retry Delays**
+
+When LLM APIs return 429 rate limiting errors with a `Retry-After` header, agents automatically respect the server-specified delay:
+
+```rust
+use llm_toolkit::agent::{AgentError, ProcessError};
+use std::time::Duration;
+
+// Example: Creating a 429 error with retry_after
+let error = AgentError::process_error_with_retry_after(
+    429,
+    "Rate limit exceeded",
+    true,
+    Duration::from_secs(90)
+);
+
+// The retry mechanism will:
+// 1. Extract retry_after (90s)
+// 2. Apply Full Jitter (random 0~90s)
+// 3. Wait before retrying
+//
+// This prevents overwhelming rate-limited APIs and respects server guidance
+```
 
 ##### 2. Advanced Agents with `#[agent(...)]` (Recommended for Production)
 
