@@ -91,10 +91,23 @@ impl Agent for TaskGeneratorAgent {
             .inner
             .execute(Payload::text(&intent_with_schema))
             .await?;
-        let json_str = extract_json(&response)
-            .map_err(|e| AgentError::ParseError(format!("Failed to extract JSON: {}", e)))?;
-        serde_json::from_str(&json_str)
-            .map_err(|e| AgentError::ParseError(format!("Failed to parse agent output: {}", e)))
+        let json_str = extract_json(&response).map_err(|e| AgentError::ParseError {
+            message: format!("Failed to extract JSON: {}", e),
+            reason: llm_toolkit::agent::error::ParseErrorReason::MarkdownExtractionFailed,
+        })?;
+        serde_json::from_str(&json_str).map_err(|e| {
+            let reason = if e.is_eof() {
+                llm_toolkit::agent::error::ParseErrorReason::UnexpectedEof
+            } else if e.is_syntax() {
+                llm_toolkit::agent::error::ParseErrorReason::InvalidJson
+            } else {
+                llm_toolkit::agent::error::ParseErrorReason::SchemaMismatch
+            };
+            AgentError::ParseError {
+                message: format!("Failed to parse agent output: {}", e),
+                reason,
+            }
+        })
     }
 }
 

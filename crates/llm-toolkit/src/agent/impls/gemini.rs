@@ -167,8 +167,11 @@ impl GeminiAgent {
             .arg("gemini")
             .output()
             .await
-            .map_err(|e| {
-                AgentError::ProcessError(format!("Failed to check gemini availability: {}", e))
+            .map_err(|e| AgentError::ProcessError {
+                status_code: None,
+                message: format!("Failed to check gemini availability: {}", e),
+                is_retryable: true,
+                retry_after: None,
             })?;
 
         if output.status.success() {
@@ -268,9 +271,11 @@ impl Agent for GeminiAgent {
         })?;
 
         if output.status.success() {
-            let response = String::from_utf8(output.stdout).map_err(|e| {
-                AgentError::ParseError(format!("Failed to parse gemini stdout: {}", e))
-            })?;
+            let response =
+                String::from_utf8(output.stdout).map_err(|e| AgentError::ParseError {
+                    message: format!("Failed to parse gemini stdout: {}", e),
+                    reason: crate::agent::error::ParseErrorReason::UnexpectedEof,
+                })?;
 
             Ok(response.trim().to_string())
         } else {

@@ -25,3 +25,4 @@ strum = { version = "0.26", features = ["derive"] }
 strum_macros = "0.26"
 base64 = "0.22"
 quick-xml = { version = "0.38.3", features = ["serde"] }
+rand = "0.8"

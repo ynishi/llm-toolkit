@@ -5,6 +5,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Content that can be included in a payload.
 ///
@@ -20,10 +21,16 @@ pub enum PayloadContent {
     ImageData(Vec<u8>),
 }
 
+/// Inner payload data, wrapped in Arc for efficient cloning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PayloadInner {
+    contents: Vec<PayloadContent>,
+}
+
 /// A multi-modal payload that can contain multiple content items.
 ///
-/// This allows passing text, images, and other content types to agents
-/// in a flexible and extensible way.
+/// This structure uses `Arc` internally to make cloning efficient,
+/// which is especially important when retrying agent operations.
 ///
 /// # Examples
 ///
@@ -35,64 +42,88 @@ pub enum PayloadContent {
 /// let payload: Payload = "Analyze this text".to_string().into();
 ///
 /// // Multi-modal payload with text and image
-/// let payload = Payload {
-///     contents: vec![
-///         PayloadContent::Text("What's in this image?".to_string()),
-///         PayloadContent::Image(PathBuf::from("/path/to/image.png")),
-///     ],
-/// };
+/// let payload = Payload::text("What's in this image?")
+///     .with_image(PathBuf::from("/path/to/image.png"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Payload {
-    /// The contents of this payload
-    pub contents: Vec<PayloadContent>,
+    /// The contents of this payload, wrapped in Arc for efficient cloning
+    inner: Arc<PayloadInner>,
 }
 
 impl Payload {
     /// Creates a new empty payload.
     pub fn new() -> Self {
         Self {
-            contents: Vec::new(),
+            inner: Arc::new(PayloadInner {
+                contents: Vec::new(),
+            }),
         }
     }
 
     /// Creates a payload with a single text content.
     pub fn text(text: impl Into<String>) -> Self {
         Self {
-            contents: vec![PayloadContent::Text(text.into())],
+            inner: Arc::new(PayloadInner {
+                contents: vec![PayloadContent::Text(text.into())],
+            }),
         }
     }
 
     /// Creates a payload with a single image from a path.
     pub fn image(path: PathBuf) -> Self {
         Self {
-            contents: vec![PayloadContent::Image(path)],
+            inner: Arc::new(PayloadInner {
+                contents: vec![PayloadContent::Image(path)],
+            }),
         }
     }
 
     /// Creates a payload with a single image from raw bytes.
     pub fn image_data(data: Vec<u8>) -> Self {
         Self {
-            contents: vec![PayloadContent::ImageData(data)],
+            inner: Arc::new(PayloadInner {
+                contents: vec![PayloadContent::ImageData(data)],
+            }),
         }
     }
 
+    /// Returns a reference to the contents of this payload.
+    pub fn contents(&self) -> &[PayloadContent] {
+        &self.inner.contents
+    }
+
     /// Adds text content to this payload.
-    pub fn with_text(mut self, text: impl Into<String>) -> Self {
-        self.contents.push(PayloadContent::Text(text.into()));
-        self
+    pub fn with_text(self, text: impl Into<String>) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.push(PayloadContent::Text(text.into()));
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
     }
 
     /// Adds an image from a path to this payload.
-    pub fn with_image(mut self, path: PathBuf) -> Self {
-        self.contents.push(PayloadContent::Image(path));
-        self
+    pub fn with_image(self, path: PathBuf) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.push(PayloadContent::Image(path));
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
     }
 
     /// Adds an image from raw bytes to this payload.
-    pub fn with_image_data(mut self, data: Vec<u8>) -> Self {
-        self.contents.push(PayloadContent::ImageData(data));
-        self
+    pub fn with_image_data(self, data: Vec<u8>) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.push(PayloadContent::ImageData(data));
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
     }
 
     /// Prepends text content to the beginning of this payload.
@@ -110,16 +141,22 @@ impl Payload {
     ///
     /// assert_eq!(payload.to_text(), "System instructions: \nUser question");
     /// ```
-    pub fn prepend_text(mut self, text: impl Into<String>) -> Self {
-        self.contents.insert(0, PayloadContent::Text(text.into()));
-        self
+    pub fn prepend_text(self, text: impl Into<String>) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.insert(0, PayloadContent::Text(text.into()));
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
     }
 
     /// Returns all text contents concatenated with newlines.
     ///
     /// This is useful for agents that only support text input.
     pub fn to_text(&self) -> String {
-        self.contents
+        self.inner
+            .contents
             .iter()
             .filter_map(|c| match c {
                 PayloadContent::Text(s) => Some(s.as_str()),
@@ -131,14 +168,16 @@ impl Payload {
 
     /// Returns true if this payload contains only text.
     pub fn is_text_only(&self) -> bool {
-        self.contents
+        self.inner
+            .contents
             .iter()
             .all(|c| matches!(c, PayloadContent::Text(_)))
     }
 
     /// Returns true if this payload contains any images.
     pub fn has_images(&self) -> bool {
-        self.contents
+        self.inner
+            .contents
             .iter()
             .any(|c| matches!(c, PayloadContent::Image(_) | PayloadContent::ImageData(_)))
     }
@@ -177,9 +216,9 @@ mod tests {
     #[test]
     fn test_payload_from_string() {
         let payload: Payload = "Hello world".to_string().into();
-        assert_eq!(payload.contents.len(), 1);
+        assert_eq!(payload.contents().len(), 1);
         assert!(matches!(
-            &payload.contents[0],
+            &payload.contents()[0],
             PayloadContent::Text(s) if s == "Hello world"
         ));
     }
@@ -221,7 +260,7 @@ mod tests {
             .with_image(PathBuf::from("/path/to/image.png"))
             .with_text("Additional context");
 
-        assert_eq!(payload.contents.len(), 3);
+        assert_eq!(payload.contents().len(), 3);
         assert!(payload.has_images());
         assert!(!payload.is_text_only());
     }
@@ -230,7 +269,7 @@ mod tests {
     fn test_prepend_text() {
         let payload = Payload::text("User question").prepend_text("System instructions");
 
-        assert_eq!(payload.contents.len(), 2);
+        assert_eq!(payload.contents().len(), 2);
         assert_eq!(payload.to_text(), "System instructions\nUser question");
     }
 
@@ -240,12 +279,26 @@ mod tests {
             .with_image(PathBuf::from("/test.png"))
             .prepend_text("System instructions");
 
-        assert_eq!(payload.contents.len(), 3);
+        assert_eq!(payload.contents().len(), 3);
         assert!(payload.has_images());
         // First element should be the prepended text
         assert!(matches!(
-            &payload.contents[0],
+            &payload.contents()[0],
             PayloadContent::Text(s) if s == "System instructions"
         ));
+    }
+
+    #[test]
+    fn test_payload_clone_is_cheap() {
+        // Test that cloning is efficient (Arc-based)
+        let payload = Payload::text("Large content")
+            .with_text("More content")
+            .with_text("Even more content");
+
+        let cloned = payload.clone();
+
+        // Arc ensures both point to same data
+        assert_eq!(payload.to_text(), cloned.to_text());
+        assert_eq!(payload.contents().len(), cloned.contents().len());
     }
 }

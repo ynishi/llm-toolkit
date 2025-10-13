@@ -145,8 +145,11 @@ impl ClaudeCodeAgent {
             .arg("claude")
             .output()
             .await
-            .map_err(|e| {
-                AgentError::ProcessError(format!("Failed to check claude availability: {}", e))
+            .map_err(|e| AgentError::ProcessError {
+                status_code: None,
+                message: format!("Failed to check claude availability: {}", e),
+                is_retryable: true,
+                retry_after: None,
             })?;
 
         if output.status.success() {
@@ -220,11 +223,16 @@ impl Agent for ClaudeCodeAgent {
 
         let output = cmd.output().await.map_err(|e| {
             log::error!("Failed to spawn claude process: {}", e);
-            AgentError::ProcessError(format!(
-                "Failed to spawn claude process: {}. \
-                 Make sure 'claude' is installed and in PATH.",
-                e
-            ))
+            AgentError::ProcessError {
+                status_code: None,
+                message: format!(
+                    "Failed to spawn claude process: {}. \
+                     Make sure 'claude' is installed and in PATH.",
+                    e
+                ),
+                is_retryable: true,
+                retry_after: None,
+            }
         })?;
 
         if !output.status.success() {
@@ -363,20 +371,33 @@ where
         // Try to extract JSON from the output (might be wrapped in markdown, etc.)
         let json_str = crate::extract_json(&raw_output).map_err(|e| {
             log::error!("Failed to extract JSON: {}", e);
-            AgentError::ParseError(format!(
-                "Failed to extract JSON from claude output: {}. Raw output: {}",
-                e, raw_output
-            ))
+            AgentError::ParseError {
+                message: format!(
+                    "Failed to extract JSON from claude output: {}. Raw output: {}",
+                    e, raw_output
+                ),
+                reason: crate::agent::error::ParseErrorReason::MarkdownExtractionFailed,
+            }
         })?;
 
         log::debug!("Parsing JSON into {}...", std::any::type_name::<T>());
 
         let result = serde_json::from_str(&json_str).map_err(|e| {
             log::error!("Failed to parse JSON: {}", e);
-            AgentError::ParseError(format!(
-                "Failed to parse JSON: {}. Extracted JSON: {}",
-                e, json_str
-            ))
+
+            // Determine the parse error reason based on serde_json error type
+            let reason = if e.is_eof() {
+                crate::agent::error::ParseErrorReason::UnexpectedEof
+            } else if e.is_syntax() {
+                crate::agent::error::ParseErrorReason::InvalidJson
+            } else {
+                crate::agent::error::ParseErrorReason::SchemaMismatch
+            };
+
+            AgentError::ParseError {
+                message: format!("Failed to parse JSON: {}. Extracted JSON: {}", e, json_str),
+                reason,
+            }
         })?;
 
         log::info!(

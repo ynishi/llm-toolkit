@@ -3328,56 +3328,44 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
                 // Create internal agent based on backend configuration
                 #agent_init
 
-                // Retry configuration
-                let max_retries: u32 = #max_retries;
-                let mut attempts = 0u32;
+                // Use the unified retry_execution function (DRY principle)
+                let agent_ref = &agent;
+                #crate_path::agent::retry::retry_execution(
+                    #max_retries,
+                    &intent,
+                    move |payload| {
+                        let payload = payload.clone();
+                        async move {
+                            // Execute and get response
+                            let response = agent_ref.execute(payload).await?;
 
-                loop {
-                    attempts += 1;
+                            // Extract JSON from the response
+                            let json_str = #crate_path::extract_json(&response)
+                                .map_err(|e| #crate_path::agent::AgentError::ParseError {
+                                    message: format!("Failed to extract JSON: {}", e),
+                                    reason: #crate_path::agent::error::ParseErrorReason::MarkdownExtractionFailed,
+                                })?;
 
-                    // Execute and get response
-                    let result = async {
-                        let response = agent.execute(intent.clone()).await?;
+                            // Deserialize into output type
+                            serde_json::from_str::<Self::Output>(&json_str)
+                                .map_err(|e| {
+                                    // Determine the parse error reason based on serde_json error type
+                                    let reason = if e.is_eof() {
+                                        #crate_path::agent::error::ParseErrorReason::UnexpectedEof
+                                    } else if e.is_syntax() {
+                                        #crate_path::agent::error::ParseErrorReason::InvalidJson
+                                    } else {
+                                        #crate_path::agent::error::ParseErrorReason::SchemaMismatch
+                                    };
 
-                        // Extract JSON from the response
-                        let json_str = #crate_path::extract_json(&response)
-                            .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))?;
-
-                        // Deserialize into output type
-                        serde_json::from_str::<Self::Output>(&json_str)
-                            .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))
-                    }.await;
-
-                    match result {
-                        Ok(output) => return Ok(output),
-                        Err(e) if e.is_retryable() && attempts < max_retries => {
-                            // Log retry attempt
-                            log::warn!(
-                                "Agent execution failed (attempt {}/{}): {}. Retrying...",
-                                attempts,
-                                max_retries,
-                                e
-                            );
-
-                            // Simple fixed delay: 100ms * attempt number
-                            let delay_ms = 100 * attempts as u64;
-                            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-
-                            // Continue to next iteration
-                            continue;
-                        }
-                        Err(e) => {
-                            if attempts > 1 {
-                                log::error!(
-                                    "Agent execution failed after {} attempts: {}",
-                                    attempts,
-                                    e
-                                );
-                            }
-                            return Err(e);
+                                    #crate_path::agent::AgentError::ParseError {
+                                        message: format!("Failed to parse JSON: {}", e),
+                                        reason,
+                                    }
+                                })
                         }
                     }
-                }
+                ).await
             }
 
             async fn is_available(&self) -> Result<(), #crate_path::agent::AgentError> {
@@ -3578,11 +3566,25 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
 
                 // Extract JSON from the response
                 let json_str = #crate_path::extract_json(&response)
-                    .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))?;
+                    .map_err(|e| #crate_path::agent::AgentError::ParseError {
+                        message: e.to_string(),
+                        reason: #crate_path::agent::error::ParseErrorReason::MarkdownExtractionFailed,
+                    })?;
 
                 // Deserialize into output type
-                serde_json::from_str(&json_str)
-                    .map_err(|e| #crate_path::agent::AgentError::ParseError(e.to_string()))
+                serde_json::from_str(&json_str).map_err(|e| {
+                    let reason = if e.is_eof() {
+                        #crate_path::agent::error::ParseErrorReason::UnexpectedEof
+                    } else if e.is_syntax() {
+                        #crate_path::agent::error::ParseErrorReason::InvalidJson
+                    } else {
+                        #crate_path::agent::error::ParseErrorReason::SchemaMismatch
+                    };
+                    #crate_path::agent::AgentError::ParseError {
+                        message: e.to_string(),
+                        reason,
+                    }
+                })
             }
 
             async fn is_available(&self) -> Result<(), #crate_path::agent::AgentError> {

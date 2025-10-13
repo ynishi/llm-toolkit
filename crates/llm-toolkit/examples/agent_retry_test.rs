@@ -48,7 +48,10 @@ impl AgentTrait for FailingMockAgent {
 
         if current < self.failures_remaining {
             println!("  ⚠️  Mock agent failing (attempt {})", current + 1);
-            Err(AgentError::ParseError("Simulated parse error".to_string()))
+            Err(AgentError::ParseError {
+                message: "Simulated parse error".to_string(),
+                reason: llm_toolkit::agent::error::ParseErrorReason::MarkdownExtractionFailed,
+            })
         } else {
             println!("  ✅ Mock agent succeeded (attempt {})", current + 1);
             Ok(r#"{"message": "Success after retries!"}"#.to_string())
