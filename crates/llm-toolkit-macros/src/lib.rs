@@ -411,6 +411,127 @@ fn parse_prompt_attribute(attrs: &[syn::Attribute]) -> PromptAttribute {
     PromptAttribute::None
 }
 
+/// Serde rename rules
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenameRule {
+    #[allow(dead_code)]
+    None,
+    LowerCase,
+    UpperCase,
+    PascalCase,
+    CamelCase,
+    SnakeCase,
+    ScreamingSnakeCase,
+    KebabCase,
+    ScreamingKebabCase,
+}
+
+impl RenameRule {
+    /// Parse from serde rename_all string
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "lowercase" => Some(Self::LowerCase),
+            "UPPERCASE" => Some(Self::UpperCase),
+            "PascalCase" => Some(Self::PascalCase),
+            "camelCase" => Some(Self::CamelCase),
+            "snake_case" => Some(Self::SnakeCase),
+            "SCREAMING_SNAKE_CASE" => Some(Self::ScreamingSnakeCase),
+            "kebab-case" => Some(Self::KebabCase),
+            "SCREAMING-KEBAB-CASE" => Some(Self::ScreamingKebabCase),
+            _ => None,
+        }
+    }
+
+    /// Apply rename rule to a variant name
+    fn apply(&self, name: &str) -> String {
+        match self {
+            Self::None => name.to_string(),
+            Self::LowerCase => name.to_lowercase(),
+            Self::UpperCase => name.to_uppercase(),
+            Self::PascalCase => name.to_string(), // PascalCase is the Rust default
+            Self::CamelCase => {
+                // Convert PascalCase to camelCase
+                let mut chars = name.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => first.to_lowercase().chain(chars).collect(),
+                }
+            }
+            Self::SnakeCase => {
+                // Convert PascalCase to snake_case
+                let mut result = String::new();
+                for (i, ch) in name.chars().enumerate() {
+                    if ch.is_uppercase() && i > 0 {
+                        result.push('_');
+                    }
+                    result.push(ch.to_lowercase().next().unwrap());
+                }
+                result
+            }
+            Self::ScreamingSnakeCase => {
+                // Convert PascalCase to SCREAMING_SNAKE_CASE
+                let mut result = String::new();
+                for (i, ch) in name.chars().enumerate() {
+                    if ch.is_uppercase() && i > 0 {
+                        result.push('_');
+                    }
+                    result.push(ch.to_uppercase().next().unwrap());
+                }
+                result
+            }
+            Self::KebabCase => {
+                // Convert PascalCase to kebab-case
+                let mut result = String::new();
+                for (i, ch) in name.chars().enumerate() {
+                    if ch.is_uppercase() && i > 0 {
+                        result.push('-');
+                    }
+                    result.push(ch.to_lowercase().next().unwrap());
+                }
+                result
+            }
+            Self::ScreamingKebabCase => {
+                // Convert PascalCase to SCREAMING-KEBAB-CASE
+                let mut result = String::new();
+                for (i, ch) in name.chars().enumerate() {
+                    if ch.is_uppercase() && i > 0 {
+                        result.push('-');
+                    }
+                    result.push(ch.to_uppercase().next().unwrap());
+                }
+                result
+            }
+        }
+    }
+}
+
+/// Parse #[serde(rename_all = "...")] attribute on enum/struct
+fn parse_serde_rename_all(attrs: &[syn::Attribute]) -> Option<RenameRule> {
+    for attr in attrs {
+        if attr.path().is_ident("serde")
+            && let Ok(meta_list) = attr.meta.require_list()
+        {
+            // Parse the tokens inside the parentheses
+            if let Ok(metas) =
+                meta_list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            {
+                for meta in metas {
+                    if let Meta::NameValue(nv) = meta
+                        && nv.path.is_ident("rename_all")
+                        && let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }) = nv.value
+                    {
+                        return RenameRule::from_str(&lit_str.value());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Parsed field-level prompt attributes
 #[derive(Debug, Default)]
 struct FieldPromptAttrs {
@@ -552,6 +673,9 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             let enum_name = &input.ident;
             let enum_docs = extract_doc_comments(&input.attrs);
 
+            // Check for #[serde(rename_all = "...")] attribute
+            let rename_rule = parse_serde_rename_all(&input.attrs);
+
             // Generate TypeScript-style union type with descriptions
             // Format:
             // /**
@@ -571,24 +695,30 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                 let variant_name = &variant.ident;
                 let variant_name_str = variant_name.to_string();
 
+                // Apply serde rename rule if present
+                let variant_value = if let Some(rule) = rename_rule {
+                    rule.apply(&variant_name_str)
+                } else {
+                    variant_name_str.clone()
+                };
+
                 match parse_prompt_attribute(&variant.attrs) {
                     PromptAttribute::Skip => continue,
                     PromptAttribute::Description(desc) => {
-                        variant_lines.push(format!("  | \"{}\"  // {}", variant_name_str, desc));
+                        variant_lines.push(format!("  | \"{}\"  // {}", variant_value, desc));
                         if first_variant_name.is_none() {
-                            first_variant_name = Some(variant_name_str);
+                            first_variant_name = Some(variant_value.clone());
                         }
                     }
                     PromptAttribute::None => {
                         let docs = extract_doc_comments(&variant.attrs);
                         if !docs.is_empty() {
-                            variant_lines
-                                .push(format!("  | \"{}\"  // {}", variant_name_str, docs));
+                            variant_lines.push(format!("  | \"{}\"  // {}", variant_value, docs));
                         } else {
-                            variant_lines.push(format!("  | \"{}\"", variant_name_str));
+                            variant_lines.push(format!("  | \"{}\"", variant_value));
                         }
                         if first_variant_name.is_none() {
-                            first_variant_name = Some(variant_name_str);
+                            first_variant_name = Some(variant_value.clone());
                         }
                     }
                 }
