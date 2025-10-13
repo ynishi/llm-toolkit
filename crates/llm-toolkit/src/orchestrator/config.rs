@@ -1,5 +1,7 @@
 //! Configuration for orchestrator execution behavior.
 
+use std::time::Duration;
+
 /// Configuration for orchestrator execution behavior.
 ///
 /// This struct centralizes all configuration parameters for the orchestrator,
@@ -51,6 +53,35 @@ pub struct OrchestratorConfig {
     ///
     /// **Default:** 10 (allows initial strategy + 10 redesigns)
     pub max_total_redesigns: usize,
+
+    /// Minimum interval between step executions.
+    ///
+    /// This provides proactive rate limiting by introducing a delay after each step execution,
+    /// preventing burst API calls that could trigger 429 (Too Many Requests) errors.
+    ///
+    /// **Why this matters:**
+    /// - Each step typically requires 2+ API calls (intent generation + execution)
+    /// - Without delays, orchestrators can make 12+ calls in 30 seconds
+    /// - Many LLM APIs have strict rate limits (e.g., 10 requests/minute for Gemini)
+    ///
+    /// **Behavior:**
+    /// - Applied after each step completes (before starting next step)
+    /// - `Duration::ZERO` means no delay (backward compatible)
+    /// - Recommended: `Duration::from_millis(500)` to `Duration::from_secs(1)` for most APIs
+    ///
+    /// **Example:**
+    /// ```ignore
+    /// use std::time::Duration;
+    /// use llm_toolkit::orchestrator::OrchestratorConfig;
+    ///
+    /// let config = OrchestratorConfig {
+    ///     min_step_interval: Duration::from_millis(500), // 500ms between steps
+    ///     ..Default::default()
+    /// };
+    /// ```
+    ///
+    /// **Default:** `Duration::ZERO` (no delay)
+    pub min_step_interval: Duration,
 }
 
 impl Default for OrchestratorConfig {
@@ -58,6 +89,7 @@ impl Default for OrchestratorConfig {
         Self {
             max_step_remediations: 3,
             max_total_redesigns: 10,
+            min_step_interval: Duration::ZERO,
         }
     }
 }
@@ -71,6 +103,7 @@ mod tests {
         let config = OrchestratorConfig::default();
         assert_eq!(config.max_step_remediations, 3);
         assert_eq!(config.max_total_redesigns, 10);
+        assert_eq!(config.min_step_interval, Duration::ZERO);
     }
 
     #[test]
@@ -89,5 +122,23 @@ mod tests {
         let config2 = config1.clone();
         assert_eq!(config1.max_step_remediations, config2.max_step_remediations);
         assert_eq!(config1.max_total_redesigns, config2.max_total_redesigns);
+        assert_eq!(config1.min_step_interval, config2.min_step_interval);
+    }
+
+    #[test]
+    fn test_min_step_interval_configuration() {
+        let config = OrchestratorConfig {
+            min_step_interval: Duration::from_millis(500),
+            ..Default::default()
+        };
+        assert_eq!(config.min_step_interval, Duration::from_millis(500));
+        assert_eq!(config.max_step_remediations, 3); // Uses default
+        assert_eq!(config.max_total_redesigns, 10); // Uses default
+    }
+
+    #[test]
+    fn test_min_step_interval_zero() {
+        let config = OrchestratorConfig::default();
+        assert!(config.min_step_interval.is_zero());
     }
 }

@@ -71,6 +71,7 @@ use crate::agent::{Agent, AgentAdapter, DynamicAgent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// TypeMarker trait for identifying output types in orchestrator context.
 ///
@@ -350,6 +351,29 @@ impl Orchestrator {
     /// ```
     pub fn set_max_total_redesigns(&mut self, max: usize) {
         self.config.max_total_redesigns = max;
+    }
+
+    /// Sets the minimum interval between step executions.
+    ///
+    /// This provides proactive rate limiting by introducing a delay after each step execution,
+    /// preventing burst API calls that could trigger 429 (Too Many Requests) errors.
+    ///
+    /// This is a convenience method that modifies the configuration in place.
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - Minimum delay between steps (e.g., `Duration::from_millis(500)`)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use std::time::Duration;
+    ///
+    /// let mut orchestrator = Orchestrator::new(blueprint);
+    /// orchestrator.set_min_step_interval(Duration::from_millis(500));
+    /// ```
+    pub fn set_min_step_interval(&mut self, interval: Duration) {
+        self.config.min_step_interval = interval;
     }
 
     /// Adds an agent to the orchestrator's registry.
@@ -1221,6 +1245,17 @@ impl Orchestrator {
                     final_result = output;
                     steps_executed += 1;
                     step_index += 1;
+
+                    // Apply min_step_interval delay if configured (skip for the last step)
+                    let strategy = self.strategy_map.as_ref().unwrap();
+                    if step_index < strategy.steps.len() && !self.config.min_step_interval.is_zero()
+                    {
+                        log::debug!(
+                            "Waiting {:?} before next step (rate limiting)",
+                            self.config.min_step_interval
+                        );
+                        tokio::time::sleep(self.config.min_step_interval).await;
+                    }
                 }
                 Err(e) => {
                     log::warn!("Step {} failed: {}", step_index + 1, e);
