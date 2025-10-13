@@ -4,11 +4,11 @@
 //! when using the Orchestrator and Agent framework.
 //! Run with: cargo run --example test_llm_json_generation_orchestrator --features agent,derive
 
+use llm_toolkit::ToPrompt;
 use llm_toolkit::agent::impls::ClaudeCodeAgent;
 use llm_toolkit::agent::{Agent, AgentError, Payload};
 use llm_toolkit::extract_json;
 use llm_toolkit::orchestrator::{BlueprintWorkflow, Orchestrator};
-use llm_toolkit::ToPrompt;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
@@ -87,13 +87,14 @@ impl Agent for TaskGeneratorAgent {
 
     async fn execute(&self, payload: Payload) -> Result<Task, AgentError> {
         let intent_with_schema = format!("{}\n\n{}", Self::get_expertise(), payload.to_text());
-        let response = self.inner.execute(Payload::text(&intent_with_schema)).await?;
-        let json_str = extract_json(&response).map_err(|e| {
-            AgentError::ParseError(format!("Failed to extract JSON: {}", e))
-        })?;
-        serde_json::from_str(&json_str).map_err(|e| {
-            AgentError::ParseError(format!("Failed to parse agent output: {}", e))
-        })
+        let response = self
+            .inner
+            .execute(Payload::text(&intent_with_schema))
+            .await?;
+        let json_str = extract_json(&response)
+            .map_err(|e| AgentError::ParseError(format!("Failed to extract JSON: {}", e)))?;
+        serde_json::from_str(&json_str)
+            .map_err(|e| AgentError::ParseError(format!("Failed to parse agent output: {}", e)))
     }
 }
 

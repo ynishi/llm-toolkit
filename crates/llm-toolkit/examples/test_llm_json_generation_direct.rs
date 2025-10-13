@@ -4,11 +4,11 @@
 //! by directly constructing prompts and calling the LLM.
 //! Run with: cargo run --example test_llm_json_generation_direct --features agent,derive
 
+use llm_toolkit::ToPrompt;
+use llm_toolkit::agent::Agent;
 use llm_toolkit::agent::impls::ClaudeCodeAgent;
 use llm_toolkit::agent::payload::Payload;
-use llm_toolkit::agent::Agent;
 use llm_toolkit::extract_json;
-use llm_toolkit::ToPrompt;
 use serde::{Deserialize, Serialize};
 
 /// Test enum with descriptions
