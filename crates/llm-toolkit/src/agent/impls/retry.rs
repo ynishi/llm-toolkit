@@ -60,7 +60,10 @@ where
     }
 
     fn name(&self) -> String {
-        format!("RetryAgent<{}>", self.inner.name())
+        // Return inner agent's name for transparency
+        // This allows RetryAgent to be a true decorator that doesn't affect
+        // orchestrator's agent lookup by name
+        self.inner.name()
     }
 
     async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
@@ -168,9 +171,10 @@ mod tests {
         let base = FailingAgent::new(0);
         let retry_agent = RetryAgent::new(base, 3);
 
+        // RetryAgent should be transparent - it returns the inner agent's name
+        // This ensures orchestrator can find agents by their original name
         let name = retry_agent.name();
-        assert!(name.contains("RetryAgent"));
-        assert!(name.contains("FailingAgent"));
+        assert_eq!(name, "FailingAgent");
     }
 
     #[tokio::test]
