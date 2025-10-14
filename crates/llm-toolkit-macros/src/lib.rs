@@ -382,33 +382,91 @@ fn format_type_for_schema(ty: &syn::Type) -> String {
     }
 }
 
-/// Result of parsing prompt attribute
-enum PromptAttribute {
-    Skip,
-    Description(String),
-    None,
+/// Result of parsing prompt attributes on a variant
+#[derive(Default)]
+struct PromptAttributes {
+    skip: bool,
+    rename: Option<String>,
+    description: Option<String>,
 }
 
-/// Parse #[prompt(...)] attribute on enum variant
-fn parse_prompt_attribute(attrs: &[syn::Attribute]) -> PromptAttribute {
+/// Parse #[prompt(...)] attributes on enum variant
+/// Collects all prompt attributes (rename, description, skip) from multiple attributes
+fn parse_prompt_attributes(attrs: &[syn::Attribute]) -> PromptAttributes {
+    let mut result = PromptAttributes::default();
+
     for attr in attrs {
         if attr.path().is_ident("prompt") {
-            // Check for #[prompt(skip)]
+            // Check for #[prompt(rename = "...")], #[prompt(description = "...")], etc.
             if let Ok(meta_list) = attr.meta.require_list() {
-                let tokens = &meta_list.tokens;
-                let tokens_str = tokens.to_string();
+                // Try parsing as key-value pairs
+                if let Ok(metas) =
+                    meta_list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+                {
+                    for meta in metas {
+                        if let Meta::NameValue(nv) = meta {
+                            if nv.path.is_ident("rename") {
+                                if let syn::Expr::Lit(syn::ExprLit {
+                                    lit: syn::Lit::Str(lit_str),
+                                    ..
+                                }) = nv.value
+                                {
+                                    result.rename = Some(lit_str.value());
+                                }
+                            } else if nv.path.is_ident("description")
+                                && let syn::Expr::Lit(syn::ExprLit {
+                                    lit: syn::Lit::Str(lit_str),
+                                    ..
+                                }) = nv.value
+                            {
+                                result.description = Some(lit_str.value());
+                            }
+                        } else if let Meta::Path(path) = meta
+                            && path.is_ident("skip")
+                        {
+                            result.skip = true;
+                        }
+                    }
+                }
+
+                // Fallback: check for simple #[prompt(skip)]
+                let tokens_str = meta_list.tokens.to_string();
                 if tokens_str == "skip" {
-                    return PromptAttribute::Skip;
+                    result.skip = true;
                 }
             }
 
-            // Check for #[prompt("description")]
+            // Check for #[prompt("description")] (shorthand)
             if let Ok(lit_str) = attr.parse_args::<syn::LitStr>() {
-                return PromptAttribute::Description(lit_str.value());
+                result.description = Some(lit_str.value());
             }
         }
     }
-    PromptAttribute::None
+    result
+}
+
+/// Parse #[serde(rename = "...")] attribute on enum variant
+fn parse_serde_variant_rename(attrs: &[syn::Attribute]) -> Option<String> {
+    for attr in attrs {
+        if attr.path().is_ident("serde")
+            && let Ok(meta_list) = attr.meta.require_list()
+            && let Ok(metas) =
+                meta_list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+        {
+            for meta in metas {
+                if let Meta::NameValue(nv) = meta
+                    && nv.path.is_ident("rename")
+                    && let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = nv.value
+                {
+                    return Some(lit_str.value());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Serde rename rules
@@ -695,32 +753,45 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                 let variant_name = &variant.ident;
                 let variant_name_str = variant_name.to_string();
 
-                // Apply serde rename rule if present
-                let variant_value = if let Some(rule) = rename_rule {
+                // Parse prompt attributes
+                let prompt_attrs = parse_prompt_attributes(&variant.attrs);
+
+                // Skip if marked with #[prompt(skip)]
+                if prompt_attrs.skip {
+                    continue;
+                }
+
+                // Determine variant value with priority:
+                // 1. #[prompt(rename = "...")]
+                // 2. #[serde(rename = "...")]
+                // 3. #[serde(rename_all = "...")] rule
+                // 4. Default (variant name as-is)
+                let variant_value = if let Some(prompt_rename) = &prompt_attrs.rename {
+                    prompt_rename.clone()
+                } else if let Some(serde_rename) = parse_serde_variant_rename(&variant.attrs) {
+                    serde_rename
+                } else if let Some(rule) = rename_rule {
                     rule.apply(&variant_name_str)
                 } else {
                     variant_name_str.clone()
                 };
 
-                match parse_prompt_attribute(&variant.attrs) {
-                    PromptAttribute::Skip => continue,
-                    PromptAttribute::Description(desc) => {
-                        variant_lines.push(format!("  | \"{}\"  // {}", variant_value, desc));
-                        if first_variant_name.is_none() {
-                            first_variant_name = Some(variant_value.clone());
-                        }
+                // Build the variant line with description if available
+                let variant_line = if let Some(desc) = &prompt_attrs.description {
+                    format!("  | \"{}\"  // {}", variant_value, desc)
+                } else {
+                    let docs = extract_doc_comments(&variant.attrs);
+                    if !docs.is_empty() {
+                        format!("  | \"{}\"  // {}", variant_value, docs)
+                    } else {
+                        format!("  | \"{}\"", variant_value)
                     }
-                    PromptAttribute::None => {
-                        let docs = extract_doc_comments(&variant.attrs);
-                        if !docs.is_empty() {
-                            variant_lines.push(format!("  | \"{}\"  // {}", variant_value, docs));
-                        } else {
-                            variant_lines.push(format!("  | \"{}\"", variant_value));
-                        }
-                        if first_variant_name.is_none() {
-                            first_variant_name = Some(variant_value.clone());
-                        }
-                    }
+                };
+
+                variant_lines.push(variant_line);
+
+                if first_variant_name.is_none() {
+                    first_variant_name = Some(variant_value);
                 }
             }
 
@@ -762,33 +833,48 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             let mut match_arms = Vec::new();
             for variant in &data_enum.variants {
                 let variant_name = &variant.ident;
+                let variant_name_str = variant_name.to_string();
 
-                // Apply same priority logic as schema generation
-                match parse_prompt_attribute(&variant.attrs) {
-                    PromptAttribute::Skip => {
-                        // For skipped variants, return the variant name only
+                // Parse prompt attributes
+                let prompt_attrs = parse_prompt_attributes(&variant.attrs);
+
+                // Determine variant value with same priority as schema generation:
+                // 1. #[prompt(rename = "...")]
+                // 2. #[serde(rename = "...")]
+                // 3. #[serde(rename_all = "...")] rule
+                // 4. Default (variant name as-is)
+                let variant_value = if let Some(prompt_rename) = &prompt_attrs.rename {
+                    prompt_rename.clone()
+                } else if let Some(serde_rename) = parse_serde_variant_rename(&variant.attrs) {
+                    serde_rename
+                } else if let Some(rule) = rename_rule {
+                    rule.apply(&variant_name_str)
+                } else {
+                    variant_name_str.clone()
+                };
+
+                // Generate match arm based on attributes
+                if prompt_attrs.skip {
+                    // For skipped variants, return the variant name only
+                    match_arms.push(quote! {
+                        Self::#variant_name => stringify!(#variant_name).to_string()
+                    });
+                } else if let Some(desc) = &prompt_attrs.description {
+                    // Use custom description with (possibly renamed) value
+                    match_arms.push(quote! {
+                        Self::#variant_name => format!("{}: {}", #variant_value, #desc)
+                    });
+                } else {
+                    // Fall back to doc comment or just variant value
+                    let variant_docs = extract_doc_comments(&variant.attrs);
+                    if !variant_docs.is_empty() {
                         match_arms.push(quote! {
-                            Self::#variant_name => stringify!(#variant_name).to_string()
+                            Self::#variant_name => format!("{}: {}", #variant_value, #variant_docs)
                         });
-                    }
-                    PromptAttribute::Description(desc) => {
-                        // Use custom description
+                    } else {
                         match_arms.push(quote! {
-                            Self::#variant_name => format!("{}: {}", stringify!(#variant_name), #desc)
+                            Self::#variant_name => #variant_value.to_string()
                         });
-                    }
-                    PromptAttribute::None => {
-                        // Fall back to doc comment or just variant name
-                        let variant_docs = extract_doc_comments(&variant.attrs);
-                        if !variant_docs.is_empty() {
-                            match_arms.push(quote! {
-                                Self::#variant_name => format!("{}: {}", stringify!(#variant_name), #variant_docs)
-                            });
-                        } else {
-                            match_arms.push(quote! {
-                                Self::#variant_name => stringify!(#variant_name).to_string()
-                            });
-                        }
                     }
                 }
             }

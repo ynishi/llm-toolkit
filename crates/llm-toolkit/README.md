@@ -329,6 +329,148 @@ let schema = UserAction::prompt_schema();
 - At **instance level** (`value.to_prompt()`): Shows only the variant name
 - At **type level** (`Enum::prompt_schema()`): Completely excluded from the schema
 
+#### Variant Renaming with Priority System
+
+When working with enums that need different serialization formats (e.g., snake_case for APIs, camelCase for JSON), the `ToPrompt` macro provides flexible variant renaming with a clear 4-level priority system:
+
+**Priority Levels (Highest to Lowest):**
+
+1. **`#[prompt(rename = "...")]`** - ToPrompt-specific, highest priority
+2. **`#[serde(rename = "...")]`** - Per-variant serde rename
+3. **`#[serde(rename_all = "...")]`** - Enum-level serde rename rule
+4. **Default PascalCase** - Rust variant name as-is
+
+This priority system ensures that the TypeScript schema matches serde's serialization format, preventing deserialization errors when LLMs follow the schema.
+
+**Example: Basic serde rename_all Support**
+
+```rust
+use llm_toolkit::ToPrompt;
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, ToPrompt)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualTreatment {
+    DelicateLuminous,
+    CinematicCrisp,
+    SoftAtmospheric,
+}
+
+// Type-level schema matches serde format
+let schema = VisualTreatment::prompt_schema();
+// Output:
+// type VisualTreatment =
+//   | "delicate_luminous"
+//   | "cinematic_crisp"
+//   | "soft_atmospheric";
+//
+// Example value: "delicate_luminous"
+
+// Instance-level also uses renamed values
+let visual = VisualTreatment::CinematicCrisp;
+assert_eq!(visual.to_prompt(), "cinematic_crisp");
+
+// Serialization matches
+let json = serde_json::to_string(&visual).unwrap();
+assert_eq!(json, "\"cinematic_crisp\"");  // ✅ Perfect match!
+```
+
+**Example: Priority System in Action**
+
+```rust
+use llm_toolkit::ToPrompt;
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, ToPrompt)]
+#[serde(rename_all = "snake_case")]  // Priority 3: enum-level rule
+pub enum UserAction {
+    // Priority 1: #[prompt(rename)] wins over everything
+    #[prompt(rename = "ui_create")]
+    CreateDocument,
+
+    // Priority 2: #[serde(rename)] overrides rename_all
+    #[serde(rename = "find_content")]
+    SearchFiles,
+
+    // Priority 3: Uses snake_case from rename_all
+    UpdateProfile,
+
+    // Priority 4: No rename rules, uses default PascalCase
+    DeleteItem,
+}
+
+let schema = UserAction::prompt_schema();
+// Output:
+// type UserAction =
+//   | "ui_create"        // Priority 1: prompt rename
+//   | "find_content"     // Priority 2: serde rename
+//   | "update_profile"   // Priority 3: rename_all
+//   | "DeleteItem";      // Priority 4: default
+```
+
+**Example: Combined with Descriptions**
+
+```rust
+#[derive(Serialize, Deserialize, ToPrompt)]
+#[serde(rename_all = "snake_case")]
+pub enum Intent {
+    #[prompt(rename = "search_query")]
+    #[prompt(description = "User wants to search for content")]
+    Search,
+
+    #[serde(rename = "create_new")]
+    #[prompt(description = "User wants to create a new item")]
+    Create,
+}
+
+// Both rename and description are applied!
+let schema = Intent::prompt_schema();
+// Output:
+// type Intent =
+//   | "search_query"  // User wants to search for content
+//   | "create_new"    // User wants to create a new item
+```
+
+**Supported Rename Rules (from serde):**
+
+All serde rename_all patterns are supported:
+- `lowercase` - `lowercase`
+- `UPPERCASE` - `UPPERCASE`
+- `PascalCase` - `PascalCase`
+- `camelCase` - `camelCase`
+- `snake_case` - `snake_case`
+- `SCREAMING_SNAKE_CASE` - `SCREAMING_SNAKE_CASE`
+- `kebab-case` - `kebab-case`
+- `SCREAMING-KEBAB-CASE` - `SCREAMING-KEBAB-CASE`
+
+**Why This Matters:**
+
+Without matching serde's format, you get guaranteed deserialization failures:
+
+```rust
+// ❌ Without rename support (old behavior)
+#[derive(Serialize, Deserialize, ToPrompt)]
+#[serde(rename_all = "snake_case")]
+pub enum Status { InProgress }
+
+let schema = Status::prompt_schema();
+// Schema says: "InProgress"
+// But serde expects: "in_progress"
+// LLM follows schema → returns "InProgress" → deserialization fails!
+
+// ✅ With rename support (new behavior)
+let schema = Status::prompt_schema();
+// Schema says: "in_progress"
+// Serde expects: "in_progress"
+// LLM follows schema → returns "in_progress" → deserialization succeeds!
+```
+
+**Best Practices:**
+
+1. **Always use `#[serde(rename_all)]` with ToPrompt** - Ensures schema matches serialization
+2. **Use `#[prompt(rename)]` for custom display names** - When LLM-facing names differ from API serialization
+3. **Test deserialization** - Verify LLM responses deserialize correctly with your schema
+
 ### 4. Multi-Target Prompts with `#[derive(ToPromptSet)]`
 
 For applications that need to generate different prompt formats from the same data structure for various contexts (e.g., human-readable vs. machine-parsable, or different LLM models), the `ToPromptSet` derive macro enables powerful multi-target prompt generation.
