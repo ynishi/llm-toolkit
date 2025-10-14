@@ -1100,16 +1100,60 @@ impl Orchestrator {
         }
     }
 
-    /// Builds an optimized intent prompt using LLM.
+    /// Builds an optimized intent prompt using LLM or fast path template substitution.
     ///
-    /// Takes the intent template and current context, and generates a high-quality
-    /// prompt specifically tailored for the assigned agent.
+    /// This method supports two paths:
+    /// 1. **Fast path (deterministic):** When all placeholders in the intent template
+    ///    can be resolved from context and `enable_fast_path_intent_generation` is enabled,
+    ///    uses simple template substitution without LLM calls.
+    /// 2. **LLM path:** When placeholders cannot be fully resolved or fast path is disabled,
+    ///    uses LLM to generate a high-quality prompt specifically tailored for the assigned agent.
     #[cfg(feature = "agent")]
     async fn build_intent(
         &self,
         step: &StrategyStep,
         context: &HashMap<String, JsonValue>,
     ) -> Result<String, OrchestratorError> {
+        // Fast path: Check if we can use simple template substitution
+        if self.config.enable_fast_path_intent_generation {
+            let placeholders = Self::extract_placeholders(&step.intent_template);
+            let all_resolved = placeholders.iter().all(|p| context.contains_key(p));
+
+            if all_resolved {
+                log::debug!(
+                    "Using fast path for step {} (all {} placeholders resolved)",
+                    step.step_id,
+                    placeholders.len()
+                );
+
+                let mut intent = step.intent_template.clone();
+
+                for (key, value) in context {
+                    // Support both {{key}} and {key} formats
+                    let placeholder_double = format!("{{{{{}}}}}", key);
+                    let placeholder_single = format!("{{{}}}", key);
+
+                    let value_str = match value {
+                        JsonValue::String(s) => s.clone(),
+                        other => serde_json::to_string_pretty(other)
+                            .unwrap_or_else(|_| "null".to_string()),
+                    };
+
+                    intent = intent.replace(&placeholder_double, &value_str);
+                    intent = intent.replace(&placeholder_single, &value_str);
+                }
+
+                return Ok(intent);
+            }
+        }
+
+        // LLM path: Complex intent generation
+        log::debug!(
+            "Using LLM-based intent generation for step {} (fast_path={}, unresolved placeholders or complex case)",
+            step.step_id,
+            self.config.enable_fast_path_intent_generation
+        );
+
         use crate::prompt::ToPrompt;
         use prompts::IntentGenerationRequest;
 

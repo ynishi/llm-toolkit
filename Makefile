@@ -14,6 +14,7 @@ EXAMPLES := \
 	define_intent_comprehensive \
 	test_define_intent \
 	orchestrator_with_mock \
+	orchestrator_fast_path_e2e \
 	orchestrator_get_typed_output \
 	check_claude \
 	agent_derive \
@@ -43,6 +44,7 @@ OFFLINE_EXAMPLES := \
 	define_intent_comprehensive \
 	test_define_intent \
 	orchestrator_with_mock \
+	orchestrator_fast_path_e2e \
 	type_marker_schema_test \
 	test_type_output
 

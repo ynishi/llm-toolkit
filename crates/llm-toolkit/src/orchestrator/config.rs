@@ -82,6 +82,42 @@ pub struct OrchestratorConfig {
     ///
     /// **Default:** `Duration::ZERO` (no delay)
     pub min_step_interval: Duration,
+
+    /// Enable fast path for intent generation when all placeholders are resolved.
+    ///
+    /// When enabled, the orchestrator will skip LLM-based intent generation for steps
+    /// where all placeholders in the intent template can be resolved directly from context.
+    /// This provides:
+    /// - **Performance improvement:** Reduces latency from seconds to milliseconds
+    /// - **Cost reduction:** Eliminates unnecessary LLM API calls
+    /// - **Deterministic behavior:** Template substitution is predictable
+    ///
+    /// **When fast path is used:**
+    /// - All placeholders in `intent_template` have corresponding values in context
+    /// - Simple string substitution is sufficient
+    ///
+    /// **When LLM path is used (default):**
+    /// - LLM generates high-quality, context-aware intents
+    /// - Agent expertise is considered for prompt optimization
+    /// - Better for complex scenarios and thin agent architectures
+    ///
+    /// **Trade-offs:**
+    /// - Fast path: Higher performance, lower quality (simple substitution)
+    /// - LLM path: Lower performance, higher quality (semantic understanding)
+    ///
+    /// **Example:**
+    /// ```ignore
+    /// use llm_toolkit::orchestrator::OrchestratorConfig;
+    ///
+    /// // Enable fast path optimization (for thick agents with simple templates)
+    /// let config = OrchestratorConfig {
+    ///     enable_fast_path_intent_generation: true,
+    ///     ..Default::default()
+    /// };
+    /// ```
+    ///
+    /// **Default:** `false` (disabled, prioritizes quality for thin agent architectures)
+    pub enable_fast_path_intent_generation: bool,
 }
 
 impl Default for OrchestratorConfig {
@@ -90,6 +126,7 @@ impl Default for OrchestratorConfig {
             max_step_remediations: 3,
             max_total_redesigns: 10,
             min_step_interval: Duration::ZERO,
+            enable_fast_path_intent_generation: false,
         }
     }
 }
@@ -104,6 +141,7 @@ mod tests {
         assert_eq!(config.max_step_remediations, 3);
         assert_eq!(config.max_total_redesigns, 10);
         assert_eq!(config.min_step_interval, Duration::ZERO);
+        assert!(!config.enable_fast_path_intent_generation); // Default is false (quality over performance)
     }
 
     #[test]
@@ -123,6 +161,10 @@ mod tests {
         assert_eq!(config1.max_step_remediations, config2.max_step_remediations);
         assert_eq!(config1.max_total_redesigns, config2.max_total_redesigns);
         assert_eq!(config1.min_step_interval, config2.min_step_interval);
+        assert_eq!(
+            config1.enable_fast_path_intent_generation,
+            config2.enable_fast_path_intent_generation
+        );
     }
 
     #[test]
@@ -140,5 +182,22 @@ mod tests {
     fn test_min_step_interval_zero() {
         let config = OrchestratorConfig::default();
         assert!(config.min_step_interval.is_zero());
+    }
+
+    #[test]
+    fn test_enable_fast_path_intent_generation_default() {
+        let config = OrchestratorConfig::default();
+        assert!(!config.enable_fast_path_intent_generation); // Default is false
+    }
+
+    #[test]
+    fn test_enable_fast_path_intent_generation_override() {
+        let config = OrchestratorConfig {
+            enable_fast_path_intent_generation: true, // Explicitly enable for performance
+            ..Default::default()
+        };
+        assert!(config.enable_fast_path_intent_generation);
+        assert_eq!(config.max_step_remediations, 3); // Uses default
+        assert_eq!(config.max_total_redesigns, 10); // Uses default
     }
 }
