@@ -776,15 +776,67 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     variant_name_str.clone()
                 };
 
-                // Build the variant line with description if available
-                let variant_line = if let Some(desc) = &prompt_attrs.description {
-                    format!("  | \"{}\"  // {}", variant_value, desc)
-                } else {
-                    let docs = extract_doc_comments(&variant.attrs);
-                    if !docs.is_empty() {
-                        format!("  | \"{}\"  // {}", variant_value, docs)
-                    } else {
-                        format!("  | \"{}\"", variant_value)
+                // Check variant type: Unit, Struct, or Tuple
+                let variant_line = match &variant.fields {
+                    syn::Fields::Unit => {
+                        // Unit variant: "VariantName"
+                        if let Some(desc) = &prompt_attrs.description {
+                            format!("  | \"{}\"  // {}", variant_value, desc)
+                        } else {
+                            let docs = extract_doc_comments(&variant.attrs);
+                            if !docs.is_empty() {
+                                format!("  | \"{}\"  // {}", variant_value, docs)
+                            } else {
+                                format!("  | \"{}\"", variant_value)
+                            }
+                        }
+                    }
+                    syn::Fields::Named(fields) => {
+                        // Struct variant: { type: "VariantName", field1: Type1, ... }
+                        let mut field_parts = vec![format!("type: \"{}\"", variant_value)];
+
+                        for field in &fields.named {
+                            let field_name = field.ident.as_ref().unwrap().to_string();
+                            let field_type = format_type_for_schema(&field.ty);
+                            field_parts.push(format!("{}: {}", field_name, field_type));
+                        }
+
+                        let field_str = field_parts.join(", ");
+                        let comment = if let Some(desc) = &prompt_attrs.description {
+                            format!("  // {}", desc)
+                        } else {
+                            let docs = extract_doc_comments(&variant.attrs);
+                            if !docs.is_empty() {
+                                format!("  // {}", docs)
+                            } else {
+                                String::new()
+                            }
+                        };
+
+                        format!("  | {{ {} }}{}", field_str, comment)
+                    }
+                    syn::Fields::Unnamed(_) => {
+                        // Tuple variant: not yet supported, fall back to simple string
+                        // TODO: Implement tuple variant support
+                        if let Some(desc) = &prompt_attrs.description {
+                            format!(
+                                "  | \"{}\"  // {} (tuple variant, limited support)",
+                                variant_value, desc
+                            )
+                        } else {
+                            let docs = extract_doc_comments(&variant.attrs);
+                            if !docs.is_empty() {
+                                format!(
+                                    "  | \"{}\"  // {} (tuple variant, limited support)",
+                                    variant_value, docs
+                                )
+                            } else {
+                                format!(
+                                    "  | \"{}\"  // (tuple variant, limited support)",
+                                    variant_value
+                                )
+                            }
+                        }
                     }
                 };
 
@@ -853,28 +905,125 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     variant_name_str.clone()
                 };
 
-                // Generate match arm based on attributes
-                if prompt_attrs.skip {
-                    // For skipped variants, return the variant name only
-                    match_arms.push(quote! {
-                        Self::#variant_name => stringify!(#variant_name).to_string()
-                    });
-                } else if let Some(desc) = &prompt_attrs.description {
-                    // Use custom description with (possibly renamed) value
-                    match_arms.push(quote! {
-                        Self::#variant_name => format!("{}: {}", #variant_value, #desc)
-                    });
-                } else {
-                    // Fall back to doc comment or just variant value
-                    let variant_docs = extract_doc_comments(&variant.attrs);
-                    if !variant_docs.is_empty() {
-                        match_arms.push(quote! {
-                            Self::#variant_name => format!("{}: {}", #variant_value, #variant_docs)
-                        });
-                    } else {
-                        match_arms.push(quote! {
-                            Self::#variant_name => #variant_value.to_string()
-                        });
+                // Generate match arm based on variant type
+                match &variant.fields {
+                    syn::Fields::Unit => {
+                        // Unit variant - existing behavior
+                        if prompt_attrs.skip {
+                            match_arms.push(quote! {
+                                Self::#variant_name => stringify!(#variant_name).to_string()
+                            });
+                        } else if let Some(desc) = &prompt_attrs.description {
+                            match_arms.push(quote! {
+                                Self::#variant_name => format!("{}: {}", #variant_value, #desc)
+                            });
+                        } else {
+                            let variant_docs = extract_doc_comments(&variant.attrs);
+                            if !variant_docs.is_empty() {
+                                match_arms.push(quote! {
+                                    Self::#variant_name => format!("{}: {}", #variant_value, #variant_docs)
+                                });
+                            } else {
+                                match_arms.push(quote! {
+                                    Self::#variant_name => #variant_value.to_string()
+                                });
+                            }
+                        }
+                    }
+                    syn::Fields::Named(fields) => {
+                        // Struct variant - serialize fields to JSON-like string
+                        let field_bindings: Vec<_> = fields
+                            .named
+                            .iter()
+                            .map(|f| f.ident.as_ref().unwrap())
+                            .collect();
+
+                        let field_displays: Vec<_> = fields
+                            .named
+                            .iter()
+                            .map(|f| {
+                                let field_name = f.ident.as_ref().unwrap();
+                                let field_name_str = field_name.to_string();
+                                quote! {
+                                    format!("{}: {:?}", #field_name_str, #field_name)
+                                }
+                            })
+                            .collect();
+
+                        let doc_or_desc = if let Some(desc) = &prompt_attrs.description {
+                            desc.clone()
+                        } else {
+                            let docs = extract_doc_comments(&variant.attrs);
+                            if !docs.is_empty() {
+                                docs
+                            } else {
+                                String::new()
+                            }
+                        };
+
+                        if doc_or_desc.is_empty() {
+                            match_arms.push(quote! {
+                                Self::#variant_name { #(#field_bindings),* } => {
+                                    let fields = vec![#(#field_displays),*];
+                                    format!("{} {{ {} }}", #variant_value, fields.join(", "))
+                                }
+                            });
+                        } else {
+                            match_arms.push(quote! {
+                                Self::#variant_name { #(#field_bindings),* } => {
+                                    let fields = vec![#(#field_displays),*];
+                                    format!("{}: {} {{ {} }}", #variant_value, #doc_or_desc, fields.join(", "))
+                                }
+                            });
+                        }
+                    }
+                    syn::Fields::Unnamed(fields) => {
+                        // Tuple variant - bind fields and display them
+                        let field_count = fields.unnamed.len();
+                        let field_bindings: Vec<_> = (0..field_count)
+                            .map(|i| {
+                                syn::Ident::new(
+                                    &format!("field{}", i),
+                                    proc_macro2::Span::call_site(),
+                                )
+                            })
+                            .collect();
+
+                        let field_displays: Vec<_> = field_bindings
+                            .iter()
+                            .map(|field_name| {
+                                quote! {
+                                    format!("{:?}", #field_name)
+                                }
+                            })
+                            .collect();
+
+                        let doc_or_desc = if let Some(desc) = &prompt_attrs.description {
+                            desc.clone()
+                        } else {
+                            let docs = extract_doc_comments(&variant.attrs);
+                            if !docs.is_empty() {
+                                docs
+                            } else {
+                                String::new()
+                            }
+                        };
+
+                        if doc_or_desc.is_empty() {
+                            match_arms.push(quote! {
+                                Self::#variant_name(#(#field_bindings),*) => {
+                                    let fields = vec![#(#field_displays),*];
+                                    format!("{}({})", #variant_value, fields.join(", "))
+                                }
+                            });
+                        } else {
+                            match_arms.push(quote! {
+                                Self::#variant_name(#(#field_bindings),*) => {
+                                    let fields = vec![#(#field_displays),*];
+                                    format!("{}: {}({})", #variant_value, #doc_or_desc, fields.join(", "))
+                                }
+                            });
+                        }
                     }
                 }
             }

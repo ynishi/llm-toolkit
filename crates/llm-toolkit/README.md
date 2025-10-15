@@ -471,6 +471,188 @@ let schema = Status::prompt_schema();
 2. **Use `#[prompt(rename)]` for custom display names** - When LLM-facing names differ from API serialization
 3. **Test deserialization** - Verify LLM responses deserialize correctly with your schema
 
+#### Struct Variants (Tagged Unions)
+
+**New in v0.21.0+**: The `ToPrompt` macro now fully supports **struct variants**, enabling rich domain models with complex data. Struct variants are serialized as **TypeScript tagged unions** with a `type` discriminator field, which is the industry-standard pattern for LLMs.
+
+**Basic Example:**
+
+```rust
+use llm_toolkit::ToPrompt;
+use serde::{Serialize, Deserialize};
+
+#[derive(ToPrompt, Serialize, Deserialize)]
+#[serde(tag = "type")]  // ← serde tagged union
+pub enum AnalysisResult {
+    /// Analysis approved with no issues
+    Approved,
+
+    /// Analysis needs revision
+    NeedsRevision {
+        reasons: Vec<String>,
+        severity: String,
+    },
+
+    /// Analysis rejected
+    Rejected {
+        reason: String,
+    },
+}
+
+// Type-level schema (TypeScript tagged union)
+let schema = AnalysisResult::prompt_schema();
+// Output:
+// type AnalysisResult =
+//   | "Approved"  // Analysis approved with no issues
+//   | { type: "NeedsRevision", reasons: string[], severity: string }  // Analysis needs revision
+//   | { type: "Rejected", reason: string };  // Analysis rejected
+//
+// Example value: "Approved"
+
+// Instance-level: struct variants show fields
+let result = AnalysisResult::NeedsRevision {
+    reasons: vec!["Missing data".to_string()],
+    severity: "High".to_string(),
+};
+
+let prompt = result.to_prompt();
+// Output: "NeedsRevision: Analysis needs revision { reasons: [\"Missing data\"], severity: \"High\" }"
+
+// Serde serialization (matches schema!)
+let json = serde_json::to_string(&result).unwrap();
+// Output: {"type":"NeedsRevision","reasons":["Missing data"],"severity":"High"}
+
+// LLM response → deserializes perfectly
+let from_llm = r#"{"type":"Rejected","reason":"Invalid format"}"#;
+let parsed: AnalysisResult = serde_json::from_str(from_llm).unwrap();
+```
+
+**Supported Variant Types:**
+
+| Variant Type | Example | TypeScript Output | Status |
+|--------------|---------|-------------------|--------|
+| **Unit** | `Variant` | `"Variant"` | ✅ Full support |
+| **Struct** | `Variant { x: i32 }` | `{ type: "Variant", x: number }` | ✅ Full support |
+| **Tuple** | `Variant(i32, String)` | `"Variant"` | ⚠️ Limited (fallback) |
+
+**Type Mapping:**
+
+The macro automatically maps Rust types to TypeScript equivalents:
+
+```rust
+#[derive(ToPrompt, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum Measurement {
+    Temperature {
+        celsius: f32,          // → number
+        location: String,      // → string
+    },
+    Count {
+        items: i64,            // → number
+        verified: bool,        // → boolean
+    },
+    Tags {
+        labels: Vec<String>,   // → string[]
+        metadata: Option<String>, // → string | null
+    },
+}
+
+// Generated schema:
+// type Measurement =
+//   | { type: "Temperature", celsius: number, location: string }
+//   | { type: "Count", items: number, verified: boolean }
+//   | { type: "Tags", labels: string[], metadata: string | null };
+```
+
+**Complex Example: Cinematic Lighting**
+
+```rust
+use llm_toolkit::ToPrompt;
+use serde::{Serialize, Deserialize};
+
+#[derive(ToPrompt, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LightingTechnique {
+    /// Chiaroscuro (dramatic high-contrast lighting)
+    Chiaroscuro {
+        contrast_level: ContrastLevel,
+        light_source: LightSourceType,
+        shadow_direction: ShadowDirection,
+    },
+
+    /// Rembrandt lighting (triangle of light on cheek)
+    Rembrandt {
+        triangle_side: Side,
+        fill_ratio: f32,
+    },
+
+    /// Simple natural lighting
+    Natural,
+}
+
+#[derive(ToPrompt, Serialize, Deserialize)]
+pub enum ContrastLevel { Low, Medium, High }
+
+#[derive(ToPrompt, Serialize, Deserialize)]
+pub enum LightSourceType { Single, Multiple, Diffused }
+
+#[derive(ToPrompt, Serialize, Deserialize)]
+pub enum ShadowDirection { Left, Right, Top, Bottom }
+
+#[derive(ToPrompt, Serialize, Deserialize)]
+pub enum Side { Left, Right }
+
+// Generated schema (snake_case from rename_all):
+// type LightingTechnique =
+//   | { type: "chiaroscuro", contrast_level: ContrastLevel, light_source: LightSourceType, shadow_direction: ShadowDirection }  // Chiaroscuro (dramatic high-contrast lighting)
+//   | { type: "rembrandt", triangle_side: Side, fill_ratio: number }  // Rembrandt lighting (triangle of light on cheek)
+//   | "natural";  // Simple natural lighting
+
+// LLM can return:
+// {"type":"chiaroscuro","contrast_level":"High","light_source":"Single","shadow_direction":"Left"}
+```
+
+**Why Tagged Unions?**
+
+1. **LLM-Friendly**: Industry-standard pattern that LLMs understand intuitively
+2. **Type Safety**: Compile-time guarantees for field names and types
+3. **Serde Compatible**: Works seamlessly with `#[serde(tag = "type")]`
+4. **Clear Discrimination**: The `type` field makes variant identification unambiguous
+5. **JSON-First**: Natural JSON representation for API communication
+
+**Combining Features:**
+
+All ToPrompt features work with struct variants:
+
+```rust
+#[derive(ToPrompt, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum Command {
+    /// Execute a script
+    #[prompt(rename = "run_script")]  // Custom name
+    Execute { script: String },
+
+    #[prompt(skip)]  // Hidden from schema
+    InternalDebug { details: String },
+
+    /// Simple shutdown
+    Shutdown,
+}
+
+// Schema includes only non-skipped variants with custom names:
+// type Command =
+//   | { type: "run_script", script: string }  // Execute a script
+//   | "Shutdown";  // Simple shutdown
+```
+
+**Best Practices:**
+
+1. **Use `#[serde(tag = "type")]`** - Standard discriminator for tagged unions
+2. **Keep field names simple** - LLMs work best with clear, descriptive names
+3. **Document variants** - Doc comments become inline comments in TypeScript
+4. **Test roundtrips** - Verify LLM responses deserialize correctly
+5. **Mix freely** - Combine unit and struct variants as needed
+
 ### 4. Multi-Target Prompts with `#[derive(ToPromptSet)]`
 
 For applications that need to generate different prompt formats from the same data structure for various contexts (e.g., human-readable vs. machine-parsable, or different LLM models), the `ToPromptSet` derive macro enables powerful multi-target prompt generation.
