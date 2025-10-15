@@ -533,7 +533,7 @@ let parsed: AnalysisResult = serde_json::from_str(from_llm).unwrap();
 |--------------|---------|-------------------|--------|
 | **Unit** | `Variant` | `"Variant"` | ✅ Full support |
 | **Struct** | `Variant { x: i32 }` | `{ type: "Variant", x: number }` | ✅ Full support |
-| **Tuple** | `Variant(i32, String)` | `"Variant"` | ⚠️ Limited (fallback) |
+| **Tuple** | `Variant(i32, String)` | `[number, string]` | ✅ Full support |
 
 **Type Mapping:**
 
@@ -645,13 +645,74 @@ pub enum Command {
 //   | "Shutdown";  // Simple shutdown
 ```
 
+**Tuple Variants:**
+
+Tuple variants generate TypeScript tuple types with proper type mapping:
+
+```rust
+use llm_toolkit::ToPrompt;
+use serde::{Serialize, Deserialize};
+
+#[derive(ToPrompt, Serialize, Deserialize)]
+#[serde(untagged)]  // ← serde untagged for tuple arrays
+pub enum Coordinate {
+    /// 2D coordinate
+    Point2D(f64, f64),
+    /// 3D coordinate with metadata
+    Point3D(f64, f64, f64),
+    /// Origin point
+    Origin,
+}
+
+// Generated schema:
+// type Coordinate =
+//   | [number, number]  // 2D coordinate
+//   | [number, number, number]  // 3D coordinate with metadata
+//   | "Origin";  // Origin point
+
+// Instance to_prompt():
+let point = Coordinate::Point2D(10.5, 20.3);
+let prompt = point.to_prompt();
+// Output: "Point2D: 2D coordinate (10.5, 20.3)"
+
+// Serde serialization (untagged = array):
+let json = serde_json::to_string(&point).unwrap();
+// Output: [10.5,20.3]
+
+// LLM can return:
+// [10.5, 20.3]  → deserializes to Point2D
+// [1.0, 2.0, 3.0]  → deserializes to Point3D
+```
+
+**Mixed Types in Tuples:**
+
+```rust
+#[derive(ToPrompt, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Value {
+    /// String-number pair
+    Pair(String, i32),
+    /// Single value
+    Single(String),
+    /// Complex tuple
+    Triple(String, Vec<i32>, Option<bool>),
+}
+
+// Generated schema:
+// type Value =
+//   | [string, number]  // String-number pair
+//   | [string]  // Single value
+//   | [string, number[], boolean | null];  // Complex tuple
+```
+
 **Best Practices:**
 
-1. **Use `#[serde(tag = "type")]`** - Standard discriminator for tagged unions
-2. **Keep field names simple** - LLMs work best with clear, descriptive names
-3. **Document variants** - Doc comments become inline comments in TypeScript
-4. **Test roundtrips** - Verify LLM responses deserialize correctly
-5. **Mix freely** - Combine unit and struct variants as needed
+1. **Struct variants**: Use `#[serde(tag = "type")]` for tagged unions
+2. **Tuple variants**: Use `#[serde(untagged)]` for tuple arrays
+3. **Keep field names simple** - LLMs work best with clear, descriptive names
+4. **Document variants** - Doc comments become inline comments in TypeScript
+5. **Test roundtrips** - Verify LLM responses deserialize correctly
+6. **Mix freely** - Combine unit, struct, and tuple variants as needed
 
 ### 4. Multi-Target Prompts with `#[derive(ToPromptSet)]`
 

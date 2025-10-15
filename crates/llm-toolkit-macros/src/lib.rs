@@ -815,28 +815,27 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
                         format!("  | {{ {} }}{}", field_str, comment)
                     }
-                    syn::Fields::Unnamed(_) => {
-                        // Tuple variant: not yet supported, fall back to simple string
-                        // TODO: Implement tuple variant support
-                        if let Some(desc) = &prompt_attrs.description {
-                            format!(
-                                "  | \"{}\"  // {} (tuple variant, limited support)",
-                                variant_value, desc
-                            )
+                    syn::Fields::Unnamed(fields) => {
+                        // Tuple variant: TypeScript tuple type [Type1, Type2, ...]
+                        let field_types: Vec<String> = fields
+                            .unnamed
+                            .iter()
+                            .map(|f| format_type_for_schema(&f.ty))
+                            .collect();
+
+                        let tuple_str = field_types.join(", ");
+                        let comment = if let Some(desc) = &prompt_attrs.description {
+                            format!("  // {}", desc)
                         } else {
                             let docs = extract_doc_comments(&variant.attrs);
                             if !docs.is_empty() {
-                                format!(
-                                    "  | \"{}\"  // {} (tuple variant, limited support)",
-                                    variant_value, docs
-                                )
+                                format!("  // {}", docs)
                             } else {
-                                format!(
-                                    "  | \"{}\"  // (tuple variant, limited support)",
-                                    variant_value
-                                )
+                                String::new()
                             }
-                        }
+                        };
+
+                        format!("  | [{}]{}", tuple_str, comment)
                     }
                 };
 
