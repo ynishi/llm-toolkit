@@ -59,7 +59,13 @@ Generate a detailed execution strategy as a JSON object with the following struc
 5. Ensure steps build upon each other logically
 6. Use Mustache/Jinja2-style placeholders with **double curly braces** like {% raw %}`{{ previous_output }}`{% endraw %}, {% raw %}`{{ user_request }}`{% endraw %} in intent templates (NOT single braces like `{previous_output}`)
 7. **IMPORTANT:** Use ONLY double curly braces {% raw %}`{{ }}`{% endraw %}, NOT triple braces {% raw %}`{{{ }}}`{% endraw %}. Intent templates are plain text and do not require HTML escaping.
-8. **Add Validation Steps**: For any step that produces a critical artifact (e.g., a final document, a piece of code, a detailed plan), you SHOULD add a dedicated validation step immediately after it. Select the most appropriate validator agent from the 'Available Agents' list (e.g., InnerValidatorAgent for general validation, or domain-specific validators if available)
+8. **Placeholder Reference Guide**: Intent templates can access context data using these patterns:
+   - **Previous step output**: {% raw %}`{{ step_N_output }}`{% endraw %} or {% raw %}`{{ step_N_output.field }}`{% endraw %} (e.g., {% raw %}`{{ step_1_output.concept }}`{% endraw %})
+   - **Previous step (convenience)**: {% raw %}`{{ previous_output }}`{% endraw %} refers to the immediately previous step's output
+   - **User request data**: {% raw %}`{{ user_request.field }}`{% endraw %} if the Blueprint defines INPUT context (e.g., {% raw %}`{{ user_request.world_seed.aesthetics }}`{% endraw %})
+   - **Other external context**: {% raw %}`{{ context_key.field }}`{% endraw %} for any context added before execution
+   - **Nested field access**: Use dot notation to access nested JSON fields (e.g., {% raw %}`{{ step_2_output.data.items[0].name }}`{% endraw %})
+9. **Add Validation Steps**: For any step that produces a critical artifact (e.g., a final document, a piece of code, a detailed plan), you SHOULD add a dedicated validation step immediately after it. Select the most appropriate validator agent from the 'Available Agents' list (e.g., InnerValidatorAgent for general validation, or domain-specific validators if available)
 
 **Important:** Return ONLY the JSON object, no additional explanation.
 "##)]
@@ -301,6 +307,12 @@ Generate a JSON array of `StrategyStep` objects with the following structure:
 ]
 ```
 
+**Placeholder Reference Guide**: Intent templates can access context data using:
+- **Previous step output**: {% raw %}`{{ step_N_output }}`{% endraw %} or {% raw %}`{{ step_N_output.field }}`{% endraw %} (e.g., {% raw %}`{{ step_1_output.concept }}`{% endraw %})
+- **Previous step (convenience)**: {% raw %}`{{ previous_output }}`{% endraw %}
+- **User request data**: {% raw %}`{{ user_request.field }}`{% endraw %} for Blueprint INPUT context
+- **Nested fields**: Use dot notation (e.g., {% raw %}`{{ step_2_output.data.count }}`{% endraw %})
+
 **Important:** Return ONLY the JSON array, no additional explanation.
 "##)]
 pub struct TacticalRedesignRequest {
@@ -400,6 +412,12 @@ Generate a JSON object with the following structure:
 }
 ```
 
+**Placeholder Reference Guide**: Intent templates can access context data using:
+- **Previous step output**: {% raw %}`{{ step_N_output }}`{% endraw %} or {% raw %}`{{ step_N_output.field }}`{% endraw %} (e.g., {% raw %}`{{ step_1_output.concept }}`{% endraw %})
+- **Previous step (convenience)**: {% raw %}`{{ previous_output }}`{% endraw %}
+- **User request data**: {% raw %}`{{ user_request.field }}`{% endraw %} for Blueprint INPUT context
+- **Nested fields**: Use dot notation (e.g., {% raw %}`{{ step_2_output.data.count }}`{% endraw %})
+
 **Important:** Return ONLY the JSON object, no additional explanation.
 "##)]
 pub struct FullRegenerateRequest {
@@ -432,48 +450,6 @@ impl FullRegenerateRequest {
             failed_strategy,
             error_summary,
             completed_work,
-        }
-    }
-}
-
-/// Request for semantic matching of a placeholder to appropriate step output.
-#[derive(Serialize, ToPrompt)]
-#[prompt(template = r##"
-# Semantic Step Matching Task
-
-You need to identify which previous step's output best matches the requested placeholder.
-
-## Placeholder
-{{ placeholder }}
-
-## Available Previous Steps
-{{ steps_info }}
-
----
-
-## Your Task
-
-Analyze the placeholder name and the descriptions of previous steps, then return ONLY the step_id of the most appropriate match.
-
-**Guidelines:**
-1. Consider the semantic meaning of the placeholder (e.g., "concept_content" relates to conceptual or high-level descriptions)
-2. Match against step descriptions, expected outputs, and step IDs
-3. If multiple steps seem relevant, choose the most recent one
-4. Return ONLY the step_id (e.g., "step_1", "step_2"), nothing else
-
-**Important:** Return ONLY the step_id string, no explanation or additional text.
-"##)]
-pub struct SemanticMatchRequest {
-    pub placeholder: String,
-    pub steps_info: String,
-}
-
-impl SemanticMatchRequest {
-    /// Creates a new semantic match request.
-    pub fn new(placeholder: String, steps_info: String) -> Self {
-        Self {
-            placeholder,
-            steps_info,
         }
     }
 }

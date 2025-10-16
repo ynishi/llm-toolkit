@@ -855,185 +855,6 @@ impl Orchestrator {
         placeholders
     }
 
-    /// Finds the best matching step for a placeholder using keyword matching.
-    fn find_matching_step_by_keyword(
-        &self,
-        placeholder: &str,
-        up_to_step_index: usize,
-    ) -> Option<String> {
-        let strategy = self.strategy_map.as_ref()?;
-
-        // Convert placeholder to searchable keywords
-        // "concept_content" -> ["concept", "content"]
-        let keywords: Vec<String> = placeholder.split('_').map(|s| s.to_lowercase()).collect();
-
-        let mut best_match: Option<(usize, usize)> = None; // (step_index, match_score)
-
-        for i in 0..up_to_step_index.min(strategy.steps.len()) {
-            let step = &strategy.steps[i];
-            let searchable_text = format!(
-                "{} {} {}",
-                step.description.to_lowercase(),
-                step.expected_output.to_lowercase(),
-                step.step_id.to_lowercase()
-            );
-
-            // Count how many keywords match
-            let match_count = keywords
-                .iter()
-                .filter(|keyword| searchable_text.contains(*keyword))
-                .count();
-
-            if match_count > 0 {
-                if let Some((_, current_best_score)) = best_match {
-                    if match_count > current_best_score {
-                        best_match = Some((i, match_count));
-                    }
-                } else {
-                    best_match = Some((i, match_count));
-                }
-            }
-        }
-
-        best_match.map(|(step_idx, _)| strategy.steps[step_idx].step_id.clone())
-    }
-
-    /// Finds the best matching step for a placeholder using LLM-based semantic matching.
-    #[cfg(feature = "agent")]
-    async fn find_matching_step_by_llm(
-        &self,
-        placeholder: &str,
-        up_to_step_index: usize,
-    ) -> Option<String> {
-        use crate::prompt::ToPrompt;
-        use prompts::SemanticMatchRequest;
-
-        let strategy = self.strategy_map.as_ref()?;
-
-        // Build steps info for LLM
-        let steps_info = (0..up_to_step_index.min(strategy.steps.len()))
-            .map(|i| {
-                let step = &strategy.steps[i];
-                format!(
-                    "- step_id: {}\n  description: {}\n  expected_output: {}",
-                    step.step_id, step.description, step.expected_output
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        let request = SemanticMatchRequest::new(placeholder.to_string(), steps_info);
-        let prompt = request.to_prompt();
-
-        log::debug!("Using LLM to match placeholder '{}'", placeholder);
-
-        // Use internal agent to find the match
-        match self.internal_agent.execute(prompt.into()).await {
-            Ok(step_id) => {
-                let step_id = step_id.trim().to_string();
-                // Validate that the returned step_id exists
-                if strategy.steps.iter().any(|s| s.step_id == step_id) {
-                    log::debug!(
-                        "LLM matched placeholder '{}' to step '{}'",
-                        placeholder,
-                        step_id
-                    );
-                    Some(step_id)
-                } else {
-                    log::warn!(
-                        "LLM returned invalid step_id '{}' for placeholder '{}'",
-                        step_id,
-                        placeholder
-                    );
-                    None
-                }
-            }
-            Err(e) => {
-                log::error!("LLM semantic matching failed for '{}': {}", placeholder, e);
-                None
-            }
-        }
-    }
-
-    /// Builds semantic context by mapping placeholders to appropriate step outputs.
-    #[cfg(feature = "agent")]
-    async fn build_semantic_context_async(
-        &self,
-        step_index: usize,
-        intent_template: &str,
-    ) -> HashMap<String, JsonValue> {
-        let mut context = HashMap::new();
-
-        // Extract placeholders from intent template
-        let placeholders = Self::extract_placeholders(intent_template);
-
-        log::debug!("Extracted placeholders: {:?}", placeholders);
-
-        for placeholder in placeholders {
-            // Try to find matching step using keyword matching first
-            let matched_step_id = if let Some(step_id) =
-                self.find_matching_step_by_keyword(&placeholder, step_index)
-            {
-                log::debug!("Keyword match found for '{}': {}", placeholder, step_id);
-                Some(step_id)
-            } else {
-                // Fallback to LLM-based semantic matching
-                log::debug!(
-                    "No keyword match for '{}', trying LLM semantic matching",
-                    placeholder
-                );
-                self.find_matching_step_by_llm(&placeholder, step_index)
-                    .await
-            };
-
-            if let Some(matched_step_id) = matched_step_id {
-                let key = format!("step_{}_output", matched_step_id);
-
-                // Try to get prompt version first (ToPrompt), fallback to JSON
-                let prompt_key = format!("step_{}_output_prompt", matched_step_id);
-                if let Some(JsonValue::String(prompt_str)) = self.context.get(&prompt_key) {
-                    log::debug!(
-                        "Mapped placeholder '{}' to step '{}' (using ToPrompt version)",
-                        placeholder,
-                        matched_step_id
-                    );
-                    context.insert(placeholder.clone(), JsonValue::String(prompt_str.clone()));
-                } else if let Some(output) = self.context.get(&key) {
-                    log::debug!(
-                        "Mapped placeholder '{}' to step '{}' (using JSON version)",
-                        placeholder,
-                        matched_step_id
-                    );
-                    context.insert(placeholder.clone(), output.clone());
-                } else {
-                    log::warn!(
-                        "Placeholder '{}' matched to step '{}' but output not found in context",
-                        placeholder,
-                        matched_step_id
-                    );
-                }
-            } else {
-                log::warn!(
-                    "Could not find matching step for placeholder '{}' using any method",
-                    placeholder
-                );
-            }
-        }
-
-        // Always include previous_output for convenience
-        if step_index > 0
-            && let Some(strategy) = &self.strategy_map
-            && let Some(prev_step) = strategy.steps.get(step_index - 1)
-        {
-            let key = format!("step_{}_output", prev_step.step_id);
-            if let Some(output) = self.context.get(&key) {
-                context.insert("previous_output".to_string(), output.clone());
-            }
-        }
-
-        context
-    }
-
     /// Formats context as a readable string for prompts.
     #[cfg(feature = "agent")]
     fn format_context(&self, context: &HashMap<String, JsonValue>) -> String {
@@ -1142,7 +963,11 @@ impl Orchestrator {
         // Fast path: Check if we can use simple template substitution
         if self.config.enable_fast_path_intent_generation {
             let placeholders = Self::extract_placeholders(&step.intent_template);
-            let all_resolved = placeholders.iter().all(|p| context.contains_key(p));
+            // Check if all placeholders can be resolved (supports dot notation like step_1_output.field)
+            let all_resolved = placeholders.iter().all(|p| {
+                let first_token = p.split('.').next().unwrap_or(p);
+                context.contains_key(first_token)
+            });
 
             if all_resolved {
                 log::debug!(
@@ -1267,13 +1092,8 @@ impl Orchestrator {
                 step.description
             );
 
-            // Build semantic context by mapping placeholders to appropriate step outputs
-            let context = self
-                .build_semantic_context_async(step_index, &step.intent_template)
-                .await;
-
-            // Build intent using LLM
-            let intent = self.build_intent(&step, &context).await?;
+            // Build intent using template rendering with full context
+            let intent = self.build_intent(&step, &self.context).await?;
 
             log::debug!("Generated intent:\n{}", intent);
 
@@ -1299,6 +1119,10 @@ impl Orchestrator {
                             JsonValue::String(prompt_str),
                         );
                     }
+
+                    // Update previous_output for convenience (commonly used in templates)
+                    self.context
+                        .insert("previous_output".to_string(), output.clone());
 
                     final_result = output;
                     steps_executed += 1;
