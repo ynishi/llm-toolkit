@@ -43,7 +43,7 @@ Generate a detailed execution strategy as a JSON object with the following struc
       "step_id": "step_1",
       "description": "What this step accomplishes",
       "assigned_agent": "AgentName",
-      "intent_template": "The prompt to give the agent (can include placeholders like {{ previous_output }})",
+      "intent_template": "The prompt to give the agent (can include placeholders like {% raw %}{{ previous_output }}{% endraw %})",
       "expected_output": "Description of what output is expected",
       "requires_validation": true
     }
@@ -57,7 +57,7 @@ Generate a detailed execution strategy as a JSON object with the following struc
 3. Assign the most appropriate agent to each step
 4. Create clear, actionable intent templates
 5. Ensure steps build upon each other logically
-6. Use Mustache/Jinja2-style placeholders with **double curly braces** like `{{ previous_output }}`, `{{ user_request }}` in intent templates (NOT single braces like `{previous_output}`)
+6. Use Mustache/Jinja2-style placeholders with **double curly braces** like {% raw %}`{{ previous_output }}`{% endraw %}, {% raw %}`{{ user_request }}`{% endraw %} in intent templates (NOT single braces like `{previous_output}`)
 7. **Add Validation Steps**: For any step that produces a critical artifact (e.g., a final document, a piece of code, a detailed plan), you SHOULD add a dedicated validation step immediately after it. Select the most appropriate validator agent from the 'Available Agents' list (e.g., InnerValidatorAgent for general validation, or domain-specific validators if available)
 
 **Important:** Return ONLY the JSON object, no additional explanation.
@@ -115,7 +115,7 @@ Therefore, you MUST embed all necessary context data directly into the intent pr
 
 Generate the complete intent prompt by:
 1. Taking the intent template as a base structure
-2. **Replacing all placeholders (like {{ previous_output }}, {{ step_3_output }}) with actual context values**
+2. **Replacing all placeholders (like {% raw %}{{ previous_output }}{% endraw %}, {% raw %}{{ step_3_output }}{% endraw %}) with actual context values**
 3. Ensuring the resulting intent is self-contained and actionable
 4. Making it specific and concrete - avoid abstract requests like "review" or "refine" without concrete instructions
 5. Matching the agent's expertise and capabilities
@@ -129,7 +129,7 @@ This example shows how to transform a template with placeholders into a complete
 **Step Description:** "Review and refine the article for clarity and technical accuracy"
 
 **Intent Template:**
-"Review the article in {{ step_3_output }} and suggest improvements"
+"Review the article in {% raw %}{{ step_3_output }}{% endraw %} and suggest improvements"
 
 **Available Context:**
 - step_3_output: "# Rust Ownership\n\nRust uses ownership to manage memory safely without garbage collection. The three rules are:\n1. Each value has an owner\n2. Only one owner at a time\n3. When owner goes out of scope, value is dropped"
@@ -154,12 +154,12 @@ For each improvement, provide:
 3. Suggestion: [concrete fix]
 ```
 
-**Key point:** The agent receives ONLY the OUTPUT text above. It cannot access {{ step_3_output }} separately, so you must copy the actual content into the intent.
+**Key point:** The agent receives ONLY the OUTPUT text above. It cannot access {% raw %}{{ step_3_output }}{% endraw %} separately, so you must copy the actual content into the intent.
 
 **IMPORTANT NOTE ON PLACEHOLDER SYNTAX:**
-- Always use **double curly braces** `{{ placeholder_name }}` (Mustache/Jinja2 style)
+- Always use **double curly braces** {% raw %}`{{ placeholder_name }}`{% endraw %} (Mustache/Jinja2 style)
 - DO NOT use single braces `{placeholder_name}` - this will NOT be recognized
-- Include spaces inside braces: `{{ name }}` not `{{name}}`
+- Include spaces inside braces: {% raw %}`{{ name }}`{% endraw %} not {% raw %}`{{name}}`{% endraw %}
 
 **Important:** Return ONLY the final intent prompt text, no additional explanation or metadata.
 "##)]
@@ -293,7 +293,7 @@ Generate a JSON array of `StrategyStep` objects with the following structure:
     "step_id": "step_X",
     "description": "What this step accomplishes",
     "assigned_agent": "AgentName",
-    "intent_template": "The prompt template (can include {{ previous_output }}, etc. - use double braces)",
+    "intent_template": "The prompt template (can include {% raw %}{{ previous_output }}{% endraw %}, etc. - use double braces)",
     "expected_output": "Description of expected output"
   }
 ]
@@ -391,7 +391,7 @@ Generate a JSON object with the following structure:
       "step_id": "step_1",
       "description": "What this step accomplishes",
       "assigned_agent": "AgentName",
-      "intent_template": "The prompt to give the agent (can include placeholders like {{ previous_output }})",
+      "intent_template": "The prompt to give the agent (can include placeholders like {% raw %}{{ previous_output }}{% endraw %})",
       "expected_output": "Description of what output is expected"
     }
   ]
@@ -508,6 +508,12 @@ mod tests {
         assert!(prompt.contains("Write an article"));
         assert!(prompt.contains("WriterAgent"));
         assert!(prompt.contains("Research"));
+
+        // CRITICAL: Verify that placeholder examples are preserved (not expanded by minijinja)
+        assert!(
+            prompt.contains("{{ previous_output }}"),
+            "Placeholder {{ previous_output }} should be preserved in the prompt, not expanded to empty string"
+        );
     }
 
     #[test]

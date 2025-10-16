@@ -170,14 +170,18 @@ impl Orchestrator {
     /// Creates a new Orchestrator with a given blueprint.
     ///
     /// Uses default internal agents (ClaudeCodeAgent and ClaudeCodeJsonAgent).
+    /// Both internal agents are automatically wrapped with RetryAgent (max 3 retries)
+    /// to ensure robustness in strategy generation and redesign decisions.
     /// InnerValidatorAgent is automatically registered as a fallback validator.
     #[cfg(feature = "agent")]
     pub fn new(blueprint: BlueprintWorkflow) -> Self {
+        use crate::agent::impls::RetryAgent;
+
         let mut orchestrator = Self {
             blueprint,
             agents: HashMap::new(),
-            internal_json_agent: Box::new(ClaudeCodeJsonAgent::new()),
-            internal_agent: Box::new(ClaudeCodeAgent::new()),
+            internal_json_agent: Box::new(RetryAgent::new(ClaudeCodeJsonAgent::new(), 3)),
+            internal_agent: Box::new(RetryAgent::new(ClaudeCodeAgent::new(), 3)),
             strategy_map: None,
             context: HashMap::new(),
             current_task: None,
@@ -193,13 +197,34 @@ impl Orchestrator {
     /// Creates a new Orchestrator with custom internal agents.
     ///
     /// This allows you to inject mock or alternative agents for testing or custom LLM backends.
+    /// **IMPORTANT**: For production use, **wrap your agents with RetryAgent** before passing them
+    /// to ensure robustness in strategy generation and redesign decisions. The orchestrator cannot
+    /// automatically wrap boxed trait objects.
     /// InnerValidatorAgent is automatically registered as a fallback validator.
     ///
     /// # Arguments
     ///
     /// * `blueprint` - The workflow blueprint
-    /// * `internal_agent` - Agent for string outputs (intent generation, redesign decisions)
-    /// * `internal_json_agent` - Agent for StrategyMap generation
+    /// * `internal_agent` - Agent for string outputs (intent generation, redesign decisions).
+    ///   **Recommended**: Wrap with RetryAgent
+    /// * `internal_json_agent` - Agent for StrategyMap generation.
+    ///   **Recommended**: Wrap with RetryAgent
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use llm_toolkit::orchestrator::{Orchestrator, BlueprintWorkflow};
+    /// use llm_toolkit::agent::impls::{RetryAgent, gemini::GeminiAgent};
+    ///
+    /// let blueprint = BlueprintWorkflow::new("My workflow");
+    ///
+    /// // Recommended: Wrap with RetryAgent for robustness
+    /// let orchestrator = Orchestrator::with_internal_agents(
+    ///     blueprint,
+    ///     Box::new(RetryAgent::new(GeminiAgent::new(), 3)),
+    ///     Box::new(RetryAgent::new(GeminiAgent::new(), 3)),
+    /// );
+    /// ```
     #[cfg(feature = "agent")]
     pub fn with_internal_agents(
         blueprint: BlueprintWorkflow,

@@ -1847,8 +1847,26 @@ let result = orchestrator.execute(task).await;
 **Default Internal Agents:**
 
 When using `Orchestrator::new()`, the following internal agents are used:
-- **Strategy Generation**: `ClaudeCodeJsonAgent` - Generates `StrategyMap` from blueprint
-- **Intent & Redesign**: `ClaudeCodeAgent` - Generates agent intents and makes redesign decisions
+- **Strategy Generation**: `ClaudeCodeJsonAgent` wrapped in `RetryAgent` (max 3 retries)
+- **Intent & Redesign**: `ClaudeCodeAgent` wrapped in `RetryAgent` (max 3 retries)
+
+Both agents are automatically wrapped with `RetryAgent` to ensure robustness in critical orchestration decisions.
+
+**IMPORTANT for `with_internal_agents()`:**
+
+When providing custom internal agents, **you should wrap them with `RetryAgent`** for production use:
+
+```rust
+use llm_toolkit::agent::impls::{RetryAgent, gemini::GeminiAgent};
+
+let orchestrator = Orchestrator::with_internal_agents(
+    blueprint,
+    Box::new(RetryAgent::new(GeminiAgent::new(), 3)),  // Recommended
+    Box::new(RetryAgent::new(GeminiAgent::new(), 3)),  // Recommended
+);
+```
+
+Without `RetryAgent`, a single transient error (network timeout, rate limiting) could cause strategy generation to fail completely.
 
 **Complete Offline Example:**
 
