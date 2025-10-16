@@ -372,7 +372,8 @@ fn format_type_for_schema(ty: &syn::Type) -> String {
                         }
                         "array".to_string()
                     }
-                    _ => type_name.to_lowercase(),
+                    // Keep custom type names as-is (don't lowercase)
+                    _ => type_name,
                 }
             } else {
                 "unknown".to_string()
@@ -827,6 +828,9 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             let mut example_struct: Option<String> = None;
             let mut example_tuple: Option<String> = None;
 
+            // Collect nested types for type definitions section
+            let mut nested_types: Vec<&syn::Type> = Vec::new();
+
             for variant in &data_enum.variants {
                 let variant_name = &variant.ident;
                 let variant_name_str = variant_name.to_string();
@@ -890,6 +894,11 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             let field_type = format_type_for_schema(&field.ty);
                             field_parts.push(format!("{}: {}", field_name, field_type.clone()));
 
+                            // Collect nested type if not primitive
+                            if !is_primitive_type(&field.ty) {
+                                nested_types.push(&field.ty);
+                            }
+
                             // Generate example value for this field
                             let example_value = generate_example_value_for_type(&field_type);
                             example_field_parts.push(format!("{}: {}", field_name, example_value));
@@ -942,7 +951,13 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                         let field_types: Vec<String> = fields
                             .unnamed
                             .iter()
-                            .map(|f| format_type_for_schema(&f.ty))
+                            .map(|f| {
+                                // Collect nested type if not primitive
+                                if !is_primitive_type(&f.ty) {
+                                    nested_types.push(&f.ty);
+                                }
+                                format_type_for_schema(&f.ty)
+                            })
                             .collect();
 
                         let tuple_str = field_types.join(", ");
@@ -1050,7 +1065,46 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                 }
             }
 
-            let prompt_string = lines.join("\n");
+            // Add nested type definitions section at runtime
+            let nested_type_tokens: Vec<_> = nested_types
+                .iter()
+                .map(|field_ty| {
+                    quote! {
+                        {
+                            let type_schema = <#field_ty as #crate_path::prompt::ToPrompt>::prompt_schema();
+                            if !type_schema.is_empty() {
+                                format!("\n\n{}", type_schema)
+                            } else {
+                                String::new()
+                            }
+                        }
+                    }
+                })
+                .collect();
+
+            let prompt_string = if nested_type_tokens.is_empty() {
+                let lines_str = lines.join("\n");
+                quote! { #lines_str.to_string() }
+            } else {
+                let lines_str = lines.join("\n");
+                quote! {
+                    {
+                        let mut result = String::from(#lines_str);
+
+                        // Collect nested type schemas and deduplicate
+                        let nested_schemas: Vec<String> = vec![#(#nested_type_tokens),*];
+                        let mut seen_schemas = std::collections::HashSet::<String>::new();
+
+                        for schema in nested_schemas {
+                            if !schema.is_empty() && seen_schemas.insert(schema.clone()) {
+                                result.push_str(&schema);
+                            }
+                        }
+
+                        result
+                    }
+                }
+            };
             let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
             // Generate match arms for instance-level to_prompt()
@@ -1226,7 +1280,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     #to_prompt_impl
 
                     fn prompt_schema() -> String {
-                        #prompt_string.to_string()
+                        #prompt_string
                     }
                 }
             };
@@ -1876,6 +1930,16 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     }
                 }
 
+                // Generate schema parts for prompt_schema()
+                let struct_name_str = name.to_string();
+                let schema_parts = generate_schema_only_parts(
+                    &struct_name_str,
+                    &struct_docs,
+                    fields,
+                    &crate_path,
+                    false, // type_marker is false for simple structs
+                );
+
                 // Generate the implementation with to_prompt_parts()
                 quote! {
                     impl #impl_generics #crate_path::prompt::ToPrompt for #name #ty_generics #where_clause {
@@ -1903,7 +1967,20 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                         }
 
                         fn prompt_schema() -> String {
-                            String::new() // Default key-value format doesn't have auto-generated schema
+                            use std::sync::OnceLock;
+                            static SCHEMA_CACHE: OnceLock<String> = OnceLock::new();
+
+                            SCHEMA_CACHE.get_or_init(|| {
+                                let schema_parts = #schema_parts;
+                                schema_parts
+                                    .into_iter()
+                                    .filter_map(|part| match part {
+                                        #crate_path::prompt::PromptPart::Text(text) => Some(text),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            }).clone()
                         }
                     }
                 }
