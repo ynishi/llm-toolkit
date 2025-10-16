@@ -58,7 +58,8 @@ Generate a detailed execution strategy as a JSON object with the following struc
 4. Create clear, actionable intent templates
 5. Ensure steps build upon each other logically
 6. Use Mustache/Jinja2-style placeholders with **double curly braces** like {% raw %}`{{ previous_output }}`{% endraw %}, {% raw %}`{{ user_request }}`{% endraw %} in intent templates (NOT single braces like `{previous_output}`)
-7. **Add Validation Steps**: For any step that produces a critical artifact (e.g., a final document, a piece of code, a detailed plan), you SHOULD add a dedicated validation step immediately after it. Select the most appropriate validator agent from the 'Available Agents' list (e.g., InnerValidatorAgent for general validation, or domain-specific validators if available)
+7. **IMPORTANT:** Use ONLY double curly braces {% raw %}`{{ }}`{% endraw %}, NOT triple braces {% raw %}`{{{ }}}`{% endraw %}. Intent templates are plain text and do not require HTML escaping.
+8. **Add Validation Steps**: For any step that produces a critical artifact (e.g., a final document, a piece of code, a detailed plan), you SHOULD add a dedicated validation step immediately after it. Select the most appropriate validator agent from the 'Available Agents' list (e.g., InnerValidatorAgent for general validation, or domain-specific validators if available)
 
 **Important:** Return ONLY the JSON object, no additional explanation.
 "##)]
@@ -159,6 +160,7 @@ For each improvement, provide:
 **IMPORTANT NOTE ON PLACEHOLDER SYNTAX:**
 - Always use **double curly braces** {% raw %}`{{ placeholder_name }}`{% endraw %} (Mustache/Jinja2 style)
 - DO NOT use single braces `{placeholder_name}` - this will NOT be recognized
+- DO NOT use triple braces {% raw %}`{{{ placeholder_name }}}`{% endraw %} - intent templates are plain text and do not require HTML escaping
 - Include spaces inside braces: {% raw %}`{{ name }}`{% endraw %} not {% raw %}`{{name}}`{% endraw %}
 
 **Important:** Return ONLY the final intent prompt text, no additional explanation or metadata.

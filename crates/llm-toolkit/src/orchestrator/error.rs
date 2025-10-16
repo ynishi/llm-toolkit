@@ -18,6 +18,10 @@ pub enum OrchestratorError {
     #[error("Strategy generation failed: {0}")]
     StrategyGenerationFailed(String),
 
+    /// Intent template rendering failed.
+    #[error("Template rendering error: {0}")]
+    TemplateRenderError(String),
+
     /// Strategy execution failed.
     #[error("Execution failed: {0}")]
     ExecutionFailed(String),

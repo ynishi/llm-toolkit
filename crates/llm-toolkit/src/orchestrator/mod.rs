@@ -1151,22 +1151,11 @@ impl Orchestrator {
                     placeholders.len()
                 );
 
-                let mut intent = step.intent_template.clone();
+                use crate::prompt::render_prompt;
 
-                for (key, value) in context {
-                    // Support both {{key}} and {key} formats
-                    let placeholder_double = format!("{{{{{}}}}}", key);
-                    let placeholder_single = format!("{{{}}}", key);
-
-                    let value_str = match value {
-                        JsonValue::String(s) => s.clone(),
-                        other => serde_json::to_string_pretty(other)
-                            .unwrap_or_else(|_| "null".to_string()),
-                    };
-
-                    intent = intent.replace(&placeholder_double, &value_str);
-                    intent = intent.replace(&placeholder_single, &value_str);
-                }
+                // Use minijinja for template rendering
+                let intent = render_prompt(&step.intent_template, context)
+                    .map_err(|e| OrchestratorError::TemplateRenderError(e.to_string()))?;
 
                 return Ok(intent);
             }
@@ -1798,5 +1787,42 @@ mod tests {
         let strategy = StrategyMap::new("Goal".to_string());
         orch.set_strategy_map(strategy);
         assert!(orch.strategy_map().is_some());
+    }
+
+    #[test]
+    fn test_extract_placeholders_double_braces() {
+        let template = "Process {{ previous_output }} for {{ task }}";
+        let placeholders = Orchestrator::extract_placeholders(template);
+
+        assert_eq!(placeholders.len(), 2);
+        assert!(placeholders.contains(&"previous_output".to_string()));
+        assert!(placeholders.contains(&"task".to_string()));
+    }
+
+    #[test]
+    fn test_extract_placeholders_with_spaces() {
+        let template = "{{  name  }} and {{value}}";
+        let placeholders = Orchestrator::extract_placeholders(template);
+
+        assert_eq!(placeholders.len(), 2);
+        assert!(placeholders.contains(&"name".to_string()));
+        assert!(placeholders.contains(&"value".to_string()));
+    }
+
+    #[test]
+    fn test_extract_placeholders_no_duplicates() {
+        let template = "{{ name }} and {{ name }} again";
+        let placeholders = Orchestrator::extract_placeholders(template);
+
+        assert_eq!(placeholders.len(), 1);
+        assert_eq!(placeholders[0], "name");
+    }
+
+    #[test]
+    fn test_extract_placeholders_empty_template() {
+        let template = "No placeholders here";
+        let placeholders = Orchestrator::extract_placeholders(template);
+
+        assert_eq!(placeholders.len(), 0);
     }
 }

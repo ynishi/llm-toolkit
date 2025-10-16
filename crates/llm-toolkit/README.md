@@ -1235,6 +1235,31 @@ async fn main() {
 }
 ```
 
+**Best Practice: Writing Effective Expertise Descriptions**
+
+The `expertise` field should describe the agent's capabilities in **natural language only**. Do NOT include template placeholder syntax like `{{ variable }}` in the expertise string.
+
+❌ **Incorrect:**
+```rust
+#[agent(
+    expertise = "Processes {{ strategy_json }} and generates reports",
+    output = "Report"
+)]
+```
+**Problem:** When the orchestrator generates strategies, the LLM sees these `{{ }}` patterns and may confuse them with actual placeholders that need to be filled, leading to incorrect intent generation.
+
+✅ **Correct:**
+```rust
+#[agent(
+    expertise = "Processes strategy details provided in the input and generates comprehensive reports. \
+                 Input should include strategy goals, constraints, and context data.",
+    output = "Report"
+)]
+```
+**Why this works:** The orchestrator's strategy generation LLM reads this natural language description and automatically creates appropriate intent templates like `"Process the following strategy: {{ strategy_data }}"`. The LLM understands what inputs the agent needs and generates the correct placeholders in the strategy's `intent_template` field.
+
+**Key principle:** The `expertise` describes capabilities; the orchestrator creates the actual intent templates dynamically based on those capabilities.
+
 **Features:**
 - ✅ Simplest possible interface
 - ✅ Minimal boilerplate
@@ -2478,6 +2503,60 @@ let emblem = extract_from_context("step_2_output")?;  // Not accessible!
 // Then final_output contains everything
 let result = orchestrator.execute(task).await;
 let complete_data = result.final_output; // All data aggregated by final agent
+```
+
+**Understanding Context Key Resolution:**
+
+The semantic variable names shown in intent templates (like `{{ concept_content }}`, `{{ emblem_design }}`) are resolved via **semantic matching to step outputs**, not through a rename/alias mechanism.
+
+**How Context Keys Actually Work:**
+
+1. **Step outputs are stored with standard keys**:
+   - `step_1_output` - JSON version
+   - `step_1_output_prompt` - ToPrompt version (if available)
+
+2. **Semantic placeholders are matched to steps**:
+   - When the orchestrator sees `{{ concept_content }}` in an intent template
+   - It performs semantic matching (keyword or LLM-based) to find the appropriate step
+   - Maps `concept_content` → `step_1_output` internally
+   - Passes the matched step output to the agent
+
+3. **No rename/alias mechanism currently**:
+   - You cannot define custom aliases like `persona_json` → `step_2_output`
+   - The strategy generation LLM creates semantic names based on step descriptions
+   - These names are automatically matched to the actual `step_N_output` keys
+
+4. **Accessing nested fields with dot notation**:
+   - Intent templates support Jinja2-style dot notation
+   - Example: `{{ step_3_output.user.profile.role }}` accesses nested JSON fields
+   - This works with both direct step references and semantically matched names
+
+**What About External Context?**
+
+If you add context before execution using `context_mut()`:
+
+```rust
+orchestrator.context_mut().insert(
+    "persona_json".to_string(),
+    serde_json::json!({"name": "Alice", "role": "Developer"})
+);
+```
+
+This data is **not automatically available to agents** unless:
+- It's referenced as a step output from a previous step
+- Or you manually construct an intent template that uses `{{ persona_json }}` AND ensure it matches a step output through semantic matching
+
+**Best Practice:**
+
+For most use cases, let the strategy LLM generate semantic placeholder names based on step descriptions. The orchestrator will handle the matching automatically:
+
+```rust
+// ✅ Good: Strategy LLM generates semantic names
+// Intent: "Create profile using {{ concept_data }} and {{ design_elements }}"
+// Orchestrator matches: concept_data → step_1_output, design_elements → step_2_output
+
+// ✅ Acceptable: Direct step references with dot notation
+// Intent: "Process {{ step_1_output.concept }} and {{ step_2_output.design.colors }}"
 ```
 
 **Why?** The orchestrator's `context` was internal. But now you can access it!

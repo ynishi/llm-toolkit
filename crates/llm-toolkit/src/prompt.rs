@@ -404,6 +404,50 @@ mod tests {
         let prompt = prompt!("This is a static prompt.",).unwrap();
         assert_eq!(prompt, "This is a static prompt.");
     }
+
+    #[test]
+    fn test_render_prompt_with_json_value_dot_notation() {
+        use serde_json::json;
+
+        let context = json!({
+            "user": {
+                "name": "Alice",
+                "age": 30,
+                "profile": {
+                    "role": "Developer"
+                }
+            }
+        });
+
+        let template =
+            "{{ user.name }} is {{ user.age }} years old and works as {{ user.profile.role }}";
+        let result = render_prompt(template, &context).unwrap();
+
+        assert_eq!(result, "Alice is 30 years old and works as Developer");
+    }
+
+    #[test]
+    fn test_render_prompt_with_hashmap_json_value() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        let mut context = HashMap::new();
+        context.insert(
+            "step_1_output".to_string(),
+            json!({
+                "result": "success",
+                "data": {
+                    "count": 42
+                }
+            }),
+        );
+        context.insert("task".to_string(), json!("analysis"));
+
+        let template = "Task: {{ task }}, Result: {{ step_1_output.result }}, Count: {{ step_1_output.data.count }}";
+        let result = render_prompt(template, &context).unwrap();
+
+        assert_eq!(result, "Task: analysis, Result: success, Count: 42");
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
