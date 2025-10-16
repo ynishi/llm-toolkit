@@ -769,11 +769,19 @@ impl Orchestrator {
         }
 
         // Build the prompt using llm-toolkit's ToPrompt
+        // Serialize context for strategy LLM to understand available placeholders
+        let user_context = if !self.context.is_empty() {
+            serde_json::to_string_pretty(&self.context).ok()
+        } else {
+            None
+        };
+
         let request = StrategyGenerationRequest::new(
             task.to_string(),
             self.format_agent_list(),
             self.blueprint.description.clone(),
             self.blueprint.graph.clone(),
+            user_context,
         );
 
         let prompt = request.to_prompt();

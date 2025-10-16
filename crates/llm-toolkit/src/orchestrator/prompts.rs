@@ -16,6 +16,14 @@ You are an expert orchestrator tasked with creating a detailed execution strateg
 ## User's Task
 {{ task }}
 
+{% if user_context %}
+## User Request Context
+The following context data is available in intent templates via `user_request.*` placeholders:
+```json
+{{ user_context }}
+```
+{% endif %}
+
 ## Available Agents
 {{ agent_list }}
 
@@ -89,6 +97,7 @@ pub struct StrategyGenerationRequest {
     pub agent_list: String,
     pub blueprint_description: String,
     pub blueprint_graph: String,
+    pub user_context: String,
 }
 
 impl StrategyGenerationRequest {
@@ -98,12 +107,14 @@ impl StrategyGenerationRequest {
         agent_list: String,
         blueprint_description: String,
         blueprint_graph: Option<String>,
+        user_context: Option<String>,
     ) -> Self {
         Self {
             task,
             agent_list,
             blueprint_description,
             blueprint_graph: blueprint_graph.unwrap_or_default(),
+            user_context: user_context.unwrap_or_default(),
         }
     }
 }
@@ -508,6 +519,7 @@ mod tests {
             "Agent1, Agent2".to_string(),
             "Blueprint description".to_string(),
             Some("graph TD\nA --> B".to_string()),
+            None,
         );
 
         assert_eq!(req.task, "Test task");
@@ -523,6 +535,7 @@ mod tests {
             "- WriterAgent: Expert writer".to_string(),
             "1. Research\n2. Write\n3. Review".to_string(),
             None,
+            None,
         );
 
         let prompt = req.to_prompt();
@@ -534,6 +547,96 @@ mod tests {
         assert!(
             prompt.contains("{{ previous_output }}"),
             "Placeholder {{ previous_output }} should be preserved in the prompt, not expanded to empty string"
+        );
+    }
+
+    #[test]
+    fn test_strategy_request_with_user_context() {
+        use crate::prompt::ToPrompt;
+
+        let user_context_json = r#"{
+  "theme": "Gothic",
+  "world_seed": {
+    "aesthetics": "dark",
+    "complexity": 5
+  }
+}"#;
+
+        let req = StrategyGenerationRequest::new(
+            "Create a fantasy world".to_string(),
+            "- WorldConceptAgent: Expert in world building".to_string(),
+            "1. Generate concept\n2. Create design".to_string(),
+            None,
+            Some(user_context_json.to_string()),
+        );
+
+        let prompt = req.to_prompt();
+
+        // Debug: print actual prompt
+        println!("\n=== Strategy Generation Prompt with User Context ===");
+        println!("{}", prompt);
+        println!("====================================================\n");
+
+        // Should contain user context section
+        assert!(prompt.contains("User Request Context"));
+        assert!(prompt.contains("Gothic"));
+        assert!(prompt.contains("world_seed"));
+        assert!(prompt.contains("aesthetics"));
+        assert!(prompt.contains("complexity"));
+
+        // Should explain how to use user_request placeholders
+        assert!(prompt.contains("user_request.*"));
+    }
+
+    #[test]
+    fn test_strategy_request_without_user_context() {
+        use crate::prompt::ToPrompt;
+
+        let req = StrategyGenerationRequest::new(
+            "Write an article".to_string(),
+            "- WriterAgent: Expert writer".to_string(),
+            "1. Research\n2. Write".to_string(),
+            None,
+            None,
+        );
+
+        let prompt = req.to_prompt();
+
+        println!("\n=== Prompt without user_context ===");
+        println!("{}", prompt);
+        println!("====================================\n");
+
+        // Should NOT contain user context section when empty
+        assert!(!prompt.contains("User Request Context"));
+    }
+
+    #[test]
+    fn test_minijinja_empty_string_condition() {
+        use crate::prompt::ToPrompt;
+
+        // Test with empty string (unwrap_or_default behavior)
+        let req = StrategyGenerationRequest {
+            task: "Test".to_string(),
+            agent_list: "AgentA".to_string(),
+            blueprint_description: "Blueprint".to_string(),
+            blueprint_graph: String::new(),
+            user_context: String::new(), // Empty string
+        };
+
+        let prompt = req.to_prompt();
+
+        println!("\n=== Test: Empty string for user_context ===");
+        println!("user_context is empty string: '{}'", req.user_context);
+        println!(
+            "Prompt contains 'User Request Context': {}",
+            prompt.contains("User Request Context")
+        );
+        println!("==========================================\n");
+
+        // Empty string should be falsy in minijinja {% if %} conditions
+        assert!(
+            !prompt.contains("User Request Context"),
+            "Empty string should not trigger the user_context conditional block"
         );
     }
 

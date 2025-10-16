@@ -122,9 +122,67 @@ impl FlexibleExtractor {
         None
     }
 
+    /// Clean trailing commas from JSON string (common LLM output issue)
+    ///
+    /// Removes trailing commas before closing braces/brackets:
+    /// - `{"a": 1,}` → `{"a": 1}`
+    /// - `["a", "b",]` → `["a", "b"]`
+    ///
+    /// Handles:
+    /// - Optional whitespace between comma and bracket: `, }` or `,}`
+    /// - Preserves commas inside strings
+    /// - Nested structures
+    fn clean_json_trailing_commas(json: &str) -> String {
+        let mut result = String::with_capacity(json.len());
+        let mut in_string = false;
+        let mut escape_next = false;
+        let chars: Vec<char> = json.chars().collect();
+
+        for i in 0..chars.len() {
+            let ch = chars[i];
+
+            if escape_next {
+                escape_next = false;
+                result.push(ch);
+                continue;
+            }
+
+            match ch {
+                '\\' if in_string => {
+                    escape_next = true;
+                    result.push(ch);
+                }
+                '"' => {
+                    in_string = !in_string;
+                    result.push(ch);
+                }
+                ',' if !in_string => {
+                    // Look ahead to check if this is a trailing comma
+                    let mut j = i + 1;
+                    // Skip whitespace
+                    while j < chars.len() && chars[j].is_whitespace() {
+                        j += 1;
+                    }
+                    // If next non-whitespace is } or ], skip the comma
+                    if j < chars.len() && (chars[j] == '}' || chars[j] == ']') {
+                        // Skip this comma (trailing comma)
+                        continue;
+                    } else {
+                        // Keep this comma (not trailing)
+                        result.push(ch);
+                    }
+                }
+                _ => result.push(ch),
+            }
+        }
+
+        result
+    }
+
     /// Extract first complete JSON object from text
     fn extract_first_json_object(&self, text: &str) -> Option<String> {
         self.extract_first_json_entity(text)
+            .map(|json| Self::clean_json_trailing_commas(&json))
     }
 
     /// Extract content based on keyword matching
@@ -169,7 +227,9 @@ impl ContentExtractor for FlexibleExtractor {
 
     fn extract_json_like(&self, text: &str) -> Option<String> {
         // Delegate to extract_first_json_entity for proper handling
-        let result = self.extract_first_json_entity(text);
+        let result = self
+            .extract_first_json_entity(text)
+            .map(|json| Self::clean_json_trailing_commas(&json));
 
         if result.is_none() && self.debug_mode {
             debug!("Failed to extract JSON-like content");
@@ -330,5 +390,97 @@ mod tests {
         let result = extractor.extract_with_strategies(text, &strategies);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "{\"type\": \"success\"}");
+    }
+
+    #[test]
+    fn test_clean_json_trailing_commas_object() {
+        let extractor = FlexibleExtractor::new();
+
+        // Test trailing comma in object
+        let text = r#"{"name": "Alice", "age": 30,}"#;
+        let result = extractor.extract_first_json_object(text);
+        assert_eq!(result, Some(r#"{"name": "Alice", "age": 30}"#.to_string()));
+
+        // Test trailing comma with whitespace
+        let text2 = r#"{"name": "Bob", "age": 25, }"#;
+        let result2 = extractor.extract_first_json_object(text2);
+        assert_eq!(result2, Some(r#"{"name": "Bob", "age": 25 }"#.to_string()));
+    }
+
+    #[test]
+    fn test_clean_json_trailing_commas_array() {
+        let extractor = FlexibleExtractor::new();
+
+        // Test trailing comma in array
+        let text = r#"["apple", "banana", "cherry",]"#;
+        let result = extractor.extract_first_json_object(text);
+        assert_eq!(result, Some(r#"["apple", "banana", "cherry"]"#.to_string()));
+
+        // Test trailing comma with whitespace
+        let text2 = r#"[1, 2, 3, ]"#;
+        let result2 = extractor.extract_first_json_object(text2);
+        assert_eq!(result2, Some(r#"[1, 2, 3 ]"#.to_string()));
+    }
+
+    #[test]
+    fn test_clean_json_trailing_commas_nested() {
+        let extractor = FlexibleExtractor::new();
+
+        // Test nested structures with trailing commas
+        let text = r#"{"items": [{"a": 1,}, {"b": 2,},], "count": 2,}"#;
+        let result = extractor.extract_first_json_object(text);
+        assert_eq!(
+            result,
+            Some(r#"{"items": [{"a": 1}, {"b": 2}], "count": 2}"#.to_string())
+        );
+    }
+
+    #[test]
+    fn test_clean_json_preserves_commas_in_strings() {
+        let extractor = FlexibleExtractor::new();
+
+        // Commas inside strings should be preserved
+        let text = r#"{"message": "Hello, world", "items": "a, b, c"}"#;
+        let result = extractor.extract_first_json_object(text);
+        // The commas in strings should remain
+        assert_eq!(
+            result,
+            Some(r#"{"message": "Hello, world", "items": "a, b, c"}"#.to_string())
+        );
+
+        // Test with trailing comma but commas in string values
+        let text2 = r#"{"msg": "test, data", "val": 1,}"#;
+        let result2 = extractor.extract_first_json_object(text2);
+        assert_eq!(
+            result2,
+            Some(r#"{"msg": "test, data", "val": 1}"#.to_string())
+        );
+    }
+
+    #[test]
+    fn test_clean_json_valid_json_unchanged() {
+        let extractor = FlexibleExtractor::new();
+
+        // Valid JSON without trailing commas should remain unchanged
+        let text = r#"{"name": "Alice", "age": 30}"#;
+        let result = extractor.extract_first_json_object(text);
+        assert_eq!(result, Some(text.to_string()));
+
+        let text2 = r#"["a", "b", "c"]"#;
+        let result2 = extractor.extract_first_json_object(text2);
+        assert_eq!(result2, Some(text2.to_string()));
+    }
+
+    #[test]
+    fn test_extract_json_like_with_trailing_commas() {
+        let extractor = FlexibleExtractor::new();
+
+        // extract_json_like should also clean trailing commas
+        let text = "Here's the data: {\"result\": \"success\", \"code\": 200,}";
+        let result = extractor.extract_json_like(text);
+        assert_eq!(
+            result,
+            Some(r#"{"result": "success", "code": 200}"#.to_string())
+        );
     }
 }
