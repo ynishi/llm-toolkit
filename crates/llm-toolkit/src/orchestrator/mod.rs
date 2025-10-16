@@ -793,6 +793,43 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Generates an execution strategy and returns it without executing.
+    ///
+    /// This is useful for:
+    /// - Saving the strategy to a file for later reuse
+    /// - Inspecting the generated strategy before execution
+    /// - Using the strategy as a template for similar tasks
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use llm_toolkit::orchestrator::Orchestrator;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let mut orchestrator = Orchestrator::new(Default::default());
+    /// // Generate strategy without executing
+    /// let strategy = orchestrator.generate_strategy_only("Process documents").await?;
+    ///
+    /// // Save to file
+    /// let json = serde_json::to_string_pretty(&strategy)?;
+    /// std::fs::write("my_workflow.json", json)?;
+    ///
+    /// // Later: Load and execute
+    /// let json = std::fs::read_to_string("my_workflow.json")?;
+    /// let strategy = serde_json::from_str(&json)?;
+    /// orchestrator.set_strategy_map(strategy);
+    /// orchestrator.execute("Process documents").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "agent")]
+    pub async fn generate_strategy_only(
+        &mut self,
+        task: &str,
+    ) -> Result<StrategyMap, OrchestratorError> {
+        self.generate_strategy(task).await?;
+        Ok(self.strategy_map.clone().unwrap())
+    }
+
     /// Generates an execution strategy (stub for non-derive feature).
     #[cfg(not(all(feature = "agent", feature = "derive")))]
     async fn generate_strategy(&mut self, task: &str) -> Result<(), OrchestratorError> {

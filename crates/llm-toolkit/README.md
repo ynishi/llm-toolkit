@@ -2361,6 +2361,27 @@ let result = orchestrator.execute(task).await; // Auto-generates strategy
 | Cost optimization (reuse strategies) | ❌ No | ✅ Yes |
 | Prototyping and experimentation | ✅ Yes | ❌ No |
 
+**Generating Strategies Without Execution:**
+
+If you want to generate a strategy but not execute it immediately (e.g., to save it as a template), use `generate_strategy_only()`:
+
+```rust
+// Generate strategy without executing
+let strategy = orchestrator.generate_strategy_only("Process documents").await?;
+
+// Save to file for reuse
+let json = serde_json::to_string_pretty(&strategy)?;
+std::fs::write("my_workflow.json", json)?;
+
+// Later: Load and execute
+let json = std::fs::read_to_string("my_workflow.json")?;
+let strategy: StrategyMap = serde_json::from_str(&json)?;
+orchestrator.set_strategy_map(strategy);
+orchestrator.execute("Process documents").await?;
+```
+
+This is useful for creating workflow templates that can be reused across multiple runs.
+
 **Example Code:**
 
 See the complete example at `examples/orchestrator_with_predefined_strategy.rs`:
