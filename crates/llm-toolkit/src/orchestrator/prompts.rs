@@ -60,6 +60,12 @@ Generate a detailed execution strategy as a JSON object with the following struc
 5. Ensure steps build upon each other logically
 6. Use Mustache/Jinja2-style placeholders with **double curly braces** like {% raw %}`{{ previous_output }}`{% endraw %}, {% raw %}`{{ user_request }}`{% endraw %} in intent templates (NOT single braces like `{previous_output}`)
 7. **IMPORTANT:** Use ONLY double curly braces {% raw %}`{{ }}`{% endraw %}, NOT triple braces {% raw %}`{{{ }}}`{% endraw %}. Intent templates are plain text and do not require HTML escaping.
+7a. **CRITICAL - Template Engine (minijinja):**
+   - Intent templates use minijinja, which automatically serializes JSON values
+   - Arrays become JSON arrays: {% raw %}`{{ user_request.keywords }}`{% endraw %} → `["fantasy", "mystery"]`
+   - Objects become JSON objects: {% raw %}`{{ user_request.config }}`{% endraw %} → `{"theme": "dark", "level": 5}`
+   - DO NOT use filters like {% raw %}`| tojson`{% endraw %}, {% raw %}`| json`{% endraw %}, or any other filters - they are unnecessary and will cause errors
+   - Simply reference placeholders directly: {% raw %}`{{ user_request.field }}`{% endraw %}
 8. **output_key Best Practices** (CRITICAL):
    - **ALWAYS specify** `output_key` for every step with a unique, meaningful name
    - Use descriptive names like `world_concept`, `emblem`, `profile` instead of generic `step_1_output`
@@ -322,6 +328,13 @@ Generate a JSON array of `StrategyStep` objects with the following structure:
 - **IMMUTABLE design**: Each step = ONE responsibility = ONE output type
 - **Append-only**: Never overwrite previous outputs
 
+**CRITICAL - Template Engine (minijinja):**
+- Intent templates use minijinja, which automatically serializes JSON values
+- Arrays → JSON arrays: {% raw %}`{{ keywords }}`{% endraw %} → `["fantasy", "mystery"]`
+- Objects → JSON objects: {% raw %}`{{ config }}`{% endraw %} → `{"theme": "dark"}`
+- DO NOT use filters like {% raw %}`| tojson`{% endraw %}, {% raw %}`| json`{% endraw %} - they cause errors
+- Simply reference placeholders directly: {% raw %}`{{ user_request.field }}`{% endraw %}
+
 **Placeholder Reference Guide**: Intent templates can access context data using:
 - **Named outputs (via output_key)**: {% raw %}`{{ world_concept }}`{% endraw %} or {% raw %}`{{ world_concept.theme }}`{% endraw %} (preferred)
 - **Previous step output**: {% raw %}`{{ step_N_output }}`{% endraw %} or {% raw %}`{{ step_N_output.field }}`{% endraw %} (e.g., {% raw %}`{{ step_1_output.concept }}`{% endraw %})
@@ -433,6 +446,13 @@ Generate a JSON object with the following structure:
 - **ALWAYS specify** `output_key` for every step with a unique, meaningful name (e.g., `world_concept`, `emblem`, `profile`)
 - **IMMUTABLE design**: Each step = ONE responsibility = ONE output type
 - **Append-only**: Never overwrite previous outputs
+
+**CRITICAL - Template Engine (minijinja):**
+- Intent templates use minijinja, which automatically serializes JSON values
+- Arrays → JSON arrays: {% raw %}`{{ keywords }}`{% endraw %} → `["fantasy", "mystery"]`
+- Objects → JSON objects: {% raw %}`{{ config }}`{% endraw %} → `{"theme": "dark"}`
+- DO NOT use filters like {% raw %}`| tojson`{% endraw %}, {% raw %}`| json`{% endraw %} - they cause errors
+- Simply reference placeholders directly: {% raw %}`{{ user_request.field }}`{% endraw %}
 
 **Placeholder Reference Guide**: Intent templates can access context data using:
 - **Named outputs (via output_key)**: {% raw %}`{{ world_concept }}`{% endraw %} or {% raw %}`{{ world_concept.theme }}`{% endraw %} (preferred)

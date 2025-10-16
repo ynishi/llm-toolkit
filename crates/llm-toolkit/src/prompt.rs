@@ -448,6 +448,87 @@ mod tests {
 
         assert_eq!(result, "Task: analysis, Result: success, Count: 42");
     }
+
+    #[test]
+    fn test_render_prompt_with_array_in_json_template() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        let mut context = HashMap::new();
+        context.insert(
+            "user_request".to_string(),
+            json!({
+                "narrative_keywords": ["betrayal", "redemption", "sacrifice"]
+            }),
+        );
+
+        // Test: Embedding array directly in JSON template (common pattern in strategy generation)
+        let template = r#"{"keywords": {{ user_request.narrative_keywords }}}"#;
+        let result = render_prompt(template, &context).unwrap();
+
+        // Verify the result is valid JSON
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["keywords"][0], "betrayal");
+        assert_eq!(parsed["keywords"][1], "redemption");
+        assert_eq!(parsed["keywords"][2], "sacrifice");
+    }
+
+    #[test]
+    fn test_render_prompt_with_object_in_json_template() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        let mut context = HashMap::new();
+        context.insert(
+            "user_request".to_string(),
+            json!({
+                "config": {
+                    "theme": "dark_fantasy",
+                    "complexity": 5
+                }
+            }),
+        );
+
+        // Test: Embedding object directly in JSON template
+        let template = r#"{"settings": {{ user_request.config }}}"#;
+        let result = render_prompt(template, &context).unwrap();
+
+        // Verify the result is valid JSON
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["settings"]["theme"], "dark_fantasy");
+        assert_eq!(parsed["settings"]["complexity"], 5);
+    }
+
+    #[test]
+    fn test_render_prompt_mixed_json_template() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        let mut context = HashMap::new();
+        context.insert(
+            "world_concept".to_string(),
+            json!({
+                "concept": "A world where identity is volatile"
+            }),
+        );
+        context.insert(
+            "user_request".to_string(),
+            json!({
+                "narrative_keywords": ["betrayal", "redemption"],
+                "theme": "dark fantasy"
+            }),
+        );
+
+        // Test: Complex case with both array and quoted string (like the actual error case)
+        let template = r#"{"concept": "{{ world_concept.concept }}", "keywords": {{ user_request.narrative_keywords }}, "theme": "{{ user_request.theme }}"}"#;
+        let result = render_prompt(template, &context).unwrap();
+
+        // Verify the result is valid JSON
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["concept"], "A world where identity is volatile");
+        assert_eq!(parsed["keywords"][0], "betrayal");
+        assert_eq!(parsed["theme"], "dark fantasy");
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
