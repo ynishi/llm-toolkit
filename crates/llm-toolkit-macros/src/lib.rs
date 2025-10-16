@@ -445,6 +445,22 @@ fn parse_prompt_attributes(attrs: &[syn::Attribute]) -> PromptAttributes {
     result
 }
 
+/// Generate example value for a type in JSON format
+fn generate_example_value_for_type(type_str: &str) -> String {
+    match type_str {
+        "string" => "\"example\"".to_string(),
+        "number" => "0".to_string(),
+        "boolean" => "false".to_string(),
+        s if s.ends_with("[]") => "[]".to_string(),
+        s if s.contains("|") => {
+            // For union types like "string | null", use the first type
+            let first_type = s.split('|').next().unwrap().trim();
+            generate_example_value_for_type(first_type)
+        }
+        _ => "null".to_string(),
+    }
+}
+
 /// Parse #[serde(rename = "...")] attribute on enum variant
 fn parse_serde_variant_rename(attrs: &[syn::Attribute]) -> Option<String> {
     for attr in attrs {
@@ -590,6 +606,58 @@ fn parse_serde_rename_all(attrs: &[syn::Attribute]) -> Option<RenameRule> {
     None
 }
 
+/// Parse #[serde(tag = "...")] attribute on enum
+/// Returns Some(tag_name) if present, None otherwise
+fn parse_serde_tag(attrs: &[syn::Attribute]) -> Option<String> {
+    for attr in attrs {
+        if attr.path().is_ident("serde")
+            && let Ok(meta_list) = attr.meta.require_list()
+        {
+            // Parse the tokens inside the parentheses
+            if let Ok(metas) =
+                meta_list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            {
+                for meta in metas {
+                    if let Meta::NameValue(nv) = meta
+                        && nv.path.is_ident("tag")
+                        && let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }) = nv.value
+                    {
+                        return Some(lit_str.value());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parse #[serde(untagged)] attribute on enum
+/// Returns true if the enum is untagged
+fn parse_serde_untagged(attrs: &[syn::Attribute]) -> bool {
+    for attr in attrs {
+        if attr.path().is_ident("serde")
+            && let Ok(meta_list) = attr.meta.require_list()
+        {
+            // Parse the tokens inside the parentheses
+            if let Ok(metas) =
+                meta_list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            {
+                for meta in metas {
+                    if let Meta::Path(path) = meta
+                        && path.is_ident("untagged")
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Parsed field-level prompt attributes
 #[derive(Debug, Default)]
 struct FieldPromptAttrs {
@@ -731,6 +799,11 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
             let enum_name = &input.ident;
             let enum_docs = extract_doc_comments(&input.attrs);
 
+            // Check for serde tagging strategy attributes
+            let serde_tag = parse_serde_tag(&input.attrs);
+            let is_internally_tagged = serde_tag.is_some();
+            let is_untagged = parse_serde_untagged(&input.attrs);
+
             // Check for #[serde(rename_all = "...")] attribute
             let rename_rule = parse_serde_rename_all(&input.attrs);
 
@@ -748,6 +821,11 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
             let mut variant_lines = Vec::new();
             let mut first_variant_name = None;
+
+            // Collect examples for each variant type
+            let mut example_unit: Option<String> = None;
+            let mut example_struct: Option<String> = None;
+            let mut example_tuple: Option<String> = None;
 
             for variant in &data_enum.variants {
                 let variant_name = &variant.ident;
@@ -779,6 +857,11 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                 // Check variant type: Unit, Struct, or Tuple
                 let variant_line = match &variant.fields {
                     syn::Fields::Unit => {
+                        // Collect example for Unit variant (if first one)
+                        if example_unit.is_none() {
+                            example_unit = Some(format!("\"{}\"", variant_value));
+                        }
+
                         // Unit variant: "VariantName"
                         if let Some(desc) = &prompt_attrs.description {
                             format!("  | \"{}\"  // {}", variant_value, desc)
@@ -792,31 +875,70 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                         }
                     }
                     syn::Fields::Named(fields) => {
-                        // Struct variant: { type: "VariantName", field1: Type1, ... }
-                        let mut field_parts = vec![format!("type: \"{}\"", variant_value)];
+                        let mut field_parts = Vec::new();
+                        let mut example_field_parts = Vec::new();
+
+                        // For Internally Tagged, include the tag field first
+                        if is_internally_tagged && let Some(tag_name) = &serde_tag {
+                            field_parts.push(format!("{}: \"{}\"", tag_name, variant_value));
+                            example_field_parts
+                                .push(format!("{}: \"{}\"", tag_name, variant_value));
+                        }
 
                         for field in &fields.named {
                             let field_name = field.ident.as_ref().unwrap().to_string();
                             let field_type = format_type_for_schema(&field.ty);
-                            field_parts.push(format!("{}: {}", field_name, field_type));
+                            field_parts.push(format!("{}: {}", field_name, field_type.clone()));
+
+                            // Generate example value for this field
+                            let example_value = generate_example_value_for_type(&field_type);
+                            example_field_parts.push(format!("{}: {}", field_name, example_value));
                         }
 
                         let field_str = field_parts.join(", ");
+                        let example_field_str = example_field_parts.join(", ");
+
+                        // Collect example for Struct variant (if first one)
+                        if example_struct.is_none() {
+                            if is_untagged || is_internally_tagged {
+                                example_struct = Some(format!("{{ {} }}", example_field_str));
+                            } else {
+                                example_struct = Some(format!(
+                                    "{{ \"{}\": {{ {} }} }}",
+                                    variant_value, example_field_str
+                                ));
+                            }
+                        }
+
                         let comment = if let Some(desc) = &prompt_attrs.description {
                             format!("  // {}", desc)
                         } else {
                             let docs = extract_doc_comments(&variant.attrs);
                             if !docs.is_empty() {
                                 format!("  // {}", docs)
+                            } else if is_untagged {
+                                // For untagged enums, add variant name as comment since it's not in the type
+                                format!("  // {}", variant_value)
                             } else {
                                 String::new()
                             }
                         };
 
-                        format!("  | {{ {} }}{}", field_str, comment)
+                        if is_untagged {
+                            // Untagged format: bare object { field1: Type1, ... }
+                            format!("  | {{ {} }}{}", field_str, comment)
+                        } else if is_internally_tagged {
+                            // Internally Tagged format: { type: "VariantName", field1: Type1, ... }
+                            format!("  | {{ {} }}{}", field_str, comment)
+                        } else {
+                            // Externally Tagged format (default): { "VariantName": { field1: Type1, ... } }
+                            format!(
+                                "  | {{ \"{}\": {{ {} }} }}{}",
+                                variant_value, field_str, comment
+                            )
+                        }
                     }
                     syn::Fields::Unnamed(fields) => {
-                        // Tuple variant: TypeScript tuple type [Type1, Type2, ...]
                         let field_types: Vec<String> = fields
                             .unnamed
                             .iter()
@@ -824,18 +946,51 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             .collect();
 
                         let tuple_str = field_types.join(", ");
+
+                        // Generate example values for tuple elements
+                        let example_values: Vec<String> = field_types
+                            .iter()
+                            .map(|type_str| generate_example_value_for_type(type_str))
+                            .collect();
+                        let example_tuple_str = example_values.join(", ");
+
+                        // Collect example for Tuple variant (if first one)
+                        if example_tuple.is_none() {
+                            if is_untagged || is_internally_tagged {
+                                example_tuple = Some(format!("[{}]", example_tuple_str));
+                            } else {
+                                example_tuple = Some(format!(
+                                    "{{ \"{}\": [{}] }}",
+                                    variant_value, example_tuple_str
+                                ));
+                            }
+                        }
+
                         let comment = if let Some(desc) = &prompt_attrs.description {
                             format!("  // {}", desc)
                         } else {
                             let docs = extract_doc_comments(&variant.attrs);
                             if !docs.is_empty() {
                                 format!("  // {}", docs)
+                            } else if is_untagged {
+                                // For untagged enums, add variant name as comment since it's not in the type
+                                format!("  // {}", variant_value)
                             } else {
                                 String::new()
                             }
                         };
 
-                        format!("  | [{}]{}", tuple_str, comment)
+                        if is_untagged || is_internally_tagged {
+                            // Untagged or Internally Tagged: bare array [Type1, Type2, ...]
+                            // (Internally Tagged enums don't support tuple variants well)
+                            format!("  | [{}]{}", tuple_str, comment)
+                        } else {
+                            // Externally Tagged format (default): { "VariantName": [tuple elements] }
+                            format!(
+                                "  | {{ \"{}\": [{}] }}{}",
+                                variant_value, tuple_str, comment
+                            )
+                        }
                     }
                 };
 
@@ -871,10 +1026,28 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                 last.push(';');
             }
 
-            // Add example value (first non-skipped variant)
-            if let Some(first_name) = first_variant_name {
+            // Add example values for different variant types
+            let mut examples = Vec::new();
+            if let Some(ex) = example_unit {
+                examples.push(ex);
+            }
+            if let Some(ex) = example_struct {
+                examples.push(ex);
+            }
+            if let Some(ex) = example_tuple {
+                examples.push(ex);
+            }
+
+            if !examples.is_empty() {
                 lines.push("".to_string()); // Empty line
-                lines.push(format!("Example value: \"{}\"", first_name));
+                if examples.len() == 1 {
+                    lines.push(format!("Example value: {}", examples[0]));
+                } else {
+                    lines.push("Example values:".to_string());
+                    for ex in examples {
+                        lines.push(format!("  {}", ex));
+                    }
+                }
             }
 
             let prompt_string = lines.join("\n");
