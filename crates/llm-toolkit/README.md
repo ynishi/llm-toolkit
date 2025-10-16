@@ -2305,21 +2305,27 @@ orchestrator.add_agent(ClaudeCodeAgent::new());
 // Define a custom strategy manually
 let mut strategy = StrategyMap::new("Write a technical article".to_string());
 
-strategy.add_step(StrategyStep::new(
+// Step 1: Create outline
+let mut step1 = StrategyStep::new(
     "step_1".to_string(),
     "Create article outline".to_string(),
     "ClaudeCodeAgent".to_string(),
     "Create an outline for: {{ task }}".to_string(),
     "Article outline".to_string(),
-));
+);
+step1.output_key = Some("outline".to_string());  // Custom alias
+strategy.add_step(step1);
 
-strategy.add_step(StrategyStep::new(
+// Step 2: Write introduction - can reference using custom alias
+let mut step2 = StrategyStep::new(
     "step_2".to_string(),
     "Write introduction".to_string(),
     "ClaudeCodeAgent".to_string(),
-    "Based on {{ previous_output }}, write an introduction".to_string(),
+    "Based on {{ outline }}, write an introduction".to_string(),  // Using custom alias
     "Introduction paragraph".to_string(),
-));
+);
+step2.output_key = Some("introduction".to_string());
+strategy.add_step(step2);
 
 // Set the predefined strategy
 orchestrator.set_strategy_map(strategy);
@@ -2477,7 +2483,14 @@ When executing Step 3, the orchestrator:
 The orchestrator maintains these keys in context:
 
 - `step_{step_id}_output` - JSON output from each step (e.g., `step_1_output`, `step_2_output`)
+  - **Automatic key**: Always created with `step_` prefix + step_id + `_output` suffix
+  - Example: If `step_id` is `"step_1"`, the key becomes `"step_step_1_output"`
+- `{output_key}` - Custom alias for step output (if `output_key` is specified in strategy)
+  - **User-defined key**: Set via the `output_key` field in StrategyStep
+  - Example: `"output_key": "world_concept"` creates key `"world_concept"`
+  - Preferred for better readability (e.g., `{{ world_concept.theme }}` instead of `{{ step_step_1_output.theme }}`)
 - `step_{step_id}_output_prompt` - ToPrompt version (human-readable string)
+- `{output_key}_prompt` - ToPrompt version with custom alias (if `output_key` is specified)
 - `previous_output` - Convenience reference to the immediately previous step's output
 - `user_request` - External input data added via `context_mut().insert()`
 - Custom keys - Any data added before execution
@@ -2531,11 +2544,15 @@ Intent templates reference context data using Jinja2-style placeholders. The orc
 
 1. **Step outputs are automatically stored**:
    - `step_{step_id}_output` - JSON version (e.g., `step_1_output`, `step_world_concept_generation_output`)
+     - **Note**: The `step_` prefix is **automatically added**. If your `step_id` is `"step_1"`, the key becomes `"step_step_1_output"`.
+   - `{output_key}` - Custom alias (e.g., `world_concept` if `output_key: "world_concept"` is specified)
    - `step_{step_id}_output_prompt` - ToPrompt version (if available)
+   - `{output_key}_prompt` - ToPrompt version with custom alias (if available)
    - `previous_output` - Updated after each step to reference the most recent output
 
 2. **Placeholder resolution is direct**:
    - `{{ step_1_output }}` → Looks up `step_1_output` key in context
+   - `{{ world_concept.theme }}` → Looks up `world_concept` (custom output_key) then accesses `.theme` field
    - `{{ step_1_output.concept }}` → Looks up `step_1_output` then accesses `.concept` field
    - `{{ user_request.world_seed.aesthetics }}` → Looks up `user_request` then navigates nested fields
    - No semantic matching or alias resolution—just direct key lookup

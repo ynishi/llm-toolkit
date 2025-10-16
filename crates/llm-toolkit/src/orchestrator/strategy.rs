@@ -50,6 +50,27 @@ pub struct StrategyStep {
     /// Defaults to false if not specified.
     #[serde(default, skip_serializing_if = "is_false")]
     pub requires_validation: bool,
+
+    /// Optional custom key for accessing this step's output in context.
+    ///
+    /// When specified, the output will be accessible as:
+    /// - `step_{step_id}_output` (automatic default key)
+    /// - `{output_key}` (custom alias for easier reference)
+    ///
+    /// This allows subsequent steps to reference outputs with meaningful names
+    /// instead of auto-generated step IDs.
+    ///
+    /// Example:
+    /// ```json
+    /// {
+    ///   "step_id": "step_1",
+    ///   "output_key": "world_concept",
+    ///   "assigned_agent": "WorldConceptAgent"
+    /// }
+    /// ```
+    /// Next step can reference: `{{ world_concept.theme }}`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_key: Option<String>,
 }
 
 impl StrategyMap {
@@ -103,6 +124,7 @@ impl StrategyStep {
             intent_template,
             expected_output,
             requires_validation: false,
+            output_key: None,
         }
     }
 }
@@ -166,5 +188,62 @@ mod tests {
         }
 
         assert_eq!(strategy.get_step(0).unwrap().description, "Modified");
+    }
+
+    #[test]
+    fn test_strategy_step_with_output_key() {
+        let mut step = StrategyStep::new(
+            "step_1".to_string(),
+            "Create world concept".to_string(),
+            "WorldConceptAgent".to_string(),
+            "Create a concept for {{ user_request }}".to_string(),
+            "World concept data".to_string(),
+        );
+
+        // Initially None
+        assert!(step.output_key.is_none());
+
+        // Set output_key
+        step.output_key = Some("world_concept".to_string());
+        assert_eq!(step.output_key, Some("world_concept".to_string()));
+
+        // Verify serialization includes output_key
+        let json = serde_json::to_string(&step).unwrap();
+        assert!(json.contains("world_concept"));
+    }
+
+    #[test]
+    fn test_strategy_step_output_key_serialization() {
+        // Test that output_key is properly serialized and deserialized
+        let mut step = StrategyStep::new(
+            "step_1".to_string(),
+            "Test step".to_string(),
+            "TestAgent".to_string(),
+            "Do something".to_string(),
+            "Result".to_string(),
+        );
+        step.output_key = Some("test_output".to_string());
+
+        let json = serde_json::to_string(&step).unwrap();
+        let deserialized: StrategyStep = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.output_key, Some("test_output".to_string()));
+        assert_eq!(deserialized.step_id, "step_1");
+    }
+
+    #[test]
+    fn test_strategy_step_without_output_key_serialization() {
+        // Test that output_key is omitted from JSON when None (skip_serializing_if)
+        let step = StrategyStep::new(
+            "step_1".to_string(),
+            "Test step".to_string(),
+            "TestAgent".to_string(),
+            "Do something".to_string(),
+            "Result".to_string(),
+        );
+
+        let json = serde_json::to_string(&step).unwrap();
+        // output_key should not appear in JSON when None
+        assert!(!json.contains("output_key"));
     }
 }

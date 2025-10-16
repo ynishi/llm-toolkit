@@ -41,6 +41,7 @@ Generate a detailed execution strategy as a JSON object with the following struc
   "steps": [
     {
       "step_id": "step_1",
+      "output_key": "world_concept",
       "description": "What this step accomplishes",
       "assigned_agent": "AgentName",
       "intent_template": "The prompt to give the agent (can include placeholders like {% raw %}{{ previous_output }}{% endraw %})",
@@ -59,13 +60,21 @@ Generate a detailed execution strategy as a JSON object with the following struc
 5. Ensure steps build upon each other logically
 6. Use Mustache/Jinja2-style placeholders with **double curly braces** like {% raw %}`{{ previous_output }}`{% endraw %}, {% raw %}`{{ user_request }}`{% endraw %} in intent templates (NOT single braces like `{previous_output}`)
 7. **IMPORTANT:** Use ONLY double curly braces {% raw %}`{{ }}`{% endraw %}, NOT triple braces {% raw %}`{{{ }}}`{% endraw %}. Intent templates are plain text and do not require HTML escaping.
-8. **Placeholder Reference Guide**: Intent templates can access context data using these patterns:
-   - **Previous step output**: {% raw %}`{{ step_N_output }}`{% endraw %} or {% raw %}`{{ step_N_output.field }}`{% endraw %} (e.g., {% raw %}`{{ step_1_output.concept }}`{% endraw %})
+8. **output_key Best Practices** (CRITICAL):
+   - **ALWAYS specify** `output_key` for every step with a unique, meaningful name
+   - Use descriptive names like `world_concept`, `emblem`, `profile` instead of generic `step_1_output`
+   - **IMMUTABLE design**: Each step should have ONE clear responsibility and produce ONE output type
+   - **Append-only**: Never overwrite previous outputs. Create new steps for modifications (e.g., `concept_v1`, `concept_refined`)
+   - **Consistent naming**: Use snake_case for output keys (e.g., `world_concept`, `character_profile`)
+   - Subsequent steps can reference this output as {% raw %}`{{ world_concept.field }}`{% endraw %} instead of {% raw %}`{{ step_1_output.field }}`{% endraw %}
+9. **Placeholder Reference Guide**: Intent templates can access context data using these patterns:
+   - **Named outputs (via output_key)**: {% raw %}`{{ world_concept }}`{% endraw %} or {% raw %}`{{ world_concept.theme }}`{% endraw %} (preferred)
+   - **Step outputs (auto-generated)**: {% raw %}`{{ step_N_output }}`{% endraw %} or {% raw %}`{{ step_N_output.field }}`{% endraw %} (e.g., {% raw %}`{{ step_1_output.concept }}`{% endraw %})
    - **Previous step (convenience)**: {% raw %}`{{ previous_output }}`{% endraw %} refers to the immediately previous step's output
    - **User request data**: {% raw %}`{{ user_request.field }}`{% endraw %} if the Blueprint defines INPUT context (e.g., {% raw %}`{{ user_request.world_seed.aesthetics }}`{% endraw %})
    - **Other external context**: {% raw %}`{{ context_key.field }}`{% endraw %} for any context added before execution
    - **Nested field access**: Use dot notation to access nested JSON fields (e.g., {% raw %}`{{ step_2_output.data.items[0].name }}`{% endraw %})
-9. **Add Validation Steps**: For any step that produces a critical artifact (e.g., a final document, a piece of code, a detailed plan), you SHOULD add a dedicated validation step immediately after it. Select the most appropriate validator agent from the 'Available Agents' list (e.g., InnerValidatorAgent for general validation, or domain-specific validators if available)
+10. **Add Validation Steps**: For any step that produces a critical artifact (e.g., a final document, a piece of code, a detailed plan), you SHOULD add a dedicated validation step immediately after it. Select the most appropriate validator agent from the 'Available Agents' list (e.g., InnerValidatorAgent for general validation, or domain-specific validators if available)
 
 **Important:** Return ONLY the JSON object, no additional explanation.
 "##)]
@@ -299,6 +308,7 @@ Generate a JSON array of `StrategyStep` objects with the following structure:
 [
   {
     "step_id": "step_X",
+    "output_key": "meaningful_name",
     "description": "What this step accomplishes",
     "assigned_agent": "AgentName",
     "intent_template": "The prompt template (can include {% raw %}{{ previous_output }}{% endraw %}, etc. - use double braces)",
@@ -307,7 +317,13 @@ Generate a JSON array of `StrategyStep` objects with the following structure:
 ]
 ```
 
+**IMPORTANT - output_key Best Practices:**
+- **ALWAYS specify** `output_key` for every step with a unique, meaningful name (e.g., `world_concept`, `emblem`, `profile`)
+- **IMMUTABLE design**: Each step = ONE responsibility = ONE output type
+- **Append-only**: Never overwrite previous outputs
+
 **Placeholder Reference Guide**: Intent templates can access context data using:
+- **Named outputs (via output_key)**: {% raw %}`{{ world_concept }}`{% endraw %} or {% raw %}`{{ world_concept.theme }}`{% endraw %} (preferred)
 - **Previous step output**: {% raw %}`{{ step_N_output }}`{% endraw %} or {% raw %}`{{ step_N_output.field }}`{% endraw %} (e.g., {% raw %}`{{ step_1_output.concept }}`{% endraw %})
 - **Previous step (convenience)**: {% raw %}`{{ previous_output }}`{% endraw %}
 - **User request data**: {% raw %}`{{ user_request.field }}`{% endraw %} for Blueprint INPUT context
@@ -403,6 +419,7 @@ Generate a JSON object with the following structure:
   "steps": [
     {
       "step_id": "step_1",
+      "output_key": "world_concept",
       "description": "What this step accomplishes",
       "assigned_agent": "AgentName",
       "intent_template": "The prompt to give the agent (can include placeholders like {% raw %}{{ previous_output }}{% endraw %})",
@@ -412,7 +429,13 @@ Generate a JSON object with the following structure:
 }
 ```
 
+**IMPORTANT - output_key Best Practices:**
+- **ALWAYS specify** `output_key` for every step with a unique, meaningful name (e.g., `world_concept`, `emblem`, `profile`)
+- **IMMUTABLE design**: Each step = ONE responsibility = ONE output type
+- **Append-only**: Never overwrite previous outputs
+
 **Placeholder Reference Guide**: Intent templates can access context data using:
+- **Named outputs (via output_key)**: {% raw %}`{{ world_concept }}`{% endraw %} or {% raw %}`{{ world_concept.theme }}`{% endraw %} (preferred)
 - **Previous step output**: {% raw %}`{{ step_N_output }}`{% endraw %} or {% raw %}`{{ step_N_output.field }}`{% endraw %} (e.g., {% raw %}`{{ step_1_output.concept }}`{% endraw %})
 - **Previous step (convenience)**: {% raw %}`{{ previous_output }}`{% endraw %}
 - **User request data**: {% raw %}`{{ user_request.field }}`{% endraw %} for Blueprint INPUT context

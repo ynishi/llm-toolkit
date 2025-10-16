@@ -1144,17 +1144,30 @@ impl Orchestrator {
                 Ok(output) => {
                     log::info!("Step {} completed successfully", step_index + 1);
 
-                    // Store JSON result in context
+                    // Store JSON result in context with default key
                     self.context
                         .insert(format!("step_{}_output", step.step_id), output.clone());
+
+                    // Store with custom output_key if specified (for easier reference)
+                    if let Some(ref output_key) = step.output_key {
+                        self.context.insert(output_key.clone(), output.clone());
+                    }
 
                     // Store prompt version if available (for ToPrompt implementations)
                     if let Some(prompt_str) = agent.try_to_prompt(&output) {
                         log::debug!("Storing prompt representation for step {}", step.step_id);
                         self.context.insert(
                             format!("step_{}_output_prompt", step.step_id),
-                            JsonValue::String(prompt_str),
+                            JsonValue::String(prompt_str.clone()),
                         );
+
+                        // Also store prompt version with output_key if specified
+                        if let Some(ref output_key) = step.output_key {
+                            self.context.insert(
+                                format!("{}_prompt", output_key),
+                                JsonValue::String(prompt_str),
+                            );
+                        }
                     }
 
                     // Update previous_output for convenience (commonly used in templates)
