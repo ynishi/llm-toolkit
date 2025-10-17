@@ -164,8 +164,11 @@ fn generate_schema_only_parts(
         // Get field documentation
         let field_docs = extract_doc_comments(&field.attrs);
 
-        // Check if this is a Vec<T> where T might implement ToPrompt
-        let (is_vec, inner_type) = extract_vec_inner_type(&field.ty);
+        // Check if this is a generic container type
+        let (is_vec, vec_inner_type) = extract_vec_inner_type(&field.ty);
+        let (is_option, option_inner_type) = extract_option_inner_type(&field.ty);
+        let (is_map, map_value_type) = extract_map_value_type(&field.ty);
+        let (is_set, set_element_type) = extract_set_element_type(&field.ty);
 
         if is_vec {
             // For Vec<T>, use TypeScript array syntax: T[]
@@ -178,18 +181,188 @@ fn generate_schema_only_parts(
 
             field_schema_parts.push(quote! {
                 {
-                    let type_name = stringify!(#inner_type);
+                    let type_name = stringify!(#vec_inner_type);
                     format!("  {}: {}[];{}", #field_name_str, type_name, #comment)
                 }
             });
 
             // Collect nested type schema if not primitive
-            if let Some(inner) = inner_type
+            if let Some(inner) = vec_inner_type
                 && !is_primitive_type(inner)
             {
                 nested_type_collectors.push(quote! {
                     <#inner as #crate_path::prompt::ToPrompt>::prompt_schema()
                 });
+            }
+        } else if is_option {
+            // For Option<T>, use TypeScript nullable syntax: T | null
+            // Format: field_name: TypeName | null;  // comment
+            let comment = if !field_docs.is_empty() {
+                format!("  // {}", field_docs)
+            } else {
+                String::new()
+            };
+
+            if let Some(inner) = option_inner_type {
+                // Check if inner type is a collection type
+                let (inner_is_map, inner_map_value) = extract_map_value_type(inner);
+                let (inner_is_set, inner_set_element) = extract_set_element_type(inner);
+                let (inner_is_vec, inner_vec_element) = extract_vec_inner_type(inner);
+
+                if inner_is_map {
+                    // Option<HashMap<K, V>> or Option<BTreeMap<K, V>>
+                    if let Some(value_type) = inner_map_value {
+                        let is_value_primitive = is_primitive_type(value_type);
+                        if !is_value_primitive {
+                            field_schema_parts.push(quote! {
+                                {
+                                    let type_name = stringify!(#value_type);
+                                    format!("  {}: Record<string, {}> | null;{}", #field_name_str, type_name, #comment)
+                                }
+                            });
+                            nested_type_collectors.push(quote! {
+                                <#value_type as #crate_path::prompt::ToPrompt>::prompt_schema()
+                            });
+                        } else {
+                            let type_str = format_type_for_schema(value_type);
+                            field_schema_parts.push(quote! {
+                                format!("  {}: Record<string, {}> | null;{}", #field_name_str, #type_str, #comment)
+                            });
+                        }
+                    }
+                } else if inner_is_set {
+                    // Option<HashSet<T>> or Option<BTreeSet<T>>
+                    if let Some(element_type) = inner_set_element {
+                        let is_element_primitive = is_primitive_type(element_type);
+                        if !is_element_primitive {
+                            field_schema_parts.push(quote! {
+                                {
+                                    let type_name = stringify!(#element_type);
+                                    format!("  {}: {}[] | null;{}", #field_name_str, type_name, #comment)
+                                }
+                            });
+                            nested_type_collectors.push(quote! {
+                                <#element_type as #crate_path::prompt::ToPrompt>::prompt_schema()
+                            });
+                        } else {
+                            let type_str = format_type_for_schema(element_type);
+                            field_schema_parts.push(quote! {
+                                format!("  {}: {}[] | null;{}", #field_name_str, #type_str, #comment)
+                            });
+                        }
+                    }
+                } else if inner_is_vec {
+                    // Option<Vec<T>>
+                    if let Some(element_type) = inner_vec_element {
+                        let is_element_primitive = is_primitive_type(element_type);
+                        if !is_element_primitive {
+                            field_schema_parts.push(quote! {
+                                {
+                                    let type_name = stringify!(#element_type);
+                                    format!("  {}: {}[] | null;{}", #field_name_str, type_name, #comment)
+                                }
+                            });
+                            nested_type_collectors.push(quote! {
+                                <#element_type as #crate_path::prompt::ToPrompt>::prompt_schema()
+                            });
+                        } else {
+                            let type_str = format_type_for_schema(element_type);
+                            field_schema_parts.push(quote! {
+                                format!("  {}: {}[] | null;{}", #field_name_str, #type_str, #comment)
+                            });
+                        }
+                    }
+                } else {
+                    // Option<CustomType> or Option<primitive>
+                    let is_inner_primitive = is_primitive_type(inner);
+
+                    if !is_inner_primitive {
+                        // Non-primitive inner type: use type reference
+                        field_schema_parts.push(quote! {
+                            {
+                                let type_name = stringify!(#inner);
+                                format!("  {}: {} | null;{}", #field_name_str, type_name, #comment)
+                            }
+                        });
+
+                        // Collect nested type schema
+                        nested_type_collectors.push(quote! {
+                            <#inner as #crate_path::prompt::ToPrompt>::prompt_schema()
+                        });
+                    } else {
+                        // Primitive inner type: format inline
+                        let type_str = format_type_for_schema(inner);
+                        field_schema_parts.push(quote! {
+                            format!("  {}: {} | null;{}", #field_name_str, #type_str, #comment)
+                        });
+                    }
+                }
+            }
+        } else if is_map {
+            // For HashMap<K, V> / BTreeMap<K, V>, format as TypeScript Record/object
+            // Format: field_name: Record<string, TypeName>;  // comment
+            let comment = if !field_docs.is_empty() {
+                format!("  // {}", field_docs)
+            } else {
+                String::new()
+            };
+
+            if let Some(value_type) = map_value_type {
+                let is_value_primitive = is_primitive_type(value_type);
+
+                if !is_value_primitive {
+                    // Non-primitive value type: use type reference
+                    field_schema_parts.push(quote! {
+                        {
+                            let type_name = stringify!(#value_type);
+                            format!("  {}: Record<string, {}>;{}", #field_name_str, type_name, #comment)
+                        }
+                    });
+
+                    // Collect nested type schema
+                    nested_type_collectors.push(quote! {
+                        <#value_type as #crate_path::prompt::ToPrompt>::prompt_schema()
+                    });
+                } else {
+                    // Primitive value type: format inline
+                    let type_str = format_type_for_schema(value_type);
+                    field_schema_parts.push(quote! {
+                        format!("  {}: Record<string, {}>;{}", #field_name_str, #type_str, #comment)
+                    });
+                }
+            }
+        } else if is_set {
+            // For HashSet<T> / BTreeSet<T>, format as TypeScript array
+            // Format: field_name: TypeName[];  // comment
+            let comment = if !field_docs.is_empty() {
+                format!("  // {}", field_docs)
+            } else {
+                String::new()
+            };
+
+            if let Some(element_type) = set_element_type {
+                let is_element_primitive = is_primitive_type(element_type);
+
+                if !is_element_primitive {
+                    // Non-primitive element type: use type reference
+                    field_schema_parts.push(quote! {
+                        {
+                            let type_name = stringify!(#element_type);
+                            format!("  {}: {}[];{}", #field_name_str, type_name, #comment)
+                        }
+                    });
+
+                    // Collect nested type schema
+                    nested_type_collectors.push(quote! {
+                        <#element_type as #crate_path::prompt::ToPrompt>::prompt_schema()
+                    });
+                } else {
+                    // Primitive element type: format inline
+                    let type_str = format_type_for_schema(element_type);
+                    field_schema_parts.push(quote! {
+                        format!("  {}: {}[];{}", #field_name_str, #type_str, #comment)
+                    });
+                }
             }
         } else {
             // Check if this is a custom type that implements ToPrompt (nested object)
@@ -302,12 +475,131 @@ fn extract_vec_inner_type(ty: &syn::Type) -> (bool, Option<&syn::Type>) {
     (false, None)
 }
 
+/// Extract inner type from Option<T>, returns (is_option, inner_type)
+fn extract_option_inner_type(ty: &syn::Type) -> (bool, Option<&syn::Type>) {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(last_segment) = type_path.path.segments.last()
+        && last_segment.ident == "Option"
+        && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+        && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+    {
+        return (true, Some(inner_type));
+    }
+    (false, None)
+}
+
+/// Extract value type from HashMap<K, V> / BTreeMap<K, V>, returns (is_map, value_type)
+fn extract_map_value_type(ty: &syn::Type) -> (bool, Option<&syn::Type>) {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(last_segment) = type_path.path.segments.last()
+        && (last_segment.ident == "HashMap" || last_segment.ident == "BTreeMap")
+        && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+        && let Some(syn::GenericArgument::Type(value_type)) = args.args.iter().nth(1)
+    {
+        return (true, Some(value_type));
+    }
+    (false, None)
+}
+
+/// Extract element type from HashSet<T> / BTreeSet<T>, returns (is_set, element_type)
+fn extract_set_element_type(ty: &syn::Type) -> (bool, Option<&syn::Type>) {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(last_segment) = type_path.path.segments.last()
+        && (last_segment.ident == "HashSet" || last_segment.ident == "BTreeSet")
+        && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+        && let Some(syn::GenericArgument::Type(element_type)) = args.args.first()
+    {
+        return (true, Some(element_type));
+    }
+    (false, None)
+}
+
+/// Extract the actual type to expand from a field type, unwrapping Option<T> and Vec<T>
+/// Returns the innermost type that should be expanded as a nested type definition
+fn extract_expandable_type(ty: &syn::Type) -> &syn::Type {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(last_segment) = type_path.path.segments.last()
+    {
+        let type_name = last_segment.ident.to_string();
+
+        // Unwrap Option<T> to get T
+        if type_name == "Option"
+            && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+            && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+        {
+            return extract_expandable_type(inner_type);
+        }
+
+        // Unwrap Vec<T> to get T
+        if type_name == "Vec"
+            && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+            && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+        {
+            return extract_expandable_type(inner_type);
+        }
+
+        // Unwrap HashSet<T> / BTreeSet<T> to get T
+        if (type_name == "HashSet" || type_name == "BTreeSet")
+            && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+            && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+        {
+            return extract_expandable_type(inner_type);
+        }
+
+        // Unwrap HashMap<K, V> / BTreeMap<K, V> to get V (value type)
+        // Note: We only care about the value type V, not the key type K
+        if (type_name == "HashMap" || type_name == "BTreeMap")
+            && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+            && let Some(syn::GenericArgument::Type(value_type)) = args.args.iter().nth(1)
+        {
+            return extract_expandable_type(value_type);
+        }
+    }
+
+    // Return original type if not wrapped
+    ty
+}
+
 /// Check if a type is a primitive type (should not be expanded as nested object)
 fn is_primitive_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty
         && let Some(last_segment) = type_path.path.segments.last()
     {
         let type_name = last_segment.ident.to_string();
+
+        // Handle Option<T> - check if inner type is primitive
+        if type_name == "Option"
+            && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+            && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+        {
+            return is_primitive_type(inner_type);
+        }
+
+        // Handle Vec<T> - check if inner type is primitive
+        if type_name == "Vec"
+            && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+            && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+        {
+            return is_primitive_type(inner_type);
+        }
+
+        // Handle HashSet<T> / BTreeSet<T> - check if inner type is primitive
+        if (type_name == "HashSet" || type_name == "BTreeSet")
+            && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+            && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+        {
+            return is_primitive_type(inner_type);
+        }
+
+        // Handle HashMap<K, V> / BTreeMap<K, V> - check if value type V is primitive
+        // Note: We only care about the value type V, not the key type K
+        if (type_name == "HashMap" || type_name == "BTreeMap")
+            && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+            && let Some(syn::GenericArgument::Type(value_type)) = args.args.iter().nth(1)
+        {
+            return is_primitive_type(value_type);
+        }
+
         matches!(
             type_name.as_str(),
             "String"
@@ -327,12 +619,6 @@ fn is_primitive_type(ty: &syn::Type) -> bool {
                 | "f32"
                 | "f64"
                 | "bool"
-                | "Vec"
-                | "Option"
-                | "HashMap"
-                | "BTreeMap"
-                | "HashSet"
-                | "BTreeSet"
         )
     } else {
         // References, arrays, etc. are considered primitive for now
@@ -458,7 +744,12 @@ fn generate_example_value_for_type(type_str: &str) -> String {
             let first_type = s.split('|').next().unwrap().trim();
             generate_example_value_for_type(first_type)
         }
-        _ => "null".to_string(),
+        custom_type => {
+            // For custom types, reference the type definition
+            // Users should consult the type definition below for valid values
+            // Example: direction: "<See PanDirection>"
+            format!("\"<See {}>\"", custom_type)
+        }
     }
 }
 
@@ -895,8 +1186,10 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             field_parts.push(format!("{}: {}", field_name, field_type.clone()));
 
                             // Collect nested type if not primitive
-                            if !is_primitive_type(&field.ty) {
-                                nested_types.push(&field.ty);
+                            // Extract inner type from Option<T> or Vec<T> before checking
+                            let expandable_type = extract_expandable_type(&field.ty);
+                            if !is_primitive_type(expandable_type) {
+                                nested_types.push(expandable_type);
                             }
 
                             // Generate example value for this field
@@ -953,8 +1246,10 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             .iter()
                             .map(|f| {
                                 // Collect nested type if not primitive
-                                if !is_primitive_type(&f.ty) {
-                                    nested_types.push(&f.ty);
+                                // Extract inner type from Option<T> or Vec<T> before checking
+                                let expandable_type = extract_expandable_type(&f.ty);
+                                if !is_primitive_type(expandable_type) {
+                                    nested_types.push(expandable_type);
                                 }
                                 format_type_for_schema(&f.ty)
                             })

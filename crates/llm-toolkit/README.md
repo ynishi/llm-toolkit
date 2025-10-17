@@ -1403,10 +1403,55 @@ pub struct EmblemResponse {
 // }
 ```
 
+**Collections and Option Types:**
+
+The schema expansion also supports `Option<T>`, `HashMap<K, V>`, `HashSet<T>`, and their combinations:
+
+```rust
+#[derive(Serialize, Deserialize, ToPrompt)]
+pub enum Priority {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Serialize, Deserialize, ToPrompt)]
+#[prompt(mode = "full")]
+pub struct TaskCollection {
+    /// Optional list of tags
+    pub tags: Option<Vec<String>>,
+    /// Map of task IDs to their priorities
+    pub priorities: HashMap<String, Priority>,
+    /// Set of assigned user IDs
+    pub assigned_users: HashSet<String>,
+    /// Optional map of metadata
+    pub metadata: Option<HashMap<String, Priority>>,
+}
+
+// Generated schema for TaskCollection:
+// type Priority =
+//   | "Low"
+//   | "Medium"
+//   | "High";
+//
+// type TaskCollection = {
+//   tags: string[] | null;  // Optional list of tags
+//   priorities: Record<string, Priority>;  // Map of task IDs to their priorities
+//   assigned_users: string[];  // Set of assigned user IDs
+//   metadata: Record<string, Priority> | null;  // Optional map of metadata
+// }
+```
+
+**Note:** For `HashMap<K, V>` and `BTreeMap<K, V>`, only the value type `V` is expanded if it's a custom type. The key type `K` is always treated as `string` in the TypeScript schema (using `Record<string, V>`). If you need custom enum keys, consider using the enum as a value instead.
+
 **How it works:**
 
 - The macro detects field types at compile time
 - For `Vec<T>`: generates TypeScript array syntax `T[]` and includes `T` definition
+- For `Option<T>`: generates TypeScript nullable syntax `T | null` and includes `T` definition if non-primitive
+- For `HashMap<K, V>` / `BTreeMap<K, V>`: generates TypeScript `Record<string, V>` and includes `V` definition if non-primitive (Note: Key type `K` is always treated as `string` in the schema)
+- For `HashSet<T>` / `BTreeSet<T>`: generates TypeScript array syntax `T[]` and includes `T` definition if non-primitive
+- For nested collections (e.g., `Option<HashMap<String, T>>`): recursively unwraps and includes inner type `T` definition
 - For nested objects: generates TypeScript type reference `TypeName` and includes its full definition
 - For primitives: generates TypeScript primitive types (`string`, `number`, `boolean`, etc.)
 - All type definitions are bundled together in the correct dependency order
