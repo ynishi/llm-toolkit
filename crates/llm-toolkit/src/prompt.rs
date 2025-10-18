@@ -220,6 +220,20 @@ impl<T: ToPrompt> ToPrompt for Vec<T> {
     }
 }
 
+// Implement ToPrompt for Option<T> where T: ToPrompt
+impl<T: ToPrompt> ToPrompt for Option<T> {
+    fn to_prompt_parts(&self) -> Vec<PromptPart> {
+        vec![PromptPart::Text(self.to_prompt())]
+    }
+
+    fn to_prompt(&self) -> String {
+        match self {
+            Some(value) => value.to_prompt(),
+            None => String::new(),
+        }
+    }
+}
+
 /// Renders a prompt from a template string and a serializable context.
 ///
 /// This is the underlying function for the `prompt!` macro.
@@ -319,6 +333,38 @@ mod tests {
         assert_eq!(n.to_prompt(), "42");
     }
 
+    #[test]
+    fn test_to_prompt_for_option_some() {
+        let opt: Option<String> = Some("hello".to_string());
+        assert_eq!(opt.to_prompt(), "hello");
+    }
+
+    #[test]
+    fn test_to_prompt_for_option_none() {
+        let opt: Option<String> = None;
+        assert_eq!(opt.to_prompt(), "");
+    }
+
+    #[test]
+    fn test_to_prompt_for_option_number() {
+        let opt_some: Option<i32> = Some(42);
+        assert_eq!(opt_some.to_prompt(), "42");
+
+        let opt_none: Option<i32> = None;
+        assert_eq!(opt_none.to_prompt(), "");
+    }
+
+    #[test]
+    fn test_to_prompt_parts_for_option() {
+        let opt: Option<String> = Some("test".to_string());
+        let parts = opt.to_prompt_parts();
+        assert_eq!(parts.len(), 1);
+        match &parts[0] {
+            PromptPart::Text(text) => assert_eq!(text, "test"),
+            _ => panic!("Expected PromptPart::Text"),
+        }
+    }
+
     #[derive(Serialize)]
     struct SystemInfo {
         version: &'static str,
@@ -396,6 +442,35 @@ mod tests {
         match &parts[0] {
             PromptPart::Text(text) => assert_eq!(text, "[a, b, c]"),
             _ => panic!("Expected Text variant"),
+        }
+    }
+
+    #[test]
+    fn test_to_prompt_for_option_vec() {
+        // Option<Vec<T>>
+        let opt_vec_some: Option<Vec<String>> = Some(vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(opt_vec_some.to_prompt(), "[a, b]");
+
+        let opt_vec_none: Option<Vec<String>> = None;
+        assert_eq!(opt_vec_none.to_prompt(), "");
+    }
+
+    #[test]
+    fn test_to_prompt_for_vec_option() {
+        // Vec<Option<T>>
+        let vec_opts = vec![Some("hello".to_string()), None, Some("world".to_string())];
+        // Each Option is converted: Some("hello") -> "hello", None -> ""
+        assert_eq!(vec_opts.to_prompt(), "[hello, , world]");
+    }
+
+    #[test]
+    fn test_to_prompt_for_option_none_with_parts() {
+        let opt: Option<String> = None;
+        let parts = opt.to_prompt_parts();
+        assert_eq!(parts.len(), 1);
+        match &parts[0] {
+            PromptPart::Text(text) => assert_eq!(text, ""),
+            _ => panic!("Expected PromptPart::Text"),
         }
     }
 
