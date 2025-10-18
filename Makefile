@@ -28,25 +28,11 @@ EXAMPLES := \
 	agent_with_profile \
 	agent_string_output_test \
 	type_marker_schema_test \
-	test_type_output
+	test_type_output \
+	orchestrator_streaming
 
 # 外部API依存なしのExample（E2Eテストとして実行可能）
-OFFLINE_EXAMPLES := \
-	derive_prompt \
-	derive_prompt_enum \
-	derive_prompt_for \
-	derive_prompt_format_with \
-	derive_prompt_set \
-	examples_section_test \
-	multimodal_prompt \
-	to_prompt_for_test \
-	external_template \
-	define_intent_comprehensive \
-	test_define_intent \
-	orchestrator_with_mock \
-	orchestrator_fast_path_e2e \
-	type_marker_schema_test \
-	test_type_output
+OFFLINE_EXAMPLES := $(filter-out orchestrator_streaming,$(EXAMPLES))
 
 # 全Exampleを実行（外部API依存含む）
 test-examples:
@@ -67,7 +53,7 @@ test-examples-offline:
 	@echo "✅ All offline examples passed!"
 
 # Run checks for all workspace members
-preflight: test-examples
+preflight: test-examples-offline
 	@echo "Running preflight checks for the entire workspace..."
 	cargo fmt --all
 	cargo clippy --all-targets --all-features -- -D warnings

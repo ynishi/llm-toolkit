@@ -72,6 +72,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::time::Duration;
+use tracing::{debug, error, info, info_span, instrument, warn};
 
 /// TypeMarker trait for identifying output types in orchestrator context.
 ///
@@ -700,17 +701,18 @@ impl Orchestrator {
     /// orchestrator.set_strategy_map(my_strategy);
     /// let result = orchestrator.execute("Write article about Rust").await;
     /// ```
+    #[instrument(skip(self), fields(task = %task))]
     pub async fn execute(&mut self, task: &str) -> OrchestrationResult {
-        log::info!("Starting orchestrator execution for task: {}", task);
+        info!("Starting orchestrator execution for task: {}", task);
 
         // Store task for potential regeneration
         self.current_task = Some(task.to_string());
 
         // Phase 1: Generate strategy (only if not already set)
         if self.strategy_map.is_none() {
-            log::debug!("No strategy set, generating from blueprint");
+            debug!("No strategy set, generating from blueprint");
             if let Err(e) = self.generate_strategy(task).await {
-                log::error!("Strategy generation failed: {}", e);
+                error!("Strategy generation failed: {}", e);
                 return OrchestrationResult {
                     status: OrchestrationStatus::Failure,
                     final_output: None,
@@ -720,7 +722,7 @@ impl Orchestrator {
                 };
             }
         } else {
-            log::info!(
+            info!(
                 "Using predefined strategy with {} steps",
                 self.strategy_map.as_ref().unwrap().steps.len()
             );
@@ -729,7 +731,7 @@ impl Orchestrator {
         // Phase 2: Execute strategy
         match self.execute_strategy().await {
             Ok((final_output, steps_executed, redesigns_triggered)) => {
-                log::info!("Orchestrator execution completed successfully");
+                info!("Orchestrator execution completed successfully");
                 OrchestrationResult {
                     status: OrchestrationStatus::Success,
                     final_output: Some(final_output),
@@ -739,7 +741,7 @@ impl Orchestrator {
                 }
             }
             Err(e) => {
-                log::error!("Orchestrator execution failed: {}", e);
+                error!("Orchestrator execution failed: {}", e);
                 OrchestrationResult {
                     status: OrchestrationStatus::Failure,
                     final_output: None,
@@ -760,7 +762,7 @@ impl Orchestrator {
         use crate::prompt::ToPrompt;
         use prompts::StrategyGenerationRequest;
 
-        log::debug!("Generating strategy for task: {}", task);
+        debug!("Generating strategy for task: {}", task);
 
         if self.agents.is_empty() {
             return Err(OrchestratorError::StrategyGenerationFailed(
@@ -786,7 +788,7 @@ impl Orchestrator {
 
         let prompt = request.to_prompt();
 
-        log::debug!("Strategy generation prompt:\n{}", prompt);
+        debug!("Strategy generation prompt:\n{}", prompt);
 
         // Call internal JSON agent to generate strategy
         let strategy_map = self
@@ -795,7 +797,7 @@ impl Orchestrator {
             .await
             .map_err(|e| OrchestratorError::StrategyGenerationFailed(e.to_string()))?;
 
-        log::info!("Generated strategy with {} steps", strategy_map.steps.len());
+        info!("Generated strategy with {} steps", strategy_map.steps.len());
 
         self.strategy_map = Some(strategy_map);
         Ok(())
@@ -841,7 +843,7 @@ impl Orchestrator {
     /// Generates an execution strategy (stub for non-derive feature).
     #[cfg(not(all(feature = "agent", feature = "derive")))]
     async fn generate_strategy(&mut self, task: &str) -> Result<(), OrchestratorError> {
-        log::debug!("Generating strategy for task (stub mode): {}", task);
+        debug!("Generating strategy for task (stub mode): {}", task);
 
         // Stub: Create a simple single-step strategy
         let mut strategy = StrategyMap::new(task.to_string());
@@ -1015,7 +1017,7 @@ impl Orchestrator {
             });
 
             if all_resolved {
-                log::debug!(
+                debug!(
                     "Using fast path for step {} (all {} placeholders resolved)",
                     step.step_id,
                     placeholders.len()
@@ -1032,10 +1034,9 @@ impl Orchestrator {
         }
 
         // LLM path: Complex intent generation
-        log::debug!(
+        debug!(
             "Using LLM-based intent generation for step {} (fast_path={}, unresolved placeholders or complex case)",
-            step.step_id,
-            self.config.enable_fast_path_intent_generation
+            step.step_id, self.config.enable_fast_path_intent_generation
         );
 
         use crate::prompt::ToPrompt;
@@ -1057,7 +1058,7 @@ impl Orchestrator {
 
         let prompt = request.to_prompt();
 
-        log::debug!("Generating intent for step: {}", step.step_id);
+        debug!("Generating intent for step: {}", step.step_id);
 
         // Use internal agent to generate the intent
         let intent = self.internal_agent.execute(prompt.into()).await?;
@@ -1104,6 +1105,7 @@ impl Orchestrator {
     /// # Returns
     ///
     /// Returns (final_output, steps_executed, redesigns_triggered).
+    #[instrument(skip(self))]
     async fn execute_strategy(&mut self) -> Result<(JsonValue, usize, usize), OrchestratorError> {
         // Check strategy exists
         if self.strategy_map.is_none() {
@@ -1130,7 +1132,15 @@ impl Orchestrator {
                 )
             };
 
-            log::info!(
+            let step_span = info_span!(
+                "orchestrator_step",
+                step_index,
+                step_description = %step.description,
+                assigned_agent = %step.assigned_agent
+            );
+            let _enter = step_span.enter();
+
+            info!(
                 "Executing step {}/{}: {}",
                 step_index + 1,
                 step_count,
@@ -1140,7 +1150,7 @@ impl Orchestrator {
             // Build intent using template rendering with full context
             let intent = self.build_intent(&step, &self.context).await?;
 
-            log::debug!("Generated intent:\n{}", intent);
+            debug!("Generated intent:\n{}", intent);
 
             // Execute agent
             let agent = self
@@ -1150,7 +1160,7 @@ impl Orchestrator {
 
             match agent.execute_dynamic(intent.into()).await {
                 Ok(output) => {
-                    log::info!("Step {} completed successfully", step_index + 1);
+                    info!("Step {} completed successfully", step_index + 1);
 
                     // Store JSON result in context with default key
                     self.context
@@ -1163,7 +1173,7 @@ impl Orchestrator {
 
                     // Store prompt version if available (for ToPrompt implementations)
                     if let Some(prompt_str) = agent.try_to_prompt(&output) {
-                        log::debug!("Storing prompt representation for step {}", step.step_id);
+                        debug!("Storing prompt representation for step {}", step.step_id);
                         self.context.insert(
                             format!("step_{}_output_prompt", step.step_id),
                             JsonValue::String(prompt_str.clone()),
@@ -1190,7 +1200,7 @@ impl Orchestrator {
                     let strategy = self.strategy_map.as_ref().unwrap();
                     if step_index < strategy.steps.len() && !self.config.min_step_interval.is_zero()
                     {
-                        log::debug!(
+                        debug!(
                             "Waiting {:?} before next step (rate limiting)",
                             self.config.min_step_interval
                         );
@@ -1198,7 +1208,7 @@ impl Orchestrator {
                     }
                 }
                 Err(e) => {
-                    log::warn!("Step {} failed: {}", step_index + 1, e);
+                    warn!(error = ?e, "Step {} failed", step_index + 1);
 
                     // Increment step remediation count
                     // This counts the number of failures for this specific step.
@@ -1211,7 +1221,7 @@ impl Orchestrator {
                     // the step has been attempted 3 times total (initial + 2 retries),
                     // so we stop here.
                     if *remediation_count >= self.config.max_step_remediations {
-                        log::error!(
+                        error!(
                             "Step {} exceeded maximum remediation attempts ({})",
                             step_index + 1,
                             self.config.max_step_remediations
@@ -1229,7 +1239,7 @@ impl Orchestrator {
                     // - After 10 redesigns: redesigns_triggered = 10 → stops here
                     // Result: max_total_redesigns=10 allows 11 total executions
                     if redesigns_triggered >= self.config.max_total_redesigns {
-                        log::error!(
+                        error!(
                             "Total redesigns exceeded maximum limit ({})",
                             self.config.max_total_redesigns
                         );
@@ -1244,20 +1254,20 @@ impl Orchestrator {
                         .await?
                     {
                         RedesignStrategy::Retry => {
-                            log::info!("Retrying step {}", step_index + 1);
+                            info!("Retrying step {}", step_index + 1);
                             redesigns_triggered += 1;
                             // Loop will retry the same step
                             continue;
                         }
                         RedesignStrategy::TacticalRedesign => {
-                            log::info!("Performing tactical redesign from step {}", step_index + 1);
+                            info!("Performing tactical redesign from step {}", step_index + 1);
                             redesigns_triggered += 1;
                             self.tactical_redesign(&e, step_index).await?;
                             // Retry from the same index with new strategy
                             continue;
                         }
                         RedesignStrategy::FullRegenerate => {
-                            log::info!("Performing full strategy regeneration");
+                            info!("Performing full strategy regeneration");
                             redesigns_triggered += 1;
                             self.full_regenerate(&e, step_index).await?;
                             // Reset to beginning with new strategy
@@ -1311,17 +1321,17 @@ impl Orchestrator {
 
         let prompt = request.to_prompt();
 
-        log::debug!("Redesign decision prompt:\n{}", prompt);
+        debug!("Redesign decision prompt:\n{}", prompt);
 
         // Ask internal agent for decision with fallback handling
         let decision = match self.internal_agent.execute(prompt.into()).await {
             Ok(d) => d,
             Err(e) => {
-                log::error!(
+                error!(
                     "Internal agent failed to determine redesign strategy: {}",
                     e
                 );
-                log::warn!("Attempting fallback: defaulting to FullRegenerate strategy");
+                warn!("Attempting fallback: defaulting to FullRegenerate strategy");
 
                 // Fallback attempt: Try once more with a simpler prompt
                 let fallback_prompt = format!(
@@ -1332,7 +1342,7 @@ impl Orchestrator {
                 match self.internal_agent.execute(fallback_prompt.into()).await {
                     Ok(d) => d,
                     Err(fallback_error) => {
-                        log::error!(
+                        error!(
                             "Internal agent failed on fallback attempt: {}",
                             fallback_error
                         );
@@ -1353,7 +1363,7 @@ impl Orchestrator {
         } else if decision_upper.contains("FULL") {
             Ok(RedesignStrategy::FullRegenerate)
         } else {
-            log::warn!(
+            warn!(
                 "Unexpected redesign decision: {}. Defaulting to FULL",
                 decision
             );
@@ -1405,14 +1415,14 @@ impl Orchestrator {
 
         let prompt = request.to_prompt();
 
-        log::debug!("Tactical redesign prompt:\n{}", prompt);
+        debug!("Tactical redesign prompt:\n{}", prompt);
 
         // Get new steps from LLM with fallback handling
         let response = match self.internal_agent.execute(prompt.into()).await {
             Ok(r) => r,
             Err(e) => {
-                log::error!("Internal agent failed during tactical redesign: {}", e);
-                log::warn!("Attempting fallback: requesting simpler redesign");
+                error!("Internal agent failed during tactical redesign: {}", e);
+                warn!("Attempting fallback: requesting simpler redesign");
 
                 // Fallback attempt: Try with a simpler prompt
                 let fallback_prompt = format!(
@@ -1424,7 +1434,7 @@ impl Orchestrator {
                 match self.internal_agent.execute(fallback_prompt.into()).await {
                     Ok(r) => r,
                     Err(fallback_error) => {
-                        log::error!(
+                        error!(
                             "Internal agent failed on fallback attempt during tactical redesign: {}",
                             fallback_error
                         );
@@ -1438,7 +1448,7 @@ impl Orchestrator {
 
         // Extract JSON from response (handles markdown code blocks)
         let json_str = crate::extract_json(&response).map_err(|e| {
-            log::error!(
+            error!(
                 "Failed to extract JSON from tactical redesign response. Error: {}\nResponse was: {}",
                 e,
                 response
@@ -1451,10 +1461,9 @@ impl Orchestrator {
 
         // Parse JSON array of StrategyStep
         let new_steps: Vec<StrategyStep> = serde_json::from_str(&json_str).map_err(|e| {
-            log::error!(
+            error!(
                 "Failed to parse redesigned steps. Error: {}\nJSON was: {}",
-                e,
-                json_str
+                e, json_str
             );
             OrchestratorError::StrategyGenerationFailed(format!(
                 "Failed to parse redesigned steps: {}",
@@ -1462,7 +1471,7 @@ impl Orchestrator {
             ))
         })?;
 
-        log::info!("Tactical redesign generated {} new steps", new_steps.len());
+        info!("Tactical redesign generated {} new steps", new_steps.len());
 
         // Update strategy: keep completed steps, replace from failed_step_index onwards
         if let Some(ref mut strategy) = self.strategy_map {
@@ -1527,7 +1536,7 @@ impl Orchestrator {
 
         let prompt = request.to_prompt();
 
-        log::debug!("Full regeneration prompt:\n{}", prompt);
+        debug!("Full regeneration prompt:\n{}", prompt);
 
         // Generate completely new strategy
         let new_strategy = self
@@ -1536,7 +1545,7 @@ impl Orchestrator {
             .await
             .map_err(|e| OrchestratorError::StrategyGenerationFailed(e.to_string()))?;
 
-        log::info!(
+        info!(
             "Full regeneration completed with {} steps",
             new_strategy.steps.len()
         );
