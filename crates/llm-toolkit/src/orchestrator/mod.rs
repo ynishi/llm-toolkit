@@ -130,6 +130,14 @@ pub struct OrchestrationResult {
     pub error_message: Option<String>,
 }
 
+/// Result of executing a sequence of instructions (internal).
+enum InstructionExecutionResult {
+    /// Normal completion with final output
+    Completed(JsonValue),
+    /// Early termination triggered
+    Terminated(JsonValue),
+}
+
 #[cfg(feature = "agent")]
 use crate::agent::impls::{ClaudeCodeAgent, ClaudeCodeJsonAgent, InnerValidatorAgent};
 
@@ -1127,8 +1135,8 @@ impl Orchestrator {
         let mut step_index = 0;
         let mut steps_executed = 0;
         let mut redesigns_triggered = 0;
-        let mut loops_executed = 0;
-        let mut terminations_triggered = 0;
+        let loops_executed = 0;  // Will be used when we integrate execute_instructions()
+        let terminations_triggered = 0;  // Will be used when we integrate execute_instructions()
         let mut step_remediation_count: HashMap<usize, usize> = HashMap::new();
 
         loop {
@@ -1300,6 +1308,166 @@ impl Orchestrator {
         }
 
         Ok((final_result, steps_executed, redesigns_triggered, loops_executed, terminations_triggered))
+    }
+
+    /// Evaluates a condition template against the current context.
+    ///
+    /// Returns `true` if the template renders to "true" (case-insensitive, trimmed),
+    /// `false` otherwise or if the template is None.
+    fn evaluate_condition_template(
+        &self,
+        template: &Option<String>,
+        context: &HashMap<String, JsonValue>,
+    ) -> Result<bool, OrchestratorError> {
+        match template {
+            None => Ok(false),
+            Some(template_str) => {
+                use crate::prompt::render_prompt;
+
+                let rendered = render_prompt(template_str, context)
+                    .map_err(|e| OrchestratorError::TemplateRenderError(e.to_string()))?;
+
+                let result = rendered.trim().eq_ignore_ascii_case("true");
+                debug!(
+                    "Condition template '{}' rendered to '{}' -> {}",
+                    template_str, rendered, result
+                );
+                Ok(result)
+            }
+        }
+    }
+
+    /// Executes a sequence of strategy instructions recursively.
+    ///
+    /// This function handles the core execution logic for all instruction types:
+    /// - Step: Execute a single agent step
+    /// - Loop: Iteratively execute body instructions
+    /// - Terminate: Check termination condition and exit early if met
+    ///
+    /// # Returns
+    ///
+    /// Returns `InstructionExecutionResult` indicating normal completion or early termination.
+    #[instrument(skip(self))]
+    async fn execute_instructions(
+        &mut self,
+        instructions: &[StrategyInstruction],
+        loops_executed: &mut usize,
+        terminations_triggered: &mut usize,
+    ) -> Result<InstructionExecutionResult, OrchestratorError> {
+        let mut final_result = JsonValue::Null;
+
+        for instruction in instructions.iter() {
+            match instruction {
+                StrategyInstruction::Step(step) => {
+                    debug!("Executing step: {}", step.step_id);
+
+                    // Execute the step (simplified - full logic will be integrated later)
+                    let intent = self.build_intent(step, &self.context).await?;
+
+                    let agent = self
+                        .agents
+                        .get(&step.assigned_agent)
+                        .ok_or_else(|| OrchestratorError::AgentNotFound(step.assigned_agent.clone()))?;
+
+                    // Note: Error handling for agent execution will be integrated later
+                    // For now, we convert the error directly
+                    let output = agent.execute_dynamic(intent.into()).await?;
+
+                    // Store result in context
+                    self.context.insert(format!("step_{}_output", step.step_id), output.clone());
+
+                    if let Some(ref output_key) = step.output_key {
+                        self.context.insert(output_key.clone(), output.clone());
+                    }
+
+                    self.context.insert("previous_output".to_string(), output.clone());
+
+                    final_result = output;
+                }
+
+                StrategyInstruction::Loop(loop_block) => {
+                    debug!("Executing loop: {}", loop_block.loop_id);
+
+                    // Execute loop iterations
+                    for iteration in 0..loop_block.max_iterations {
+                        debug!("Loop {} iteration {}/{}", loop_block.loop_id, iteration + 1, loop_block.max_iterations);
+
+                        *loops_executed += 1;
+
+                        // Check global loop iteration limit
+                        if *loops_executed > self.config.max_total_loop_iterations {
+                            return Err(OrchestratorError::MaxLoopIterationsExceeded(
+                                self.config.max_total_loop_iterations
+                            ));
+                        }
+
+                        // Execute loop body (using Box::pin for recursion)
+                        let result = Box::pin(self.execute_instructions(&loop_block.body, loops_executed, terminations_triggered)).await?;
+
+                        match result {
+                            InstructionExecutionResult::Completed(output) => {
+                                // Store iteration result
+                                self.context.insert(
+                                    format!("loop_{}_iter_{}", loop_block.loop_id, iteration),
+                                    output.clone()
+                                );
+
+                                final_result = output;
+
+                                // Evaluate condition to decide if loop should continue
+                                let should_continue = self.evaluate_condition_template(
+                                    &loop_block.condition_template,
+                                    &self.context
+                                )?;
+
+                                if !should_continue {
+                                    debug!(
+                                        "Loop {} stopping early at iteration {}/{} (condition evaluated to false)",
+                                        loop_block.loop_id, iteration + 1, loop_block.max_iterations
+                                    );
+                                    break;
+                                }
+                            }
+                            InstructionExecutionResult::Terminated(output) => {
+                                // Termination within loop - propagate it
+                                return Ok(InstructionExecutionResult::Terminated(output));
+                            }
+                        }
+                    }
+                }
+
+                StrategyInstruction::Terminate(terminate) => {
+                    debug!("Checking termination condition: {}", terminate.terminate_id);
+
+                    // Evaluate termination condition
+                    let should_terminate = self.evaluate_condition_template(
+                        &terminate.condition_template,
+                        &self.context
+                    )?;
+
+                    if should_terminate {
+                        info!("Termination triggered: {}", terminate.terminate_id);
+                        *terminations_triggered += 1;
+
+                        // Use final_output_template if provided
+                        let termination_output = if let Some(ref template) = terminate.final_output_template {
+                            use crate::prompt::render_prompt;
+                            let rendered = render_prompt(template, &self.context)
+                                .map_err(|e| OrchestratorError::TemplateRenderError(e.to_string()))?;
+
+                            JsonValue::String(rendered)
+                        } else {
+                            // Use current result if no template specified
+                            final_result.clone()
+                        };
+
+                        return Ok(InstructionExecutionResult::Terminated(termination_output));
+                    }
+                }
+            }
+        }
+
+        Ok(InstructionExecutionResult::Completed(final_result))
     }
 
     /// Determines the appropriate redesign strategy after an error.
@@ -1731,5 +1899,76 @@ mod tests {
         let placeholders = Orchestrator::extract_placeholders(template);
 
         assert_eq!(placeholders.len(), 0);
+    }
+
+    #[test]
+    fn test_evaluate_condition_template_true() {
+        let mut context = HashMap::new();
+        context.insert("approved".to_string(), JsonValue::Bool(true));
+
+        let orch = create_test_orchestrator();
+
+        // Template that evaluates to "true"
+        let template = Some("{{ approved }}".to_string());
+        let result = orch.evaluate_condition_template(&template, &context).unwrap();
+
+        assert!(result);
+    }
+
+    #[test]
+    fn test_evaluate_condition_template_false() {
+        let mut context = HashMap::new();
+        context.insert("approved".to_string(), JsonValue::Bool(false));
+
+        let orch = create_test_orchestrator();
+
+        // Template that evaluates to "false"
+        let template = Some("{{ approved }}".to_string());
+        let result = orch.evaluate_condition_template(&template, &context).unwrap();
+
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_evaluate_condition_template_comparison() {
+        let mut context = HashMap::new();
+        context.insert("count".to_string(), JsonValue::Number(5.into()));
+
+        let orch = create_test_orchestrator();
+
+        // Template with comparison that evaluates to "true"
+        let template = Some("{% if count > 3 %}true{% else %}false{% endif %}".to_string());
+        let result = orch.evaluate_condition_template(&template, &context).unwrap();
+
+        assert!(result);
+    }
+
+    #[test]
+    fn test_evaluate_condition_template_none() {
+        let context = HashMap::new();
+        let orch = create_test_orchestrator();
+
+        // None template should return false
+        let result = orch.evaluate_condition_template(&None, &context).unwrap();
+
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_evaluate_condition_template_case_insensitive() {
+        let context = HashMap::new();
+        let orch = create_test_orchestrator();
+
+        // Test various case variations of "true"
+        for true_variant in &["true", "True", "TRUE", "TrUe"] {
+            let template = Some(true_variant.to_string());
+            let result = orch.evaluate_condition_template(&template, &context).unwrap();
+            assert!(result, "Expected '{}' to evaluate to true", true_variant);
+        }
+    }
+
+    fn create_test_orchestrator() -> Orchestrator {
+        let blueprint = BlueprintWorkflow::new("Test workflow for condition evaluation".to_string());
+        Orchestrator::new(blueprint)
     }
 }

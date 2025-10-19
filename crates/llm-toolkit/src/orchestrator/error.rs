@@ -49,6 +49,10 @@ pub enum OrchestratorError {
     #[error("Total number of redesigns exceeded the maximum limit ({0})")]
     MaxTotalRedesignsExceeded(usize),
 
+    /// Total number of loop iterations exceeded the maximum limit.
+    #[error("Total number of loop iterations exceeded the maximum limit ({0})")]
+    MaxLoopIterationsExceeded(usize),
+
     /// The internal agent failed to recover even after a fallback attempt.
     #[error("The internal agent failed to recover even after a fallback attempt: {0}")]
     InternalAgentUnrecoverable(String),
