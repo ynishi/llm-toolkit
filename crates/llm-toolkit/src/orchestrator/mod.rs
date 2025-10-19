@@ -1337,6 +1337,68 @@ impl Orchestrator {
         }
     }
 
+    /// Aggregates loop iteration results based on the aggregation mode.
+    ///
+    /// Retrieves all iteration results from context and combines them according to the mode:
+    /// - `LastSuccess`: Returns the last iteration's output
+    /// - `FirstSuccess`: Returns the first iteration's output (iter_0)
+    /// - `CollectAll`: Returns all iterations as a JSON array
+    fn aggregate_loop_results(
+        &self,
+        loop_id: &str,
+        mode: &AggregationMode,
+        iterations_executed: usize,
+    ) -> Result<JsonValue, OrchestratorError> {
+        use crate::orchestrator::strategy::AggregationMode;
+
+        match mode {
+            AggregationMode::LastSuccess => {
+                // Return the last iteration's output
+                if iterations_executed == 0 {
+                    return Ok(JsonValue::Null);
+                }
+
+                let last_iteration_key = format!("loop_{}_iter_{}", loop_id, iterations_executed - 1);
+                let result = self.context.get(&last_iteration_key)
+                    .cloned()
+                    .unwrap_or(JsonValue::Null);
+
+                debug!("Aggregated (LastSuccess): {}", last_iteration_key);
+                Ok(result)
+            }
+
+            AggregationMode::FirstSuccess => {
+                // Return the first iteration's output
+                if iterations_executed == 0 {
+                    return Ok(JsonValue::Null);
+                }
+
+                let first_iteration_key = format!("loop_{}_iter_0", loop_id);
+                let result = self.context.get(&first_iteration_key)
+                    .cloned()
+                    .unwrap_or(JsonValue::Null);
+
+                debug!("Aggregated (FirstSuccess): {}", first_iteration_key);
+                Ok(result)
+            }
+
+            AggregationMode::CollectAll => {
+                // Collect all iteration outputs into an array
+                let mut results = Vec::new();
+
+                for iteration in 0..iterations_executed {
+                    let iteration_key = format!("loop_{}_iter_{}", loop_id, iteration);
+                    if let Some(value) = self.context.get(&iteration_key) {
+                        results.push(value.clone());
+                    }
+                }
+
+                debug!("Aggregated (CollectAll): {} iterations", results.len());
+                Ok(JsonValue::Array(results))
+            }
+        }
+    }
+
     /// Executes a sequence of strategy instructions recursively.
     ///
     /// This function handles the core execution logic for all instruction types:
@@ -1388,6 +1450,9 @@ impl Orchestrator {
                 StrategyInstruction::Loop(loop_block) => {
                     debug!("Executing loop: {}", loop_block.loop_id);
 
+                    // Track number of iterations actually executed
+                    let mut iterations_executed = 0;
+
                     // Execute loop iterations
                     for iteration in 0..loop_block.max_iterations {
                         debug!("Loop {} iteration {}/{}", loop_block.loop_id, iteration + 1, loop_block.max_iterations);
@@ -1412,6 +1477,7 @@ impl Orchestrator {
                                     output.clone()
                                 );
 
+                                iterations_executed += 1;
                                 final_result = output;
 
                                 // Evaluate condition to decide if loop should continue
@@ -1433,6 +1499,20 @@ impl Orchestrator {
                                 return Ok(InstructionExecutionResult::Terminated(output));
                             }
                         }
+                    }
+
+                    // After loop completes, perform aggregation if configured
+                    if let Some(ref aggregation) = loop_block.aggregation {
+                        debug!("Aggregating loop {} results with mode {:?}", loop_block.loop_id, aggregation.mode);
+
+                        let aggregated_value = self.aggregate_loop_results(
+                            &loop_block.loop_id,
+                            &aggregation.mode,
+                            iterations_executed,
+                        )?;
+
+                        self.context.insert(aggregation.output_key.clone(), aggregated_value.clone());
+                        final_result = aggregated_value;
                     }
                 }
 
@@ -1965,6 +2045,74 @@ mod tests {
             let result = orch.evaluate_condition_template(&template, &context).unwrap();
             assert!(result, "Expected '{}' to evaluate to true", true_variant);
         }
+    }
+
+    #[test]
+    fn test_aggregate_loop_results_last_success() {
+        use crate::orchestrator::strategy::AggregationMode;
+
+        let mut orch = create_test_orchestrator();
+
+        // Simulate 3 loop iterations with stored results
+        orch.context.insert("loop_test_iter_0".to_string(), JsonValue::String("first".to_string()));
+        orch.context.insert("loop_test_iter_1".to_string(), JsonValue::String("second".to_string()));
+        orch.context.insert("loop_test_iter_2".to_string(), JsonValue::String("third".to_string()));
+
+        let result = orch.aggregate_loop_results("test", &AggregationMode::LastSuccess, 3).unwrap();
+
+        assert_eq!(result, JsonValue::String("third".to_string()));
+    }
+
+    #[test]
+    fn test_aggregate_loop_results_first_success() {
+        use crate::orchestrator::strategy::AggregationMode;
+
+        let mut orch = create_test_orchestrator();
+
+        // Simulate 3 loop iterations with stored results
+        orch.context.insert("loop_test_iter_0".to_string(), JsonValue::String("first".to_string()));
+        orch.context.insert("loop_test_iter_1".to_string(), JsonValue::String("second".to_string()));
+        orch.context.insert("loop_test_iter_2".to_string(), JsonValue::String("third".to_string()));
+
+        let result = orch.aggregate_loop_results("test", &AggregationMode::FirstSuccess, 3).unwrap();
+
+        assert_eq!(result, JsonValue::String("first".to_string()));
+    }
+
+    #[test]
+    fn test_aggregate_loop_results_collect_all() {
+        use crate::orchestrator::strategy::AggregationMode;
+
+        let mut orch = create_test_orchestrator();
+
+        // Simulate 3 loop iterations with stored results
+        orch.context.insert("loop_test_iter_0".to_string(), JsonValue::String("first".to_string()));
+        orch.context.insert("loop_test_iter_1".to_string(), JsonValue::String("second".to_string()));
+        orch.context.insert("loop_test_iter_2".to_string(), JsonValue::String("third".to_string()));
+
+        let result = orch.aggregate_loop_results("test", &AggregationMode::CollectAll, 3).unwrap();
+
+        assert_eq!(result, JsonValue::Array(vec![
+            JsonValue::String("first".to_string()),
+            JsonValue::String("second".to_string()),
+            JsonValue::String("third".to_string()),
+        ]));
+    }
+
+    #[test]
+    fn test_aggregate_loop_results_empty_iterations() {
+        use crate::orchestrator::strategy::AggregationMode;
+
+        let orch = create_test_orchestrator();
+
+        // Test with zero iterations
+        let result_last = orch.aggregate_loop_results("test", &AggregationMode::LastSuccess, 0).unwrap();
+        let result_first = orch.aggregate_loop_results("test", &AggregationMode::FirstSuccess, 0).unwrap();
+        let result_all = orch.aggregate_loop_results("test", &AggregationMode::CollectAll, 0).unwrap();
+
+        assert_eq!(result_last, JsonValue::Null);
+        assert_eq!(result_first, JsonValue::Null);
+        assert_eq!(result_all, JsonValue::Array(vec![]));
     }
 
     fn create_test_orchestrator() -> Orchestrator {
