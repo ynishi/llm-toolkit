@@ -97,6 +97,7 @@ pub use llm_toolkit_macros::agent;
 #[cfg(feature = "agent")]
 pub use llm_toolkit_macros::{TypeMarker, type_marker};
 
+pub mod attachment;
 pub mod extract;
 pub mod intent;
 pub mod multimodal;
@@ -108,6 +109,7 @@ pub mod agent;
 #[cfg(feature = "agent")]
 pub mod orchestrator;
 
+pub use attachment::{Attachment, AttachmentSchema, ToAttachments};
 pub use extract::{FlexibleExtractor, MarkdownCodeBlockExtractor};
 pub use intent::frame::IntentFrame;
 #[allow(deprecated)]

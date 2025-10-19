@@ -3,6 +3,7 @@
 //! This module provides abstractions for passing different types of content
 //! (text, images, etc.) to agents in a unified way.
 
+use crate::attachment::Attachment;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,7 +11,7 @@ use std::sync::Arc;
 /// Content that can be included in a payload.
 ///
 /// This enum allows agents to receive different types of input,
-/// including text, images, and potentially other media types in the future.
+/// including text, images, attachments, and potentially other media types in the future.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PayloadContent {
     /// Plain text content
@@ -19,6 +20,8 @@ pub enum PayloadContent {
     Image(PathBuf),
     /// Image from raw bytes (e.g., PNG, JPEG)
     ImageData(Vec<u8>),
+    /// Arbitrary file attachment (local, remote, or in-memory)
+    Attachment(Attachment),
 }
 
 /// Inner payload data, wrapped in Arc for efficient cloning.
@@ -88,6 +91,25 @@ impl Payload {
         }
     }
 
+    /// Creates a payload with a single attachment.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::attachment::Attachment;
+    ///
+    /// let attachment = Attachment::in_memory(vec![1, 2, 3]);
+    /// let payload = Payload::attachment(attachment);
+    /// ```
+    pub fn attachment(attachment: Attachment) -> Self {
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: vec![PayloadContent::Attachment(attachment)],
+            }),
+        }
+    }
+
     /// Returns a reference to the contents of this payload.
     pub fn contents(&self) -> &[PayloadContent] {
         &self.inner.contents
@@ -119,6 +141,27 @@ impl Payload {
     pub fn with_image_data(self, data: Vec<u8>) -> Self {
         let mut new_contents = self.inner.contents.clone();
         new_contents.push(PayloadContent::ImageData(data));
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
+    }
+
+    /// Adds an attachment to this payload.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::attachment::Attachment;
+    ///
+    /// let payload = Payload::text("Question")
+    ///     .with_attachment(Attachment::in_memory(vec![1, 2, 3]));
+    /// ```
+    pub fn with_attachment(self, attachment: Attachment) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.push(PayloadContent::Attachment(attachment));
         Self {
             inner: Arc::new(PayloadInner {
                 contents: new_contents,
@@ -180,6 +223,49 @@ impl Payload {
             .contents
             .iter()
             .any(|c| matches!(c, PayloadContent::Image(_) | PayloadContent::ImageData(_)))
+    }
+
+    /// Returns true if this payload contains any attachments.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::attachment::Attachment;
+    ///
+    /// let payload = Payload::text("Text")
+    ///     .with_attachment(Attachment::in_memory(vec![1, 2, 3]));
+    /// assert!(payload.has_attachments());
+    /// ```
+    pub fn has_attachments(&self) -> bool {
+        self.inner
+            .contents
+            .iter()
+            .any(|c| matches!(c, PayloadContent::Attachment(_)))
+    }
+
+    /// Returns a vector of references to all attachments in this payload.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::attachment::Attachment;
+    ///
+    /// let payload = Payload::text("Text")
+    ///     .with_attachment(Attachment::in_memory(vec![1, 2, 3]));
+    /// let attachments = payload.attachments();
+    /// assert_eq!(attachments.len(), 1);
+    /// ```
+    pub fn attachments(&self) -> Vec<&Attachment> {
+        self.inner
+            .contents
+            .iter()
+            .filter_map(|c| match c {
+                PayloadContent::Attachment(a) => Some(a),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -300,5 +386,96 @@ mod tests {
         // Arc ensures both point to same data
         assert_eq!(payload.to_text(), cloned.to_text());
         assert_eq!(payload.contents().len(), cloned.contents().len());
+    }
+
+    // === Tests for Attachment support ===
+
+    #[test]
+    fn test_payload_with_attachment() {
+        use crate::attachment::Attachment;
+
+        let attachment = Attachment::in_memory(vec![1, 2, 3, 4]);
+        let payload = Payload::text("Analyze this data").with_attachment(attachment.clone());
+
+        assert_eq!(payload.contents().len(), 2);
+        assert!(matches!(
+            &payload.contents()[0],
+            PayloadContent::Text(s) if s == "Analyze this data"
+        ));
+        assert!(matches!(
+            &payload.contents()[1],
+            PayloadContent::Attachment(_)
+        ));
+    }
+
+    #[test]
+    fn test_payload_attachment_constructor() {
+        use crate::attachment::Attachment;
+
+        let attachment = Attachment::remote("https://example.com/file.pdf");
+        let payload = Payload::attachment(attachment);
+
+        assert_eq!(payload.contents().len(), 1);
+        assert!(matches!(
+            &payload.contents()[0],
+            PayloadContent::Attachment(_)
+        ));
+    }
+
+    #[test]
+    fn test_payload_has_attachments() {
+        use crate::attachment::Attachment;
+
+        let text_only = Payload::text("Just text");
+        assert!(!text_only.has_attachments());
+
+        let with_attachment =
+            Payload::text("Text").with_attachment(Attachment::in_memory(vec![1, 2, 3]));
+        assert!(with_attachment.has_attachments());
+    }
+
+    #[test]
+    fn test_payload_attachments_iterator() {
+        use crate::attachment::Attachment;
+
+        let attachment1 = Attachment::in_memory(vec![1, 2, 3]);
+        let attachment2 = Attachment::local(PathBuf::from("/test/file.png"));
+
+        let payload = Payload::text("Text")
+            .with_attachment(attachment1.clone())
+            .with_text("More text")
+            .with_attachment(attachment2.clone());
+
+        let attachments = payload.attachments();
+        assert_eq!(attachments.len(), 2);
+    }
+
+    #[test]
+    fn test_payload_multimodal_with_all_types() {
+        use crate::attachment::Attachment;
+
+        let payload = Payload::text("Question")
+            .with_image(PathBuf::from("/image.jpg"))
+            .with_attachment(Attachment::in_memory(vec![1, 2, 3]))
+            .with_image_data(vec![4, 5, 6])
+            .with_text("Additional context");
+
+        assert_eq!(payload.contents().len(), 5);
+        assert!(payload.has_images());
+        assert!(payload.has_attachments());
+        assert!(!payload.is_text_only());
+    }
+
+    #[test]
+    fn test_payload_attachment_with_builder_pattern() {
+        use crate::attachment::Attachment;
+
+        let payload = Payload::new()
+            .with_text("System prompt")
+            .with_attachment(Attachment::remote("https://example.com/data.json"))
+            .with_attachment(Attachment::local(PathBuf::from("/local/file.txt")));
+
+        assert_eq!(payload.contents().len(), 3);
+        assert_eq!(payload.attachments().len(), 2);
     }
 }
