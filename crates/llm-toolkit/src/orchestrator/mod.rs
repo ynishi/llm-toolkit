@@ -1131,12 +1131,30 @@ impl Orchestrator {
             return Err(OrchestratorError::no_strategy());
         }
 
+        // Migrate legacy steps to elements if needed
+        if let Some(ref mut strategy) = self.strategy_map {
+            strategy.migrate_legacy_steps();
+        }
+
+        // Check if we should use the new instruction-based execution path
+        let use_new_path = self
+            .strategy_map
+            .as_ref()
+            .map(|s| !s.elements.is_empty())
+            .unwrap_or(false);
+
+        if use_new_path {
+            // New execution path: use execute_instructions() for Loop/Terminate support
+            return self.execute_strategy_with_instructions().await;
+        }
+
+        // Legacy execution path: use step-by-step execution with redesign support
         let mut final_result = JsonValue::Null;
         let mut step_index = 0;
         let mut steps_executed = 0;
         let mut redesigns_triggered = 0;
-        let loops_executed = 0;  // Will be used when we integrate execute_instructions()
-        let terminations_triggered = 0;  // Will be used when we integrate execute_instructions()
+        let loops_executed = 0;
+        let terminations_triggered = 0;
         let mut step_remediation_count: HashMap<usize, usize> = HashMap::new();
 
         loop {
@@ -1308,6 +1326,49 @@ impl Orchestrator {
         }
 
         Ok((final_result, steps_executed, redesigns_triggered, loops_executed, terminations_triggered))
+    }
+
+    /// Executes the strategy using the new instruction-based path (for Loop/Terminate support).
+    ///
+    /// This method handles execution when `strategy.elements` is not empty.
+    /// Unlike the legacy path, this supports Loop and Terminate instructions.
+    #[instrument(skip(self))]
+    async fn execute_strategy_with_instructions(&mut self) -> Result<(JsonValue, usize, usize, usize, usize), OrchestratorError> {
+        let instructions = {
+            let strategy = self.strategy_map.as_ref().unwrap();
+            strategy.elements.clone()
+        };
+
+        // Validate strategy (reject nested loops)
+        if let Some(ref strategy) = self.strategy_map {
+            strategy.validate().map_err(|e| OrchestratorError::invalid_blueprint(e))?;
+        }
+
+        let mut loops_executed = 0;
+        let mut terminations_triggered = 0;
+
+        // Execute instructions
+        let result = self.execute_instructions(
+            &instructions,
+            &mut loops_executed,
+            &mut terminations_triggered
+        ).await?;
+
+        // Extract final output based on result type
+        let final_output = match result {
+            InstructionExecutionResult::Completed(output) => output,
+            InstructionExecutionResult::Terminated(output) => {
+                info!("Workflow terminated early via Terminate instruction");
+                output
+            }
+        };
+
+        // Count steps executed (count Step instructions only, not Loop/Terminate)
+        let steps_executed = count_steps_in_instructions(&instructions);
+
+        // Return (final_output, steps_executed, redesigns_triggered, loops_executed, terminations_triggered)
+        // Note: redesigns_triggered is always 0 in the new path (no redesign support yet)
+        Ok((final_output, steps_executed, 0, loops_executed, terminations_triggered))
     }
 
     /// Evaluates a condition template against the current context.
@@ -1835,6 +1896,30 @@ impl Orchestrator {
     }
 }
 
+/// Counts the number of Step instructions in a list of instructions.
+///
+/// This recursively counts Step instructions inside Loop bodies.
+fn count_steps_in_instructions(instructions: &[StrategyInstruction]) -> usize {
+    use crate::orchestrator::strategy::StrategyInstruction;
+
+    let mut count = 0;
+    for instruction in instructions {
+        match instruction {
+            StrategyInstruction::Step(_) => {
+                count += 1;
+            }
+            StrategyInstruction::Loop(loop_block) => {
+                // Recursively count steps in loop body
+                count += count_steps_in_instructions(&loop_block.body);
+            }
+            StrategyInstruction::Terminate(_) => {
+                // Terminate instructions don't count as steps
+            }
+        }
+    }
+    count
+}
+
 #[cfg(all(test, feature = "agent"))]
 mod tests {
     use super::*;
@@ -2113,6 +2198,113 @@ mod tests {
         assert_eq!(result_last, JsonValue::Null);
         assert_eq!(result_first, JsonValue::Null);
         assert_eq!(result_all, JsonValue::Array(vec![]));
+    }
+
+    #[test]
+    fn test_count_steps_in_instructions_simple() {
+        use crate::orchestrator::strategy::{StrategyInstruction, StrategyStep};
+
+        let instructions = vec![
+            StrategyInstruction::Step(StrategyStep {
+                step_id: "step1".to_string(),
+                description: "Test step 1".to_string(),
+                assigned_agent: "agent1".to_string(),
+                intent_template: "Do something".to_string(),
+                expected_output: "Result 1".to_string(),
+                requires_validation: false,
+                output_key: None,
+            }),
+            StrategyInstruction::Step(StrategyStep {
+                step_id: "step2".to_string(),
+                description: "Test step 2".to_string(),
+                assigned_agent: "agent2".to_string(),
+                intent_template: "Do something else".to_string(),
+                expected_output: "Result 2".to_string(),
+                requires_validation: false,
+                output_key: None,
+            }),
+        ];
+
+        let count = count_steps_in_instructions(&instructions);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_count_steps_in_instructions_with_loop() {
+        use crate::orchestrator::strategy::{StrategyInstruction, StrategyStep, LoopBlock};
+
+        let loop_body = vec![
+            StrategyInstruction::Step(StrategyStep {
+                step_id: "step1".to_string(),
+                description: "Loop step".to_string(),
+                assigned_agent: "agent1".to_string(),
+                intent_template: "Do something".to_string(),
+                expected_output: "Loop result".to_string(),
+                requires_validation: false,
+                output_key: None,
+            }),
+        ];
+
+        let instructions = vec![
+            StrategyInstruction::Step(StrategyStep {
+                step_id: "step_before".to_string(),
+                description: "Before loop".to_string(),
+                assigned_agent: "agent1".to_string(),
+                intent_template: "Before".to_string(),
+                expected_output: "Before result".to_string(),
+                requires_validation: false,
+                output_key: None,
+            }),
+            StrategyInstruction::Loop(LoopBlock {
+                loop_id: "loop1".to_string(),
+                description: Some("Test loop".to_string()),
+                loop_type: None,
+                max_iterations: 3,
+                condition_template: None,
+                body: loop_body,
+                aggregation: None,
+            }),
+            StrategyInstruction::Step(StrategyStep {
+                step_id: "step_after".to_string(),
+                description: "After loop".to_string(),
+                assigned_agent: "agent1".to_string(),
+                intent_template: "After".to_string(),
+                expected_output: "After result".to_string(),
+                requires_validation: false,
+                output_key: None,
+            }),
+        ];
+
+        // Should count: 1 (before) + 1 (loop body) + 1 (after) = 3
+        let count = count_steps_in_instructions(&instructions);
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_count_steps_in_instructions_with_terminate() {
+        use crate::orchestrator::strategy::{StrategyInstruction, StrategyStep, TerminateInstruction};
+
+        let instructions = vec![
+            StrategyInstruction::Step(StrategyStep {
+                step_id: "step1".to_string(),
+                description: "Test step".to_string(),
+                assigned_agent: "agent1".to_string(),
+                intent_template: "Do something".to_string(),
+                expected_output: "Result".to_string(),
+                requires_validation: false,
+                output_key: None,
+            }),
+            StrategyInstruction::Terminate(TerminateInstruction {
+                terminate_id: "term1".to_string(),
+                description: Some("Early termination".to_string()),
+                condition_template: Some("{{ done }}".to_string()),
+                final_output_template: None,
+            }),
+        ];
+
+        // Terminate doesn't count as a step
+        let count = count_steps_in_instructions(&instructions);
+        assert_eq!(count, 1);
     }
 
     fn create_test_orchestrator() -> Orchestrator {
