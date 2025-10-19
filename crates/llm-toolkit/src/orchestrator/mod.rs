@@ -745,7 +745,13 @@ impl Orchestrator {
 
         // Phase 2: Execute strategy
         match self.execute_strategy().await {
-            Ok((final_output, steps_executed, redesigns_triggered, loops_executed, terminations_triggered)) => {
+            Ok((
+                final_output,
+                steps_executed,
+                redesigns_triggered,
+                loops_executed,
+                terminations_triggered,
+            )) => {
                 info!("Orchestrator execution completed successfully");
                 OrchestrationResult {
                     status: OrchestrationStatus::Success,
@@ -1125,7 +1131,9 @@ impl Orchestrator {
     ///
     /// Returns (final_output, steps_executed, redesigns_triggered, loops_executed, terminations_triggered).
     #[instrument(skip(self))]
-    async fn execute_strategy(&mut self) -> Result<(JsonValue, usize, usize, usize, usize), OrchestratorError> {
+    async fn execute_strategy(
+        &mut self,
+    ) -> Result<(JsonValue, usize, usize, usize, usize), OrchestratorError> {
         // Check strategy exists
         if self.strategy_map.is_none() {
             return Err(OrchestratorError::no_strategy());
@@ -1325,7 +1333,13 @@ impl Orchestrator {
             }
         }
 
-        Ok((final_result, steps_executed, redesigns_triggered, loops_executed, terminations_triggered))
+        Ok((
+            final_result,
+            steps_executed,
+            redesigns_triggered,
+            loops_executed,
+            terminations_triggered,
+        ))
     }
 
     /// Executes the strategy using the new instruction-based path (for Loop/Terminate support).
@@ -1333,7 +1347,9 @@ impl Orchestrator {
     /// This method handles execution when `strategy.elements` is not empty.
     /// Unlike the legacy path, this supports Loop and Terminate instructions.
     #[instrument(skip(self))]
-    async fn execute_strategy_with_instructions(&mut self) -> Result<(JsonValue, usize, usize, usize, usize), OrchestratorError> {
+    async fn execute_strategy_with_instructions(
+        &mut self,
+    ) -> Result<(JsonValue, usize, usize, usize, usize), OrchestratorError> {
         let instructions = {
             let strategy = self.strategy_map.as_ref().unwrap();
             strategy.elements.clone()
@@ -1341,18 +1357,24 @@ impl Orchestrator {
 
         // Validate strategy (reject nested loops)
         if let Some(ref strategy) = self.strategy_map {
-            strategy.validate().map_err(|e| OrchestratorError::invalid_blueprint(e))?;
+            strategy
+                .validate()
+                .map_err(OrchestratorError::invalid_blueprint)?;
         }
 
+        let mut steps_executed = 0;
         let mut loops_executed = 0;
         let mut terminations_triggered = 0;
 
         // Execute instructions
-        let result = self.execute_instructions(
-            &instructions,
-            &mut loops_executed,
-            &mut terminations_triggered
-        ).await?;
+        let result = self
+            .execute_instructions(
+                &instructions,
+                &mut steps_executed,
+                &mut loops_executed,
+                &mut terminations_triggered,
+            )
+            .await?;
 
         // Extract final output based on result type
         let final_output = match result {
@@ -1363,12 +1385,15 @@ impl Orchestrator {
             }
         };
 
-        // Count steps executed (count Step instructions only, not Loop/Terminate)
-        let steps_executed = count_steps_in_instructions(&instructions);
-
         // Return (final_output, steps_executed, redesigns_triggered, loops_executed, terminations_triggered)
         // Note: redesigns_triggered is always 0 in the new path (no redesign support yet)
-        Ok((final_output, steps_executed, 0, loops_executed, terminations_triggered))
+        Ok((
+            final_output,
+            steps_executed,
+            0,
+            loops_executed,
+            terminations_triggered,
+        ))
     }
 
     /// Evaluates a condition template against the current context.
@@ -1419,8 +1444,11 @@ impl Orchestrator {
                     return Ok(JsonValue::Null);
                 }
 
-                let last_iteration_key = format!("loop_{}_iter_{}", loop_id, iterations_executed - 1);
-                let result = self.context.get(&last_iteration_key)
+                let last_iteration_key =
+                    format!("loop_{}_iter_{}", loop_id, iterations_executed - 1);
+                let result = self
+                    .context
+                    .get(&last_iteration_key)
                     .cloned()
                     .unwrap_or(JsonValue::Null);
 
@@ -1435,7 +1463,9 @@ impl Orchestrator {
                 }
 
                 let first_iteration_key = format!("loop_{}_iter_0", loop_id);
-                let result = self.context.get(&first_iteration_key)
+                let result = self
+                    .context
+                    .get(&first_iteration_key)
                     .cloned()
                     .unwrap_or(JsonValue::Null);
 
@@ -1474,6 +1504,7 @@ impl Orchestrator {
     async fn execute_instructions(
         &mut self,
         instructions: &[StrategyInstruction],
+        steps_executed: &mut usize,
         loops_executed: &mut usize,
         terminations_triggered: &mut usize,
     ) -> Result<InstructionExecutionResult, OrchestratorError> {
@@ -1487,24 +1518,26 @@ impl Orchestrator {
                     // Execute the step (simplified - full logic will be integrated later)
                     let intent = self.build_intent(step, &self.context).await?;
 
-                    let agent = self
-                        .agents
-                        .get(&step.assigned_agent)
-                        .ok_or_else(|| OrchestratorError::AgentNotFound(step.assigned_agent.clone()))?;
+                    let agent = self.agents.get(&step.assigned_agent).ok_or_else(|| {
+                        OrchestratorError::AgentNotFound(step.assigned_agent.clone())
+                    })?;
 
                     // Note: Error handling for agent execution will be integrated later
                     // For now, we convert the error directly
                     let output = agent.execute_dynamic(intent.into()).await?;
 
                     // Store result in context
-                    self.context.insert(format!("step_{}_output", step.step_id), output.clone());
+                    self.context
+                        .insert(format!("step_{}_output", step.step_id), output.clone());
 
                     if let Some(ref output_key) = step.output_key {
                         self.context.insert(output_key.clone(), output.clone());
                     }
 
-                    self.context.insert("previous_output".to_string(), output.clone());
+                    self.context
+                        .insert("previous_output".to_string(), output.clone());
 
+                    *steps_executed += 1;
                     final_result = output;
                 }
 
@@ -1516,41 +1549,58 @@ impl Orchestrator {
 
                     // Execute loop iterations
                     for iteration in 0..loop_block.max_iterations {
-                        debug!("Loop {} iteration {}/{}", loop_block.loop_id, iteration + 1, loop_block.max_iterations);
+                        debug!(
+                            "Loop {} iteration {}/{}",
+                            loop_block.loop_id,
+                            iteration + 1,
+                            loop_block.max_iterations
+                        );
 
                         *loops_executed += 1;
 
                         // Check global loop iteration limit
                         if *loops_executed > self.config.max_total_loop_iterations {
                             return Err(OrchestratorError::MaxLoopIterationsExceeded(
-                                self.config.max_total_loop_iterations
+                                self.config.max_total_loop_iterations,
                             ));
                         }
 
                         // Execute loop body (using Box::pin for recursion)
-                        let result = Box::pin(self.execute_instructions(&loop_block.body, loops_executed, terminations_triggered)).await?;
+                        let result = Box::pin(self.execute_instructions(
+                            &loop_block.body,
+                            steps_executed,
+                            loops_executed,
+                            terminations_triggered,
+                        ))
+                        .await?;
 
                         match result {
                             InstructionExecutionResult::Completed(output) => {
                                 // Store iteration result
                                 self.context.insert(
                                     format!("loop_{}_iter_{}", loop_block.loop_id, iteration),
-                                    output.clone()
+                                    output.clone(),
                                 );
 
                                 iterations_executed += 1;
                                 final_result = output;
 
                                 // Evaluate condition to decide if loop should continue
-                                let should_continue = self.evaluate_condition_template(
-                                    &loop_block.condition_template,
-                                    &self.context
-                                )?;
+                                let should_continue = if loop_block.condition_template.is_some() {
+                                    self.evaluate_condition_template(
+                                        &loop_block.condition_template,
+                                        &self.context,
+                                    )?
+                                } else {
+                                    true
+                                };
 
                                 if !should_continue {
                                     debug!(
                                         "Loop {} stopping early at iteration {}/{} (condition evaluated to false)",
-                                        loop_block.loop_id, iteration + 1, loop_block.max_iterations
+                                        loop_block.loop_id,
+                                        iteration + 1,
+                                        loop_block.max_iterations
                                     );
                                     break;
                                 }
@@ -1564,7 +1614,10 @@ impl Orchestrator {
 
                     // After loop completes, perform aggregation if configured
                     if let Some(ref aggregation) = loop_block.aggregation {
-                        debug!("Aggregating loop {} results with mode {:?}", loop_block.loop_id, aggregation.mode);
+                        debug!(
+                            "Aggregating loop {} results with mode {:?}",
+                            loop_block.loop_id, aggregation.mode
+                        );
 
                         let aggregated_value = self.aggregate_loop_results(
                             &loop_block.loop_id,
@@ -1572,7 +1625,8 @@ impl Orchestrator {
                             iterations_executed,
                         )?;
 
-                        self.context.insert(aggregation.output_key.clone(), aggregated_value.clone());
+                        self.context
+                            .insert(aggregation.output_key.clone(), aggregated_value.clone());
                         final_result = aggregated_value;
                     }
                 }
@@ -1583,7 +1637,7 @@ impl Orchestrator {
                     // Evaluate termination condition
                     let should_terminate = self.evaluate_condition_template(
                         &terminate.condition_template,
-                        &self.context
+                        &self.context,
                     )?;
 
                     if should_terminate {
@@ -1591,10 +1645,13 @@ impl Orchestrator {
                         *terminations_triggered += 1;
 
                         // Use final_output_template if provided
-                        let termination_output = if let Some(ref template) = terminate.final_output_template {
+                        let termination_output = if let Some(ref template) =
+                            terminate.final_output_template
+                        {
                             use crate::prompt::render_prompt;
-                            let rendered = render_prompt(template, &self.context)
-                                .map_err(|e| OrchestratorError::TemplateRenderError(e.to_string()))?;
+                            let rendered = render_prompt(template, &self.context).map_err(|e| {
+                                OrchestratorError::TemplateRenderError(e.to_string())
+                            })?;
 
                             JsonValue::String(rendered)
                         } else {
@@ -1899,6 +1956,7 @@ impl Orchestrator {
 /// Counts the number of Step instructions in a list of instructions.
 ///
 /// This recursively counts Step instructions inside Loop bodies.
+#[allow(dead_code)]
 fn count_steps_in_instructions(instructions: &[StrategyInstruction]) -> usize {
     use crate::orchestrator::strategy::StrategyInstruction;
 
@@ -1924,6 +1982,9 @@ fn count_steps_in_instructions(instructions: &[StrategyInstruction]) -> usize {
 mod tests {
     use super::*;
     use crate::agent::impls::ClaudeCodeAgent;
+    use crate::agent::{Agent, AgentError, Payload};
+    use async_trait::async_trait;
+    use tokio::runtime::Runtime;
 
     #[test]
     fn test_orchestrator_creation() {
@@ -2075,7 +2136,9 @@ mod tests {
 
         // Template that evaluates to "true"
         let template = Some("{{ approved }}".to_string());
-        let result = orch.evaluate_condition_template(&template, &context).unwrap();
+        let result = orch
+            .evaluate_condition_template(&template, &context)
+            .unwrap();
 
         assert!(result);
     }
@@ -2089,7 +2152,9 @@ mod tests {
 
         // Template that evaluates to "false"
         let template = Some("{{ approved }}".to_string());
-        let result = orch.evaluate_condition_template(&template, &context).unwrap();
+        let result = orch
+            .evaluate_condition_template(&template, &context)
+            .unwrap();
 
         assert!(!result);
     }
@@ -2103,7 +2168,9 @@ mod tests {
 
         // Template with comparison that evaluates to "true"
         let template = Some("{% if count > 3 %}true{% else %}false{% endif %}".to_string());
-        let result = orch.evaluate_condition_template(&template, &context).unwrap();
+        let result = orch
+            .evaluate_condition_template(&template, &context)
+            .unwrap();
 
         assert!(result);
     }
@@ -2127,7 +2194,9 @@ mod tests {
         // Test various case variations of "true"
         for true_variant in &["true", "True", "TRUE", "TrUe"] {
             let template = Some(true_variant.to_string());
-            let result = orch.evaluate_condition_template(&template, &context).unwrap();
+            let result = orch
+                .evaluate_condition_template(&template, &context)
+                .unwrap();
             assert!(result, "Expected '{}' to evaluate to true", true_variant);
         }
     }
@@ -2139,11 +2208,22 @@ mod tests {
         let mut orch = create_test_orchestrator();
 
         // Simulate 3 loop iterations with stored results
-        orch.context.insert("loop_test_iter_0".to_string(), JsonValue::String("first".to_string()));
-        orch.context.insert("loop_test_iter_1".to_string(), JsonValue::String("second".to_string()));
-        orch.context.insert("loop_test_iter_2".to_string(), JsonValue::String("third".to_string()));
+        orch.context.insert(
+            "loop_test_iter_0".to_string(),
+            JsonValue::String("first".to_string()),
+        );
+        orch.context.insert(
+            "loop_test_iter_1".to_string(),
+            JsonValue::String("second".to_string()),
+        );
+        orch.context.insert(
+            "loop_test_iter_2".to_string(),
+            JsonValue::String("third".to_string()),
+        );
 
-        let result = orch.aggregate_loop_results("test", &AggregationMode::LastSuccess, 3).unwrap();
+        let result = orch
+            .aggregate_loop_results("test", &AggregationMode::LastSuccess, 3)
+            .unwrap();
 
         assert_eq!(result, JsonValue::String("third".to_string()));
     }
@@ -2155,11 +2235,22 @@ mod tests {
         let mut orch = create_test_orchestrator();
 
         // Simulate 3 loop iterations with stored results
-        orch.context.insert("loop_test_iter_0".to_string(), JsonValue::String("first".to_string()));
-        orch.context.insert("loop_test_iter_1".to_string(), JsonValue::String("second".to_string()));
-        orch.context.insert("loop_test_iter_2".to_string(), JsonValue::String("third".to_string()));
+        orch.context.insert(
+            "loop_test_iter_0".to_string(),
+            JsonValue::String("first".to_string()),
+        );
+        orch.context.insert(
+            "loop_test_iter_1".to_string(),
+            JsonValue::String("second".to_string()),
+        );
+        orch.context.insert(
+            "loop_test_iter_2".to_string(),
+            JsonValue::String("third".to_string()),
+        );
 
-        let result = orch.aggregate_loop_results("test", &AggregationMode::FirstSuccess, 3).unwrap();
+        let result = orch
+            .aggregate_loop_results("test", &AggregationMode::FirstSuccess, 3)
+            .unwrap();
 
         assert_eq!(result, JsonValue::String("first".to_string()));
     }
@@ -2171,17 +2262,31 @@ mod tests {
         let mut orch = create_test_orchestrator();
 
         // Simulate 3 loop iterations with stored results
-        orch.context.insert("loop_test_iter_0".to_string(), JsonValue::String("first".to_string()));
-        orch.context.insert("loop_test_iter_1".to_string(), JsonValue::String("second".to_string()));
-        orch.context.insert("loop_test_iter_2".to_string(), JsonValue::String("third".to_string()));
-
-        let result = orch.aggregate_loop_results("test", &AggregationMode::CollectAll, 3).unwrap();
-
-        assert_eq!(result, JsonValue::Array(vec![
+        orch.context.insert(
+            "loop_test_iter_0".to_string(),
             JsonValue::String("first".to_string()),
+        );
+        orch.context.insert(
+            "loop_test_iter_1".to_string(),
             JsonValue::String("second".to_string()),
+        );
+        orch.context.insert(
+            "loop_test_iter_2".to_string(),
             JsonValue::String("third".to_string()),
-        ]));
+        );
+
+        let result = orch
+            .aggregate_loop_results("test", &AggregationMode::CollectAll, 3)
+            .unwrap();
+
+        assert_eq!(
+            result,
+            JsonValue::Array(vec![
+                JsonValue::String("first".to_string()),
+                JsonValue::String("second".to_string()),
+                JsonValue::String("third".to_string()),
+            ])
+        );
     }
 
     #[test]
@@ -2191,9 +2296,15 @@ mod tests {
         let orch = create_test_orchestrator();
 
         // Test with zero iterations
-        let result_last = orch.aggregate_loop_results("test", &AggregationMode::LastSuccess, 0).unwrap();
-        let result_first = orch.aggregate_loop_results("test", &AggregationMode::FirstSuccess, 0).unwrap();
-        let result_all = orch.aggregate_loop_results("test", &AggregationMode::CollectAll, 0).unwrap();
+        let result_last = orch
+            .aggregate_loop_results("test", &AggregationMode::LastSuccess, 0)
+            .unwrap();
+        let result_first = orch
+            .aggregate_loop_results("test", &AggregationMode::FirstSuccess, 0)
+            .unwrap();
+        let result_all = orch
+            .aggregate_loop_results("test", &AggregationMode::CollectAll, 0)
+            .unwrap();
 
         assert_eq!(result_last, JsonValue::Null);
         assert_eq!(result_first, JsonValue::Null);
@@ -2231,19 +2342,17 @@ mod tests {
 
     #[test]
     fn test_count_steps_in_instructions_with_loop() {
-        use crate::orchestrator::strategy::{StrategyInstruction, StrategyStep, LoopBlock};
+        use crate::orchestrator::strategy::{LoopBlock, StrategyInstruction, StrategyStep};
 
-        let loop_body = vec![
-            StrategyInstruction::Step(StrategyStep {
-                step_id: "step1".to_string(),
-                description: "Loop step".to_string(),
-                assigned_agent: "agent1".to_string(),
-                intent_template: "Do something".to_string(),
-                expected_output: "Loop result".to_string(),
-                requires_validation: false,
-                output_key: None,
-            }),
-        ];
+        let loop_body = vec![StrategyInstruction::Step(StrategyStep {
+            step_id: "step1".to_string(),
+            description: "Loop step".to_string(),
+            assigned_agent: "agent1".to_string(),
+            intent_template: "Do something".to_string(),
+            expected_output: "Loop result".to_string(),
+            requires_validation: false,
+            output_key: None,
+        })];
 
         let instructions = vec![
             StrategyInstruction::Step(StrategyStep {
@@ -2282,7 +2391,9 @@ mod tests {
 
     #[test]
     fn test_count_steps_in_instructions_with_terminate() {
-        use crate::orchestrator::strategy::{StrategyInstruction, StrategyStep, TerminateInstruction};
+        use crate::orchestrator::strategy::{
+            StrategyInstruction, StrategyStep, TerminateInstruction,
+        };
 
         let instructions = vec![
             StrategyInstruction::Step(StrategyStep {
@@ -2307,8 +2418,112 @@ mod tests {
         assert_eq!(count, 1);
     }
 
+    #[test]
+    fn test_loop_without_condition_runs_max_iterations() {
+        let mut orch = Orchestrator::new(BlueprintWorkflow::new("Loop workflow".to_string()));
+        let agent = RecordingAgent;
+        let agent_name = Agent::name(&agent);
+        orch.add_agent(agent);
+
+        let mut strategy = StrategyMap::new("Loop until max iterations".to_string());
+        strategy.add_instruction(StrategyInstruction::Loop(LoopBlock {
+            loop_id: "loop_1".to_string(),
+            description: None,
+            loop_type: None,
+            max_iterations: 3,
+            condition_template: None,
+            body: vec![StrategyInstruction::Step(StrategyStep::new(
+                "loop_step".to_string(),
+                "Execute loop step".to_string(),
+                agent_name.clone(),
+                "Run loop step".to_string(),
+                "Loop output".to_string(),
+            ))],
+            aggregation: None,
+        }));
+
+        orch.set_strategy_map(strategy);
+        orch.config.max_total_loop_iterations = 10;
+        orch.config.enable_fast_path_intent_generation = true;
+
+        let runtime = Runtime::new().expect("runtime");
+        let result = runtime.block_on(orch.execute("test loop"));
+
+        assert_eq!(
+            result.status,
+            OrchestrationStatus::Success,
+            "error: {:?}",
+            result.error_message
+        );
+        assert_eq!(result.loops_executed, 3);
+        assert_eq!(result.steps_executed, 3);
+        assert_eq!(result.terminations_triggered, 0);
+    }
+
+    #[test]
+    fn test_terminate_instruction_counts_actual_steps() {
+        let mut orch = Orchestrator::new(BlueprintWorkflow::new("Terminate workflow".to_string()));
+        let agent = RecordingAgent;
+        let agent_name = Agent::name(&agent);
+        orch.add_agent(agent);
+
+        let mut strategy = StrategyMap::new("Terminate early".to_string());
+        strategy.add_instruction(StrategyInstruction::Step(StrategyStep::new(
+            "step_1".to_string(),
+            "First step".to_string(),
+            agent_name.clone(),
+            "Do work".to_string(),
+            "Output".to_string(),
+        )));
+        strategy.add_instruction(StrategyInstruction::Terminate(TerminateInstruction {
+            terminate_id: "stop".to_string(),
+            description: Some("Stop early".to_string()),
+            condition_template: Some("true".to_string()),
+            final_output_template: None,
+        }));
+        strategy.add_instruction(StrategyInstruction::Step(StrategyStep::new(
+            "step_2".to_string(),
+            "Should not run".to_string(),
+            agent_name,
+            "Do more work".to_string(),
+            "More output".to_string(),
+        )));
+
+        orch.set_strategy_map(strategy);
+        orch.config.enable_fast_path_intent_generation = true;
+
+        let runtime = Runtime::new().expect("runtime");
+        let result = runtime.block_on(orch.execute("test terminate"));
+
+        assert_eq!(
+            result.status,
+            OrchestrationStatus::Success,
+            "error: {:?}",
+            result.error_message
+        );
+        assert_eq!(result.terminations_triggered, 1);
+        assert_eq!(result.steps_executed, 1);
+    }
+
     fn create_test_orchestrator() -> Orchestrator {
-        let blueprint = BlueprintWorkflow::new("Test workflow for condition evaluation".to_string());
+        let blueprint =
+            BlueprintWorkflow::new("Test workflow for condition evaluation".to_string());
         Orchestrator::new(blueprint)
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingAgent;
+
+    #[async_trait]
+    impl Agent for RecordingAgent {
+        type Output = JsonValue;
+
+        fn expertise(&self) -> &str {
+            "Test agent"
+        }
+
+        async fn execute(&self, _intent: Payload) -> Result<Self::Output, AgentError> {
+            Ok(JsonValue::String("ok".to_string()))
+        }
     }
 }

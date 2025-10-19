@@ -124,19 +124,29 @@ impl StrategyMap {
                 .iter()
                 .map(|step| StrategyInstruction::Step(step.clone()))
                 .collect();
-
-            // Clear steps to avoid confusion
-            self.steps.clear();
         }
+
+        // Keep legacy `steps` vector in sync with top-level Step instructions.
+        self.steps = self
+            .elements
+            .iter()
+            .filter_map(|instruction| match instruction {
+                StrategyInstruction::Step(step) => Some(step.clone()),
+                _ => None,
+            })
+            .collect();
     }
 
     /// Adds a step to this strategy (wraps in StrategyInstruction::Step).
     pub fn add_step(&mut self, step: StrategyStep) {
-        self.elements.push(StrategyInstruction::Step(step));
+        self.add_instruction(StrategyInstruction::Step(step));
     }
 
     /// Adds an instruction to this strategy.
     pub fn add_instruction(&mut self, instruction: StrategyInstruction) {
+        if let StrategyInstruction::Step(step) = &instruction {
+            self.steps.push(step.clone());
+        }
         self.elements.push(instruction);
     }
 
@@ -352,7 +362,9 @@ impl LoopBlock {
     pub fn validate(&self) -> Result<(), &'static str> {
         for instruction in &self.body {
             if matches!(instruction, StrategyInstruction::Loop(_)) {
-                return Err("Nested loops are not supported. Loop body cannot contain other Loop instructions.");
+                return Err(
+                    "Nested loops are not supported. Loop body cannot contain other Loop instructions.",
+                );
             }
         }
         Ok(())
@@ -417,6 +429,21 @@ mod tests {
         strategy.add_step(step);
         assert_eq!(strategy.len(), 1);
         assert!(!strategy.is_empty());
+    }
+
+    #[test]
+    fn test_add_step_retains_legacy_steps_vector() {
+        let mut strategy = StrategyMap::new("Ensure steps tracked".to_string());
+        strategy.add_step(StrategyStep::new(
+            "step_1".to_string(),
+            "Do something".to_string(),
+            "AgentA".to_string(),
+            "Perform task".to_string(),
+            "Result".to_string(),
+        ));
+
+        assert_eq!(strategy.elements.len(), 1);
+        assert_eq!(strategy.steps.len(), 1);
     }
 
     #[test]
@@ -643,7 +670,7 @@ mod tests {
         // Migrate
         strategy.migrate_legacy_steps();
         assert_eq!(strategy.elements.len(), 1);
-        assert_eq!(strategy.steps.len(), 0); // Cleared after migration
+        assert_eq!(strategy.steps.len(), 1); // Legacy steps kept in sync
 
         match &strategy.elements[0] {
             StrategyInstruction::Step(s) => {
@@ -699,9 +726,18 @@ mod tests {
         assert_eq!(deserialized.elements.len(), 3);
 
         // Verify structure
-        assert!(matches!(&deserialized.elements[0], StrategyInstruction::Step(_)));
-        assert!(matches!(&deserialized.elements[1], StrategyInstruction::Loop(_)));
-        assert!(matches!(&deserialized.elements[2], StrategyInstruction::Terminate(_)));
+        assert!(matches!(
+            &deserialized.elements[0],
+            StrategyInstruction::Step(_)
+        ));
+        assert!(matches!(
+            &deserialized.elements[1],
+            StrategyInstruction::Loop(_)
+        ));
+        assert!(matches!(
+            &deserialized.elements[2],
+            StrategyInstruction::Terminate(_)
+        ));
     }
 
     #[test]

@@ -194,7 +194,10 @@ mod tests {
             config1.enable_fast_path_intent_generation,
             config2.enable_fast_path_intent_generation
         );
-        assert_eq!(config1.max_total_loop_iterations, config2.max_total_loop_iterations);
+        assert_eq!(
+            config1.max_total_loop_iterations,
+            config2.max_total_loop_iterations
+        );
     }
 
     #[test]
