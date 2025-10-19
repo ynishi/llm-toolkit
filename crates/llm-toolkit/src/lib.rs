@@ -138,9 +138,22 @@ use extract::ParseError;
 /// A `Result` containing the extracted JSON `String` on success, or a `ParseError`
 /// if no JSON could be extracted.
 pub fn extract_json(text: &str) -> Result<String, ParseError> {
+    // Try markdown code block first (common LLM output format)
+    if let Ok(content) = extract_markdown_block_with_lang(text, "json") {
+        return Ok(content);
+    }
+
+    // Also try generic markdown block (might contain JSON without language hint)
+    if let Ok(content) = extract_markdown_block(text) {
+        // Verify it's actually JSON by trying to extract JSON from it
+        let extractor = FlexibleExtractor::new();
+        if let Ok(json) = extractor.extract(&content) {
+            return Ok(json);
+        }
+    }
+
+    // Fall back to standard extraction strategies
     let extractor = FlexibleExtractor::new();
-    // Note: The standard strategies in the copied code are TaggedContent("answer"), JsonBrackets, FirstJsonObject.
-    // We will add a markdown strategy later during refactoring.
     extractor.extract(text)
 }
 
@@ -240,7 +253,7 @@ let data = vec![1, 2, 3];
 def hello():
     print("world")
     return True
-   ```   
+   ```
 
 
 And more text after with various spacing.
@@ -251,5 +264,108 @@ And more text after with various spacing.
             result5.unwrap(),
             "def hello():\n    print(\"world\")\n    return True"
         );
+    }
+
+    #[test]
+    fn test_extract_json_from_json_markdown_block() {
+        // Test extraction from JSON markdown block (highest priority)
+        let text = r#"Here's the response:
+```json
+{"status": "success", "count": 42}
+```
+That's the data you requested."#;
+        let result = extract_json(text);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), r#"{"status": "success", "count": 42}"#);
+    }
+
+    #[test]
+    fn test_extract_json_from_generic_markdown_block() {
+        // Test extraction from generic markdown block containing JSON
+        let text = r#"The output is:
+```
+{"result": "ok", "value": 123}
+```
+End of output."#;
+        let result = extract_json(text);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), r#"{"result": "ok", "value": 123}"#);
+    }
+
+    #[test]
+    fn test_extract_json_priority_json_block_over_inline() {
+        // When both JSON markdown block and inline JSON exist, JSON block should be preferred
+        let text = r#"Some inline {"inline": "data"} here.
+```json
+{"block": "data"}
+```
+More text."#;
+        let result = extract_json(text);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), r#"{"block": "data"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_priority_json_block_over_generic_block() {
+        // JSON markdown block should be preferred over generic block
+        let text = r#"First a generic block:
+```
+{"generic": "block"}
+```
+
+Then a JSON block:
+```json
+{"json": "block"}
+```"#;
+        let result = extract_json(text);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), r#"{"json": "block"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_fallback_from_non_json_markdown_block() {
+        // When markdown block contains non-JSON, fallback to inline extraction
+        let text = r#"Here's some code:
+```
+This is not JSON at all
+```
+But this is JSON: {"fallback": "value"}"#;
+        let result = extract_json(text);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), r#"{"fallback": "value"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_from_rust_block_fallback() {
+        // When only non-JSON markdown blocks exist, fallback to inline extraction
+        let text = r#"```rust
+let x = 42;
+```
+The result is {"data": "inline"}"#;
+        let result = extract_json(text);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), r#"{"data": "inline"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_multiline_in_markdown_block() {
+        // Test extraction of multiline JSON from markdown block
+        let text = r#"Response:
+```json
+{
+  "name": "test",
+  "values": [1, 2, 3],
+  "nested": {
+    "key": "value"
+  }
+}
+```"#;
+        let result = extract_json(text);
+        assert!(result.is_ok());
+        let json = result.unwrap();
+        // Verify it contains the expected structure
+        assert!(json.contains("\"name\": \"test\""));
+        assert!(json.contains("\"values\": [1, 2, 3]"));
+        assert!(json.contains("\"nested\""));
     }
 }
