@@ -16,12 +16,36 @@ fn is_false(value: &bool) -> bool {
 ///
 /// This allows the orchestrator to adapt to different agent compositions
 /// without requiring pre-defined workflows.
+///
+/// # Backward Compatibility
+///
+/// This struct supports both the new `elements` format (with control flow)
+/// and the legacy `steps` format (simple sequential steps). When deserializing:
+/// - If `elements` is present, it's used directly
+/// - If `steps` is present (legacy format), each step is wrapped in `StrategyInstruction::Step`
+/// - A warning is emitted when loading legacy format
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StrategyMap {
     /// The overall goal this strategy aims to achieve.
     pub goal: String,
 
-    /// Ordered sequence of steps to execute.
+    /// Ordered sequence of instructions to execute.
+    ///
+    /// This field supports control flow (loops, early termination) beyond simple steps.
+    /// For backward compatibility, this field is automatically populated from `steps`
+    /// if `elements` is not present in the JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<StrategyInstruction>,
+
+    /// Legacy field: Ordered sequence of steps to execute.
+    ///
+    /// **Deprecated**: Use `elements` instead for new workflows.
+    /// This field is kept for backward compatibility. When deserializing legacy JSON,
+    /// `steps` will be present, and `migrate_legacy_steps()` should be called to
+    /// populate `elements`.
+    ///
+    /// For new code, use `elements` directly.
+    #[serde(default)]
     pub steps: Vec<StrategyStep>,
 }
 
@@ -78,33 +102,115 @@ impl StrategyMap {
     pub fn new(goal: String) -> Self {
         Self {
             goal,
+            elements: Vec::new(),
             steps: Vec::new(),
         }
     }
 
-    /// Adds a step to this strategy.
+    /// Migrates legacy `steps` to `elements` if needed.
+    ///
+    /// This method should be called after deserialization to ensure
+    /// backward compatibility. If `elements` is empty but `steps` is not,
+    /// each step is wrapped in `StrategyInstruction::Step`.
+    pub fn migrate_legacy_steps(&mut self) {
+        if self.elements.is_empty() && !self.steps.is_empty() {
+            tracing::warn!(
+                "Loading legacy StrategyMap format with {} steps. Consider migrating to 'elements' format.",
+                self.steps.len()
+            );
+
+            self.elements = self
+                .steps
+                .iter()
+                .map(|step| StrategyInstruction::Step(step.clone()))
+                .collect();
+
+            // Clear steps to avoid confusion
+            self.steps.clear();
+        }
+    }
+
+    /// Adds a step to this strategy (wraps in StrategyInstruction::Step).
     pub fn add_step(&mut self, step: StrategyStep) {
-        self.steps.push(step);
+        self.elements.push(StrategyInstruction::Step(step));
     }
 
-    /// Returns the number of steps in this strategy.
+    /// Adds an instruction to this strategy.
+    pub fn add_instruction(&mut self, instruction: StrategyInstruction) {
+        self.elements.push(instruction);
+    }
+
+    /// Returns the number of instructions in this strategy.
     pub fn len(&self) -> usize {
-        self.steps.len()
+        self.elements.len()
     }
 
-    /// Checks if this strategy has no steps.
+    /// Checks if this strategy has no instructions.
     pub fn is_empty(&self) -> bool {
-        self.steps.is_empty()
+        self.elements.is_empty()
     }
 
-    /// Returns a step by index.
+    /// Returns an instruction by index.
+    pub fn get_instruction(&self, index: usize) -> Option<&StrategyInstruction> {
+        self.elements.get(index)
+    }
+
+    /// Returns a mutable reference to an instruction by index.
+    pub fn get_instruction_mut(&mut self, index: usize) -> Option<&mut StrategyInstruction> {
+        self.elements.get_mut(index)
+    }
+
+    /// Returns a step by index (legacy method for backward compatibility).
+    ///
+    /// **Note**: This only works if the instruction at the given index is a `Step`.
+    /// Returns `None` if the instruction is a `Loop` or `Terminate`.
     pub fn get_step(&self, index: usize) -> Option<&StrategyStep> {
-        self.steps.get(index)
+        match self.elements.get(index) {
+            Some(StrategyInstruction::Step(step)) => Some(step),
+            _ => None,
+        }
     }
 
-    /// Returns a mutable reference to a step by index.
+    /// Returns a mutable reference to a step by index (legacy method).
+    ///
+    /// **Note**: This only works if the instruction at the given index is a `Step`.
+    /// Returns `None` if the instruction is a `Loop` or `Terminate`.
     pub fn get_step_mut(&mut self, index: usize) -> Option<&mut StrategyStep> {
-        self.steps.get_mut(index)
+        match self.elements.get_mut(index) {
+            Some(StrategyInstruction::Step(step)) => Some(step),
+            _ => None,
+        }
+    }
+
+    /// Returns all steps in this strategy (legacy method).
+    ///
+    /// **Note**: This only returns instructions that are `Step` variants.
+    /// `Loop` and `Terminate` instructions are excluded.
+    pub fn steps(&self) -> Vec<&StrategyStep> {
+        self.elements
+            .iter()
+            .filter_map(|instruction| match instruction {
+                StrategyInstruction::Step(step) => Some(step),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Validates the entire strategy map.
+    ///
+    /// This checks:
+    /// - All `Loop` instructions do not contain nested loops
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any validation constraint is violated.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        for instruction in &self.elements {
+            if let StrategyInstruction::Loop(loop_block) = instruction {
+                loop_block.validate()?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -127,6 +233,153 @@ impl StrategyStep {
             output_key: None,
         }
     }
+}
+
+/// A single instruction in the execution strategy.
+///
+/// This enum allows for control flow beyond simple sequential steps,
+/// supporting loops and early termination while maintaining backward compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type")] // Critical for backward-compatible and extensible deserialization
+pub enum StrategyInstruction {
+    /// A standard execution step.
+    #[serde(rename = "step")]
+    Step(StrategyStep),
+
+    /// A loop block that can iterate until a condition is met.
+    #[serde(rename = "loop")]
+    Loop(LoopBlock),
+
+    /// An early termination instruction.
+    #[serde(rename = "terminate")]
+    Terminate(TerminateInstruction),
+}
+
+/// The type of loop to execute.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopType {
+    /// Loop while a condition is true.
+    While,
+
+    /// Loop over each item in a collection.
+    ForEach,
+
+    /// Loop until convergence (e.g., iterative refinement).
+    UntilConvergence,
+}
+
+/// Defines how to aggregate outputs from loop iterations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LoopAggregation {
+    /// The aggregation mode.
+    #[serde(rename = "mode")]
+    pub mode: AggregationMode,
+
+    /// The context key where the aggregated result will be stored.
+    pub output_key: String,
+}
+
+/// The mode for aggregating loop iteration outputs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AggregationMode {
+    /// Keep only the last successful iteration's output.
+    LastSuccess,
+
+    /// Collect all iteration outputs in an array.
+    CollectAll,
+
+    /// Keep the first successful iteration's output.
+    FirstSuccess,
+}
+
+/// A loop block that can contain nested instructions.
+///
+/// **Important**: Nested loops are not supported. The body can only contain
+/// `Step` and `Terminate` instructions, not other `Loop` instructions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LoopBlock {
+    /// Unique identifier for this loop (for namespacing context variables).
+    pub loop_id: String,
+
+    /// Human-readable description of what this loop does.
+    ///
+    /// Optional for hand-written JSON. LLM-generated strategies should include this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// The type of loop (semantic meaning).
+    ///
+    /// Optional. Defaults to `While` if not specified. This field is primarily
+    /// for documentation and LLM understanding; it doesn't affect execution logic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_type: Option<LoopType>,
+
+    /// Maximum iterations (mandatory safeguard against infinite loops).
+    pub max_iterations: usize,
+
+    /// Template to evaluate for loop continuation.
+    /// If it renders to "true", the loop continues.
+    /// This is evaluated against the current context using MiniJinja.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition_template: Option<String>,
+
+    /// The instructions to execute within each loop iteration.
+    ///
+    /// **Constraint**: Cannot contain nested `Loop` instructions.
+    /// Use `validate()` to check this constraint.
+    pub body: Vec<StrategyInstruction>,
+
+    /// Optional aggregation strategy for loop outputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregation: Option<LoopAggregation>,
+}
+
+impl LoopBlock {
+    /// Validates that the loop body does not contain nested loops.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any instruction in the body is a `Loop`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let loop_block = LoopBlock { /* ... */ };
+    /// loop_block.validate()?;
+    /// ```
+    pub fn validate(&self) -> Result<(), &'static str> {
+        for instruction in &self.body {
+            if matches!(instruction, StrategyInstruction::Loop(_)) {
+                return Err("Nested loops are not supported. Loop body cannot contain other Loop instructions.");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// An instruction to terminate the workflow early.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TerminateInstruction {
+    /// Unique identifier for this termination point.
+    pub terminate_id: String,
+
+    /// Human-readable description of why we're terminating.
+    ///
+    /// Optional for hand-written JSON. LLM-generated strategies should include this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Template to evaluate for termination decision.
+    /// If it renders to "true", the workflow terminates.
+    /// This is evaluated against the current context using MiniJinja.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition_template: Option<String>,
+
+    /// Optional template for the final output message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_output_template: Option<String>,
 }
 
 /// The type of redesign strategy to apply when a step fails.
@@ -245,5 +498,351 @@ mod tests {
         let json = serde_json::to_string(&step).unwrap();
         // output_key should not appear in JSON when None
         assert!(!json.contains("output_key"));
+    }
+
+    #[test]
+    fn test_strategy_instruction_step_serialization() {
+        let step = StrategyStep::new(
+            "step_1".to_string(),
+            "Test step".to_string(),
+            "TestAgent".to_string(),
+            "Do something".to_string(),
+            "Result".to_string(),
+        );
+        let instruction = StrategyInstruction::Step(step);
+
+        // Serialize
+        let json = serde_json::to_string_pretty(&instruction).unwrap();
+        assert!(json.contains(r#""type": "step""#));
+        assert!(json.contains("step_1"));
+
+        // Deserialize
+        let deserialized: StrategyInstruction = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            StrategyInstruction::Step(s) => {
+                assert_eq!(s.step_id, "step_1");
+            }
+            _ => panic!("Expected Step variant"),
+        }
+    }
+
+    #[test]
+    fn test_loop_block_serialization() {
+        let loop_block = LoopBlock {
+            loop_id: "test_loop".to_string(),
+            description: Some("Test loop".to_string()),
+            loop_type: Some(LoopType::UntilConvergence),
+            max_iterations: 5,
+            condition_template: Some("{{ approved == false }}".to_string()),
+            body: vec![StrategyInstruction::Step(StrategyStep::new(
+                "inner_step".to_string(),
+                "Inner step".to_string(),
+                "TestAgent".to_string(),
+                "Do something".to_string(),
+                "Result".to_string(),
+            ))],
+            aggregation: Some(LoopAggregation {
+                mode: AggregationMode::LastSuccess,
+                output_key: "final_result".to_string(),
+            }),
+        };
+
+        let instruction = StrategyInstruction::Loop(loop_block);
+
+        // Serialize
+        let json = serde_json::to_string_pretty(&instruction).unwrap();
+        assert!(json.contains(r#""type": "loop""#));
+        assert!(json.contains("test_loop"));
+        assert!(json.contains("until_convergence"));
+        assert!(json.contains("approved == false"));
+
+        // Deserialize
+        let deserialized: StrategyInstruction = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            StrategyInstruction::Loop(l) => {
+                assert_eq!(l.loop_id, "test_loop");
+                assert_eq!(l.max_iterations, 5);
+                assert_eq!(l.body.len(), 1);
+            }
+            _ => panic!("Expected Loop variant"),
+        }
+    }
+
+    #[test]
+    fn test_terminate_instruction_serialization() {
+        let terminate = TerminateInstruction {
+            terminate_id: "early_exit".to_string(),
+            description: Some("Exit early on approval".to_string()),
+            condition_template: Some("{{ approved == true }}".to_string()),
+            final_output_template: Some("Completed successfully".to_string()),
+        };
+
+        let instruction = StrategyInstruction::Terminate(terminate);
+
+        // Serialize
+        let json = serde_json::to_string_pretty(&instruction).unwrap();
+        assert!(json.contains(r#""type": "terminate""#));
+        assert!(json.contains("early_exit"));
+        assert!(json.contains("approved == true"));
+
+        // Deserialize
+        let deserialized: StrategyInstruction = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            StrategyInstruction::Terminate(t) => {
+                assert_eq!(t.terminate_id, "early_exit");
+                assert!(t.condition_template.is_some());
+            }
+            _ => panic!("Expected Terminate variant"),
+        }
+    }
+
+    #[test]
+    fn test_strategy_map_with_elements_serialization() {
+        let mut strategy = StrategyMap::new("Test goal".to_string());
+        strategy.add_step(StrategyStep::new(
+            "step_1".to_string(),
+            "First step".to_string(),
+            "Agent1".to_string(),
+            "Do task".to_string(),
+            "Result".to_string(),
+        ));
+
+        // Serialize
+        let json = serde_json::to_string_pretty(&strategy).unwrap();
+        assert!(json.contains("Test goal"));
+        assert!(json.contains("elements"));
+        assert!(json.contains("step_1"));
+
+        // Deserialize
+        let deserialized: StrategyMap = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.goal, "Test goal");
+        assert_eq!(deserialized.elements.len(), 1);
+    }
+
+    #[test]
+    fn test_legacy_steps_format_deserialization() {
+        // Simulate legacy JSON format with "steps" instead of "elements"
+        let legacy_json = r#"{
+            "goal": "Legacy workflow",
+            "steps": [
+                {
+                    "step_id": "step_1",
+                    "description": "Do something",
+                    "assigned_agent": "TestAgent",
+                    "intent_template": "Execute task",
+                    "expected_output": "Result"
+                }
+            ]
+        }"#;
+
+        let mut strategy: StrategyMap = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(strategy.goal, "Legacy workflow");
+        assert_eq!(strategy.steps.len(), 1);
+        assert_eq!(strategy.elements.len(), 0); // Not migrated yet
+
+        // Migrate
+        strategy.migrate_legacy_steps();
+        assert_eq!(strategy.elements.len(), 1);
+        assert_eq!(strategy.steps.len(), 0); // Cleared after migration
+
+        match &strategy.elements[0] {
+            StrategyInstruction::Step(s) => {
+                assert_eq!(s.step_id, "step_1");
+            }
+            _ => panic!("Expected Step variant"),
+        }
+    }
+
+    #[test]
+    fn test_round_trip_with_mixed_instructions() {
+        let mut strategy = StrategyMap::new("Complex workflow".to_string());
+
+        // Add a regular step
+        strategy.add_step(StrategyStep::new(
+            "step_1".to_string(),
+            "Prepare".to_string(),
+            "Agent1".to_string(),
+            "Setup".to_string(),
+            "Config".to_string(),
+        ));
+
+        // Add a loop
+        strategy.add_instruction(StrategyInstruction::Loop(LoopBlock {
+            loop_id: "refine_loop".to_string(),
+            description: Some("Refine output".to_string()),
+            loop_type: Some(LoopType::UntilConvergence),
+            max_iterations: 3,
+            condition_template: Some("{{ needs_refinement }}".to_string()),
+            body: vec![StrategyInstruction::Step(StrategyStep::new(
+                "refine_step".to_string(),
+                "Refine".to_string(),
+                "Agent2".to_string(),
+                "Improve".to_string(),
+                "Better result".to_string(),
+            ))],
+            aggregation: None,
+        }));
+
+        // Add early termination
+        strategy.add_instruction(StrategyInstruction::Terminate(TerminateInstruction {
+            terminate_id: "success_exit".to_string(),
+            description: Some("Exit on success".to_string()),
+            condition_template: Some("{{ success }}".to_string()),
+            final_output_template: None,
+        }));
+
+        // Round-trip: Serialize and deserialize
+        let json = serde_json::to_string_pretty(&strategy).unwrap();
+        let deserialized: StrategyMap = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.goal, "Complex workflow");
+        assert_eq!(deserialized.elements.len(), 3);
+
+        // Verify structure
+        assert!(matches!(&deserialized.elements[0], StrategyInstruction::Step(_)));
+        assert!(matches!(&deserialized.elements[1], StrategyInstruction::Loop(_)));
+        assert!(matches!(&deserialized.elements[2], StrategyInstruction::Terminate(_)));
+    }
+
+    #[test]
+    fn test_loop_block_validation_success() {
+        // Valid loop with only Steps and Terminate in body
+        let loop_block = LoopBlock {
+            loop_id: "valid_loop".to_string(),
+            description: Some("Valid loop".to_string()),
+            loop_type: Some(LoopType::While),
+            max_iterations: 5,
+            condition_template: Some("{{ continue }}".to_string()),
+            body: vec![
+                StrategyInstruction::Step(StrategyStep::new(
+                    "step_1".to_string(),
+                    "Step".to_string(),
+                    "Agent".to_string(),
+                    "Do work".to_string(),
+                    "Result".to_string(),
+                )),
+                StrategyInstruction::Terminate(TerminateInstruction {
+                    terminate_id: "exit".to_string(),
+                    description: Some("Exit".to_string()),
+                    condition_template: Some("{{ done }}".to_string()),
+                    final_output_template: None,
+                }),
+            ],
+            aggregation: None,
+        };
+
+        assert!(loop_block.validate().is_ok());
+    }
+
+    #[test]
+    fn test_loop_block_validation_nested_loop_fails() {
+        // Invalid loop with nested loop in body
+        let nested_loop_block = LoopBlock {
+            loop_id: "nested_loop".to_string(),
+            description: Some("Nested loop".to_string()),
+            loop_type: Some(LoopType::While),
+            max_iterations: 3,
+            condition_template: Some("{{ inner }}".to_string()),
+            body: vec![StrategyInstruction::Step(StrategyStep::new(
+                "inner_step".to_string(),
+                "Inner".to_string(),
+                "Agent".to_string(),
+                "Work".to_string(),
+                "Result".to_string(),
+            ))],
+            aggregation: None,
+        };
+
+        let outer_loop_block = LoopBlock {
+            loop_id: "outer_loop".to_string(),
+            description: Some("Outer loop".to_string()),
+            loop_type: Some(LoopType::UntilConvergence),
+            max_iterations: 5,
+            condition_template: Some("{{ outer }}".to_string()),
+            body: vec![
+                StrategyInstruction::Step(StrategyStep::new(
+                    "outer_step".to_string(),
+                    "Outer".to_string(),
+                    "Agent".to_string(),
+                    "Work".to_string(),
+                    "Result".to_string(),
+                )),
+                StrategyInstruction::Loop(nested_loop_block),
+            ],
+            aggregation: None,
+        };
+
+        let result = outer_loop_block.validate();
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Nested loops are not supported. Loop body cannot contain other Loop instructions."
+        );
+    }
+
+    #[test]
+    fn test_strategy_map_validation_success() {
+        let mut strategy = StrategyMap::new("Valid strategy".to_string());
+
+        strategy.add_step(StrategyStep::new(
+            "step_1".to_string(),
+            "Step".to_string(),
+            "Agent".to_string(),
+            "Work".to_string(),
+            "Result".to_string(),
+        ));
+
+        strategy.add_instruction(StrategyInstruction::Loop(LoopBlock {
+            loop_id: "loop_1".to_string(),
+            description: Some("Loop".to_string()),
+            loop_type: Some(LoopType::While),
+            max_iterations: 3,
+            condition_template: Some("{{ continue }}".to_string()),
+            body: vec![StrategyInstruction::Step(StrategyStep::new(
+                "loop_step".to_string(),
+                "Loop step".to_string(),
+                "Agent".to_string(),
+                "Loop work".to_string(),
+                "Loop result".to_string(),
+            ))],
+            aggregation: None,
+        }));
+
+        assert!(strategy.validate().is_ok());
+    }
+
+    #[test]
+    fn test_strategy_map_validation_nested_loop_fails() {
+        let mut strategy = StrategyMap::new("Invalid strategy".to_string());
+
+        // Create a loop with nested loop
+        let nested_loop = LoopBlock {
+            loop_id: "nested".to_string(),
+            description: Some("Nested".to_string()),
+            loop_type: Some(LoopType::While),
+            max_iterations: 2,
+            condition_template: None,
+            body: vec![StrategyInstruction::Step(StrategyStep::new(
+                "inner".to_string(),
+                "Inner".to_string(),
+                "Agent".to_string(),
+                "Work".to_string(),
+                "Result".to_string(),
+            ))],
+            aggregation: None,
+        };
+
+        strategy.add_instruction(StrategyInstruction::Loop(LoopBlock {
+            loop_id: "outer".to_string(),
+            description: Some("Outer".to_string()),
+            loop_type: Some(LoopType::UntilConvergence),
+            max_iterations: 3,
+            condition_template: None,
+            body: vec![StrategyInstruction::Loop(nested_loop)],
+            aggregation: None,
+        }));
+
+        let result = strategy.validate();
+        assert!(result.is_err());
     }
 }

@@ -65,7 +65,10 @@ pub mod prompts;
 pub use blueprint::BlueprintWorkflow;
 pub use config::OrchestratorConfig;
 pub use error::OrchestratorError;
-pub use strategy::{RedesignStrategy, StrategyMap, StrategyStep};
+pub use strategy::{
+    AggregationMode, LoopAggregation, LoopBlock, LoopType, RedesignStrategy, StrategyInstruction,
+    StrategyMap, StrategyStep, TerminateInstruction,
+};
 
 use crate::agent::{Agent, AgentAdapter, DynamicAgent};
 use serde::{Deserialize, Serialize};
@@ -122,6 +125,8 @@ pub struct OrchestrationResult {
     pub final_output: Option<JsonValue>,
     pub steps_executed: usize,
     pub redesigns_triggered: usize,
+    pub loops_executed: usize,
+    pub terminations_triggered: usize,
     pub error_message: Option<String>,
 }
 
@@ -718,6 +723,8 @@ impl Orchestrator {
                     final_output: None,
                     steps_executed: 0,
                     redesigns_triggered: 0,
+                    loops_executed: 0,
+                    terminations_triggered: 0,
                     error_message: Some(e.to_string()),
                 };
             }
@@ -730,13 +737,15 @@ impl Orchestrator {
 
         // Phase 2: Execute strategy
         match self.execute_strategy().await {
-            Ok((final_output, steps_executed, redesigns_triggered)) => {
+            Ok((final_output, steps_executed, redesigns_triggered, loops_executed, terminations_triggered)) => {
                 info!("Orchestrator execution completed successfully");
                 OrchestrationResult {
                     status: OrchestrationStatus::Success,
                     final_output: Some(final_output),
                     steps_executed,
                     redesigns_triggered,
+                    loops_executed,
+                    terminations_triggered,
                     error_message: None,
                 }
             }
@@ -747,6 +756,8 @@ impl Orchestrator {
                     final_output: None,
                     steps_executed: 0,
                     redesigns_triggered: 0,
+                    loops_executed: 0,
+                    terminations_triggered: 0,
                     error_message: Some(e.to_string()),
                 }
             }
@@ -1104,9 +1115,9 @@ impl Orchestrator {
     ///
     /// # Returns
     ///
-    /// Returns (final_output, steps_executed, redesigns_triggered).
+    /// Returns (final_output, steps_executed, redesigns_triggered, loops_executed, terminations_triggered).
     #[instrument(skip(self))]
-    async fn execute_strategy(&mut self) -> Result<(JsonValue, usize, usize), OrchestratorError> {
+    async fn execute_strategy(&mut self) -> Result<(JsonValue, usize, usize, usize, usize), OrchestratorError> {
         // Check strategy exists
         if self.strategy_map.is_none() {
             return Err(OrchestratorError::no_strategy());
@@ -1116,6 +1127,8 @@ impl Orchestrator {
         let mut step_index = 0;
         let mut steps_executed = 0;
         let mut redesigns_triggered = 0;
+        let mut loops_executed = 0;
+        let mut terminations_triggered = 0;
         let mut step_remediation_count: HashMap<usize, usize> = HashMap::new();
 
         loop {
@@ -1286,7 +1299,7 @@ impl Orchestrator {
             }
         }
 
-        Ok((final_result, steps_executed, redesigns_triggered))
+        Ok((final_result, steps_executed, redesigns_triggered, loops_executed, terminations_triggered))
     }
 
     /// Determines the appropriate redesign strategy after an error.
@@ -1659,11 +1672,14 @@ mod tests {
         // Verify strategy is set
         assert!(orch.strategy_map().is_some());
         assert_eq!(orch.strategy_map().unwrap().goal, "Test goal");
-        assert_eq!(orch.strategy_map().unwrap().steps.len(), 1);
-        assert_eq!(
-            orch.strategy_map().unwrap().steps[0].description,
-            "Test step"
-        );
+        assert_eq!(orch.strategy_map().unwrap().elements.len(), 1);
+        // Verify the first element is a Step
+        match &orch.strategy_map().unwrap().elements[0] {
+            crate::orchestrator::StrategyInstruction::Step(step) => {
+                assert_eq!(step.description, "Test step");
+            }
+            _ => panic!("Expected first element to be a Step"),
+        }
     }
 
     #[test]

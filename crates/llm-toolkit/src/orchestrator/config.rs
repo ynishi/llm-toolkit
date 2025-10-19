@@ -118,6 +118,33 @@ pub struct OrchestratorConfig {
     ///
     /// **Default:** `false` (disabled, prioritizes quality for thin agent architectures)
     pub enable_fast_path_intent_generation: bool,
+
+    /// Maximum total number of loop iterations allowed across the entire workflow.
+    ///
+    /// This is a global safety limit to prevent runaway costs from loop execution,
+    /// especially important when loops are controlled by LLM decisions or complex templates.
+    ///
+    /// **Counting behavior:**
+    /// - Each iteration of any loop increments the global counter
+    /// - When counter reaches this limit, orchestrator stops with error
+    /// - Example: With 2 loops each executing 3 times, total iterations = 6
+    ///
+    /// **Design constraint:**
+    /// - Nested loops are not supported (enforced by `LoopBlock::validate()`)
+    /// - Only single-level loops are allowed
+    ///
+    /// **Example:**
+    /// ```ignore
+    /// use llm_toolkit::orchestrator::OrchestratorConfig;
+    ///
+    /// let config = OrchestratorConfig {
+    ///     max_total_loop_iterations: 100, // Allow up to 100 loop iterations total
+    ///     ..Default::default()
+    /// };
+    /// ```
+    ///
+    /// **Default:** 50 (reasonable limit for most workflows)
+    pub max_total_loop_iterations: usize,
 }
 
 impl Default for OrchestratorConfig {
@@ -127,6 +154,7 @@ impl Default for OrchestratorConfig {
             max_total_redesigns: 10,
             min_step_interval: Duration::ZERO,
             enable_fast_path_intent_generation: false,
+            max_total_loop_iterations: 50,
         }
     }
 }
@@ -142,6 +170,7 @@ mod tests {
         assert_eq!(config.max_total_redesigns, 10);
         assert_eq!(config.min_step_interval, Duration::ZERO);
         assert!(!config.enable_fast_path_intent_generation); // Default is false (quality over performance)
+        assert_eq!(config.max_total_loop_iterations, 50);
     }
 
     #[test]
@@ -165,6 +194,7 @@ mod tests {
             config1.enable_fast_path_intent_generation,
             config2.enable_fast_path_intent_generation
         );
+        assert_eq!(config1.max_total_loop_iterations, config2.max_total_loop_iterations);
     }
 
     #[test]
