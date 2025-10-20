@@ -56,6 +56,7 @@
 pub mod blueprint;
 pub mod config;
 pub mod error;
+pub mod parallel;
 pub mod strategy;
 
 // Prompt definitions require both derive (ToPrompt macro) and agent (for usage)
