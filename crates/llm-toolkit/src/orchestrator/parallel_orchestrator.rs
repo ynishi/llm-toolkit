@@ -4,9 +4,12 @@
 //! workflow steps concurrently based on their dependencies.
 
 use crate::agent::DynamicAgent;
-use crate::orchestrator::{OrchestratorError, StrategyMap};
+use crate::orchestrator::{
+    OrchestratorError, StrategyInstruction, StrategyMap, StrategyStep, TerminateInstruction,
+};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::mem;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{Instrument, debug, info, info_span, warn};
@@ -29,6 +32,10 @@ pub struct ParallelOrchestrationResult {
     pub context: HashMap<String, JsonValue>,
     /// Error message if failed
     pub error: Option<String>,
+    /// Indicates whether execution ended early via a Terminate instruction
+    pub terminated: bool,
+    /// Optional termination payload rendered from the instruction
+    pub termination_reason: Option<String>,
 }
 
 impl ParallelOrchestrationResult {
@@ -40,6 +47,8 @@ impl ParallelOrchestrationResult {
             steps_skipped: 0,
             context,
             error: None,
+            terminated: false,
+            termination_reason: None,
         }
     }
 
@@ -56,8 +65,40 @@ impl ParallelOrchestrationResult {
             steps_skipped,
             context,
             error: Some(error),
+            terminated: false,
+            termination_reason: None,
         }
     }
+
+    /// Creates a result representing an early termination.
+    pub fn terminated(
+        steps_executed: usize,
+        steps_skipped: usize,
+        context: HashMap<String, JsonValue>,
+        termination_reason: Option<String>,
+    ) -> Self {
+        Self {
+            success: true,
+            steps_executed,
+            steps_skipped,
+            context,
+            error: None,
+            terminated: true,
+            termination_reason,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ExecutionSegment {
+    steps: Vec<StrategyStep>,
+    terminate: Option<TerminateInstruction>,
+}
+
+#[derive(Debug)]
+struct SegmentOutcome {
+    exec_state: ExecutionStateManager,
+    steps_executed: usize,
 }
 
 /// Parallel orchestrator for concurrent workflow execution.
@@ -137,171 +178,108 @@ impl ParallelOrchestrator {
         async {
             info!("Starting parallel orchestration for task: {}", task);
 
-            // 1. Build dependency graph
-            let dep_graph = build_dependency_graph(&self.strategy)?;
-        debug!(
-            "Built dependency graph with {} nodes",
-            dep_graph.node_count()
-        );
+            let (prefix_instructions, truncated_due_to_loop) =
+                Self::collect_parallel_prefix(&self.strategy);
 
-        // 2. Initialize execution state
-        let mut exec_state = ExecutionStateManager::new();
-        let shared_context = Arc::new(Mutex::new(HashMap::new()));
-
-        // Populate initial context
-        {
-            let mut ctx = shared_context.lock().await;
-            ctx.insert("task".to_string(), JsonValue::String(task.to_string()));
-        }
-
-        // Initialize all steps as Pending
-        for step in &self.strategy.steps {
-            exec_state.set_state(&step.step_id, StepState::Pending);
-        }
-
-        // Mark zero-dependency steps as Ready
-        for step_id in dep_graph.get_zero_dependency_steps() {
-            exec_state.set_state(&step_id, StepState::Ready);
-            debug!(step_id = %step_id, "Step marked as Ready (no dependencies)");
-        }
-
-        let mut steps_executed = 0;
-        let mut wave_number = 0;
-
-        // 3. Main execution loop
-        while exec_state.has_ready_or_running_steps() || exec_state.has_pending_steps() {
-            let ready_steps = exec_state.get_ready_steps();
-
-            if ready_steps.is_empty() {
-                // Wait for running tasks or check if we're stuck
-                if !exec_state.has_ready_or_running_steps() {
-                    warn!(
-                        "No ready or running steps, but pending steps remain - potential deadlock"
-                    );
-                    break;
-                }
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                continue;
+            if truncated_due_to_loop {
+                debug!(
+                    "Loop boundary encountered; limiting parallel execution to {} instruction(s)",
+                    prefix_instructions.len()
+                );
             }
 
-            wave_number += 1;
-            let wave_span = info_span!(
-                "wave",
-                wave_number = wave_number,
-                ready_steps = ready_steps.len()
-            );
+            let segments = Self::build_segments(&prefix_instructions);
+            let shared_context = Arc::new(Mutex::new(HashMap::new()));
 
-            let _wave_guard = wave_span.enter();
-
-            info!(
-                "Executing wave {} with {} steps",
-                wave_number,
-                ready_steps.len()
-            );
-
-            // Execute wave
-            for step_id in &ready_steps {
-                exec_state.set_state(step_id, StepState::Running);
-                debug!(step_id = %step_id, "Step execution started");
+            {
+                let mut ctx = shared_context.lock().await;
+                ctx.insert("task".to_string(), JsonValue::String(task.to_string()));
             }
 
-            let results = self
-                .execute_wave(
-                    ready_steps,
-                    &dep_graph,
-                    &exec_state,
-                    Arc::clone(&shared_context),
-                )
-                .await;
+            let mut steps_executed_total = 0usize;
+            let mut steps_skipped_total = 0usize;
 
-            // Process results
-            for (step_id, result) in results {
-                match result {
-                    Ok(output) => {
-                        exec_state.set_state(&step_id, StepState::Completed);
-                        info!(step_id = %step_id, "Step completed successfully");
-                        steps_executed += 1;
+            for (segment_index, segment) in segments.iter().enumerate() {
+                if !segment.steps.is_empty() {
+                    let segment_result = self
+                        .execute_segment(segment, Arc::clone(&shared_context))
+                        .await?;
 
-                        // Store output in context
-                        {
-                            let mut ctx = shared_context.lock().await;
+                    steps_executed_total += segment_result.steps_executed;
+                    steps_skipped_total += segment_result.exec_state.get_skipped_steps().len();
 
-                            // Find the step to get its output_key
-                            if let Some(step) =
-                                self.strategy.steps.iter().find(|s| s.step_id == step_id)
-                            {
-                                let output_key = step
-                                    .output_key
-                                    .clone()
-                                    .unwrap_or_else(|| format!("{}_output", step_id));
-                                ctx.insert(output_key, output);
+                    if segment_result.exec_state.has_failures() {
+                        let final_context = shared_context.lock().await.clone();
+                        steps_skipped_total +=
+                            Self::count_steps_in_segments(&segments, segment_index + 1);
+
+                        let failed_steps = segment_result.exec_state.get_failed_steps();
+                        let mut has_timeout = false;
+                        let mut error_details = Vec::new();
+
+                        for (step_id, err) in &failed_steps {
+                            if matches!(**err, OrchestratorError::StepTimeout { .. }) {
+                                has_timeout = true;
                             }
+                            error_details.push(format!("{}: {}", step_id, err));
                         }
 
-                        // Unlock dependent steps
-                        self.unlock_dependents(&step_id, &dep_graph, &mut exec_state);
-                    }
-                    Err(e) => {
-                        warn!(step_id = %step_id, error = %e, "Step failed");
-                        exec_state.set_state(&step_id, StepState::Failed(Arc::new(e)));
+                        let error_msg = if has_timeout {
+                            format!(
+                                "Workflow failed: {} step(s) timed out, {} skipped. Details: {}",
+                                failed_steps.len(),
+                                steps_skipped_total,
+                                error_details.join("; ")
+                            )
+                        } else {
+                            format!(
+                                "Workflow failed: {} step(s) failed, {} skipped",
+                                failed_steps.len(),
+                                steps_skipped_total
+                            )
+                        };
 
-                        // Cascade skipped to dependents
-                        self.cascade_skipped(&step_id, &dep_graph, &mut exec_state);
+                        return Ok(ParallelOrchestrationResult::failure(
+                            steps_executed_total,
+                            steps_skipped_total,
+                            final_context,
+                            error_msg,
+                        ));
+                    }
+                }
+
+                if let Some(terminate) = &segment.terminate {
+                    let should_terminate = self
+                        .evaluate_termination_condition(terminate, &shared_context)
+                        .await?;
+
+                    if should_terminate {
+                        info!("Termination triggered: {}", terminate.terminate_id);
+
+                        steps_skipped_total +=
+                            Self::count_steps_in_segments(&segments, segment_index + 1);
+
+                        let termination_reason = self
+                            .render_termination_payload(terminate, &shared_context)
+                            .await?;
+
+                        let final_context = shared_context.lock().await.clone();
+
+                        return Ok(ParallelOrchestrationResult::terminated(
+                            steps_executed_total,
+                            steps_skipped_total,
+                            final_context,
+                            termination_reason,
+                        ));
                     }
                 }
             }
-        }
 
-        // 4. Build final result
-        let final_context = shared_context.lock().await.clone();
-        let steps_skipped = exec_state.get_skipped_steps().len();
-
-        if exec_state.has_failures() {
-            let failed_steps = exec_state.get_failed_steps();
-
-            // Check if any failures were due to timeout
-            let mut has_timeout = false;
-            let mut error_details = Vec::new();
-
-            for (step_id, err) in &failed_steps {
-                match &**err {
-                    OrchestratorError::StepTimeout { .. } => {
-                        has_timeout = true;
-                        error_details.push(format!("{}: {}", step_id, err));
-                    }
-                    _ => {
-                        error_details.push(format!("{}: {}", step_id, err));
-                    }
-                }
-            }
-
-            let error_msg = if has_timeout {
-                format!(
-                    "Workflow failed: {} step(s) timed out, {} skipped. Details: {}",
-                    failed_steps.len(),
-                    steps_skipped,
-                    error_details.join("; ")
-                )
-            } else {
-                format!(
-                    "Workflow failed: {} step(s) failed, {} skipped",
-                    failed_steps.len(),
-                    steps_skipped
-                )
-            };
-
-            Ok(ParallelOrchestrationResult::failure(
-                steps_executed,
-                steps_skipped,
-                final_context,
-                error_msg,
-            ))
-        } else {
+            let final_context = shared_context.lock().await.clone();
             Ok(ParallelOrchestrationResult::success(
-                steps_executed,
+                steps_executed_total,
                 final_context,
             ))
-        }
         }
         .instrument(info_span!(
             "parallel_orchestrator_execute",
@@ -315,8 +293,7 @@ impl ParallelOrchestrator {
     async fn execute_wave(
         &self,
         step_ids: Vec<String>,
-        _dep_graph: &DependencyGraph,
-        _exec_state: &ExecutionStateManager,
+        step_lookup: &HashMap<String, StrategyStep>,
         shared_context: Arc<Mutex<HashMap<String, JsonValue>>>,
     ) -> Vec<(String, Result<JsonValue, OrchestratorError>)> {
         let mut tasks = Vec::new();
@@ -324,7 +301,7 @@ impl ParallelOrchestrator {
 
         for step_id in step_ids {
             // Find the step definition
-            let step = match self.strategy.steps.iter().find(|s| s.step_id == step_id) {
+            let step = match step_lookup.get(&step_id) {
                 Some(s) => s.clone(),
                 None => {
                     tasks.push(tokio::spawn(async move {
@@ -422,6 +399,214 @@ impl ParallelOrchestrator {
         }
 
         results
+    }
+
+    async fn execute_segment(
+        &self,
+        segment: &ExecutionSegment,
+        shared_context: Arc<Mutex<HashMap<String, JsonValue>>>,
+    ) -> Result<SegmentOutcome, OrchestratorError> {
+        if segment.steps.is_empty() {
+            return Ok(SegmentOutcome {
+                exec_state: ExecutionStateManager::new(),
+                steps_executed: 0,
+            });
+        }
+
+        let mut subset_strategy = StrategyMap::new(self.strategy.goal.clone());
+        subset_strategy.steps = segment.steps.clone();
+
+        let dep_graph = build_dependency_graph(&subset_strategy)?;
+        let mut exec_state = ExecutionStateManager::new();
+
+        for step in &segment.steps {
+            exec_state.set_state(&step.step_id, StepState::Pending);
+        }
+
+        let step_lookup = Self::create_step_lookup(&segment.steps);
+
+        for step_id in dep_graph.get_zero_dependency_steps() {
+            exec_state.set_state(&step_id, StepState::Ready);
+            debug!(step_id = %step_id, "Step marked as Ready (no dependencies)");
+        }
+
+        let mut steps_executed = 0usize;
+        let mut wave_number = 0usize;
+
+        while exec_state.has_ready_or_running_steps() || exec_state.has_pending_steps() {
+            let ready_steps = exec_state.get_ready_steps();
+
+            if ready_steps.is_empty() {
+                if !exec_state.has_ready_or_running_steps() {
+                    warn!(
+                        "No ready or running steps, but pending steps remain - potential deadlock"
+                    );
+                    break;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                continue;
+            }
+
+            wave_number += 1;
+            let wave_span = info_span!(
+                "wave",
+                wave_number = wave_number,
+                ready_steps = ready_steps.len()
+            );
+
+            let _wave_guard = wave_span.enter();
+
+            info!(
+                "Executing wave {} with {} steps",
+                wave_number,
+                ready_steps.len()
+            );
+
+            for step_id in &ready_steps {
+                exec_state.set_state(step_id, StepState::Running);
+                debug!(step_id = %step_id, "Step execution started");
+            }
+
+            let results = self
+                .execute_wave(ready_steps, &step_lookup, Arc::clone(&shared_context))
+                .await;
+
+            // Process results
+            for (step_id, result) in results {
+                match result {
+                    Ok(output) => {
+                        exec_state.set_state(&step_id, StepState::Completed);
+                        info!(step_id = %step_id, "Step completed successfully");
+                        steps_executed += 1;
+
+                        {
+                            let mut ctx = shared_context.lock().await;
+
+                            if let Some(step) = step_lookup.get(&step_id) {
+                                let output_key = step
+                                    .output_key
+                                    .clone()
+                                    .unwrap_or_else(|| format!("{}_output", step_id));
+                                ctx.insert(output_key, output);
+                            }
+                        }
+
+                        self.unlock_dependents(&step_id, &dep_graph, &mut exec_state);
+                    }
+                    Err(e) => {
+                        warn!(step_id = %step_id, error = %e, "Step failed");
+                        exec_state.set_state(&step_id, StepState::Failed(Arc::new(e)));
+                        self.cascade_skipped(&step_id, &dep_graph, &mut exec_state);
+                    }
+                }
+            }
+        }
+
+        Ok(SegmentOutcome {
+            exec_state,
+            steps_executed,
+        })
+    }
+
+    fn collect_parallel_prefix(strategy: &StrategyMap) -> (Vec<StrategyInstruction>, bool) {
+        if !strategy.elements.is_empty() {
+            let mut prefix = Vec::new();
+            let mut truncated = false;
+
+            for instruction in &strategy.elements {
+                match instruction {
+                    StrategyInstruction::Loop(_) => {
+                        truncated = true;
+                        break;
+                    }
+                    other => prefix.push(other.clone()),
+                }
+            }
+
+            (prefix, truncated)
+        } else {
+            (
+                strategy
+                    .steps
+                    .iter()
+                    .cloned()
+                    .map(StrategyInstruction::Step)
+                    .collect(),
+                false,
+            )
+        }
+    }
+
+    fn build_segments(instructions: &[StrategyInstruction]) -> Vec<ExecutionSegment> {
+        let mut segments = Vec::new();
+        let mut current_steps = Vec::new();
+
+        for instruction in instructions {
+            match instruction {
+                StrategyInstruction::Step(step) => current_steps.push(step.clone()),
+                StrategyInstruction::Terminate(term) => {
+                    segments.push(ExecutionSegment {
+                        steps: mem::take(&mut current_steps),
+                        terminate: Some(term.clone()),
+                    });
+                }
+                StrategyInstruction::Loop(_) => {
+                    // Loop instructions should have been truncated already.
+                }
+            }
+        }
+
+        if !current_steps.is_empty() || segments.is_empty() {
+            segments.push(ExecutionSegment {
+                steps: current_steps,
+                terminate: None,
+            });
+        }
+
+        segments
+    }
+
+    fn count_steps_in_segments(segments: &[ExecutionSegment], start_index: usize) -> usize {
+        segments
+            .iter()
+            .skip(start_index)
+            .map(|segment| segment.steps.len())
+            .sum()
+    }
+
+    fn create_step_lookup(steps: &[StrategyStep]) -> HashMap<String, StrategyStep> {
+        let mut map = HashMap::with_capacity(steps.len());
+        for step in steps {
+            map.insert(step.step_id.clone(), step.clone());
+        }
+        map
+    }
+
+    async fn evaluate_termination_condition(
+        &self,
+        terminate: &TerminateInstruction,
+        context: &Arc<Mutex<HashMap<String, JsonValue>>>,
+    ) -> Result<bool, OrchestratorError> {
+        match &terminate.condition_template {
+            None => Ok(false),
+            Some(template) => {
+                let rendered = Self::render_template(template, context).await?;
+                Ok(rendered.trim().eq_ignore_ascii_case("true"))
+            }
+        }
+    }
+
+    async fn render_termination_payload(
+        &self,
+        terminate: &TerminateInstruction,
+        context: &Arc<Mutex<HashMap<String, JsonValue>>>,
+    ) -> Result<Option<String>, OrchestratorError> {
+        if let Some(template) = &terminate.final_output_template {
+            let rendered = Self::render_template(template, context).await?;
+            Ok(Some(rendered))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Renders a Jinja2 template with the current context.

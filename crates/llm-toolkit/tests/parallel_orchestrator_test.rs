@@ -4,7 +4,10 @@
 //! with various dependency patterns in parallel.
 
 use llm_toolkit::agent::{Agent, AgentError, DynamicAgent, Payload};
-use llm_toolkit::orchestrator::{ParallelOrchestrator, StrategyMap, StrategyStep};
+use llm_toolkit::orchestrator::{
+    LoopBlock, ParallelOrchestrator, StrategyInstruction, StrategyMap, StrategyStep,
+    TerminateInstruction,
+};
 use serde_json::{Value as JsonValue, json};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -435,6 +438,121 @@ async fn test_custom_output_keys() {
     // Verify custom key is used
     assert!(result.context.contains_key("custom_key"));
     assert_eq!(result.context["custom_key"], json!({"result": "custom"}));
+}
+
+/// Ensure the parallel executor stops before encountering a Loop instruction.
+#[tokio::test]
+async fn test_parallel_execution_stops_before_loop() {
+    let mut strategy = StrategyMap::new("Loop Boundary".to_string());
+
+    let step1 = StrategyStep::new(
+        "step_1".to_string(),
+        "First".to_string(),
+        "Agent1".to_string(),
+        "Process {{ task }}".to_string(),
+        "Output 1".to_string(),
+    );
+
+    let step2 = StrategyStep::new(
+        "step_2".to_string(),
+        "Second".to_string(),
+        "Agent2".to_string(),
+        "Process {{ step_1_output }}".to_string(),
+        "Output 2".to_string(),
+    );
+
+    let loop_step = StrategyStep::new(
+        "loop_step".to_string(),
+        "Loop Body".to_string(),
+        "LoopAgent".to_string(),
+        "Process {{ step_2_output }}".to_string(),
+        "Loop Output".to_string(),
+    );
+
+    strategy.add_instruction(StrategyInstruction::Step(step1.clone()));
+    strategy.add_instruction(StrategyInstruction::Step(step2.clone()));
+    strategy.add_instruction(StrategyInstruction::Loop(LoopBlock {
+        loop_id: "loop_1".to_string(),
+        description: None,
+        loop_type: None,
+        max_iterations: 1,
+        condition_template: None,
+        body: vec![StrategyInstruction::Step(loop_step.clone())],
+        aggregation: None,
+    }));
+
+    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    orchestrator.add_agent(
+        "Agent1",
+        Arc::new(MockAgent::new("Agent1", json!({"result": "s1"}))),
+    );
+    orchestrator.add_agent(
+        "Agent2",
+        Arc::new(MockAgent::new("Agent2", json!({"result": "s2"}))),
+    );
+    orchestrator.add_agent(
+        "LoopAgent",
+        Arc::new(MockAgent::new("LoopAgent", json!({"result": "loop"}))),
+    );
+
+    let result = orchestrator.execute("loop task").await.unwrap();
+
+    assert!(result.success);
+    assert!(!result.terminated);
+    assert_eq!(result.steps_executed, 2);
+    assert_eq!(result.steps_skipped, 0);
+    assert!(result.context.contains_key("step_1_output"));
+    assert!(result.context.contains_key("step_2_output"));
+    assert!(!result.context.contains_key("loop_step_output"));
+}
+
+/// Verify that Terminate instructions trigger early shutdown and report skipped steps.
+#[tokio::test]
+async fn test_parallel_execution_with_terminate_instruction() {
+    let mut strategy = StrategyMap::new("Terminate Early".to_string());
+
+    let mut step1 = StrategyStep::new(
+        "step_1".to_string(),
+        "First".to_string(),
+        "Agent1".to_string(),
+        "Process {{ task }}".to_string(),
+        "Output 1".to_string(),
+    );
+    step1.output_key = Some("termination_flag".to_string());
+
+    let step2 = StrategyStep::new(
+        "step_2".to_string(),
+        "Second".to_string(),
+        "Agent2".to_string(),
+        "Process {{ step_1_output }}".to_string(),
+        "Output 2".to_string(),
+    );
+
+    strategy.add_instruction(StrategyInstruction::Step(step1.clone()));
+    strategy.add_instruction(StrategyInstruction::Terminate(TerminateInstruction {
+        terminate_id: "early_stop".to_string(),
+        description: None,
+        condition_template: Some("{{ termination_flag }}".to_string()),
+        final_output_template: None,
+    }));
+    strategy.add_instruction(StrategyInstruction::Step(step2.clone()));
+
+    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    orchestrator.add_agent("Agent1", Arc::new(MockAgent::new("Agent1", json!("true"))));
+    orchestrator.add_agent(
+        "Agent2",
+        Arc::new(MockAgent::new("Agent2", json!({"result": "unused"}))),
+    );
+
+    let result = orchestrator.execute("terminate task").await.unwrap();
+
+    assert!(result.success);
+    assert!(result.terminated);
+    assert_eq!(result.steps_executed, 1);
+    assert_eq!(result.steps_skipped, 1);
+    assert!(result.context.contains_key("termination_flag"));
+    assert!(!result.context.contains_key("step_2_output"));
+    assert!(result.termination_reason.is_none());
 }
 
 /// Test complex DAG with multiple levels

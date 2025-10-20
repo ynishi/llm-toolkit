@@ -4,14 +4,15 @@
 //! execution dependency graphs from strategy maps.
 
 use crate::orchestrator::{OrchestratorError, StrategyMap};
+use minijinja::machinery::{ast, parse};
 use std::collections::{HashMap, HashSet};
 
 use super::DependencyGraph;
 
-/// Extracts top-level variables from a Jinja2 template using regex.
+/// Extracts top-level variables from a Jinja2 template using AST parsing.
 ///
-/// This function uses regular expressions to find all variable references
-/// in the template. Only top-level variable names are extracted (before any dot notation).
+/// This function parses the template into an AST and traverses it to find all
+/// variable references. Only top-level variable names are extracted (before any dot notation).
 ///
 /// # Arguments
 ///
@@ -28,39 +29,190 @@ use super::DependencyGraph;
 /// assert!(vars.contains("step_1_output"));
 /// ```
 pub fn extract_template_variables(template: &str) -> Result<HashSet<String>, OrchestratorError> {
-    use regex::Regex;
+    use minijinja::machinery::WhitespaceConfig;
+    use minijinja::syntax::SyntaxConfig;
+
+    let ast = parse(
+        template,
+        "template",
+        SyntaxConfig,
+        WhitespaceConfig::default(),
+    )
+    .map_err(|e| OrchestratorError::ExecutionFailed(format!("Template parse error: {}", e)))?;
 
     let mut variables = HashSet::new();
 
-    // Match {{ variable }} patterns
-    let var_re = Regex::new(r"\{\{[ \t]*([a-zA-Z_][a-zA-Z0-9_]*)").map_err(|e| {
-        OrchestratorError::ExecutionFailed(format!("Regex compilation failed: {}", e))
-    })?;
-
-    for cap in var_re.captures_iter(template) {
-        if let Some(m) = cap.get(1) {
-            let full_var = m.as_str();
-            // Extract top-level variable (before any dot)
-            let top_level = full_var.split('.').next().unwrap_or(full_var);
-            variables.insert(top_level.to_string());
+    // The parse function returns a Stmt which wraps a Template
+    // We need to extract the Template from it
+    match &ast {
+        ast::Stmt::Template(template) => {
+            for stmt in &template.children {
+                extract_vars_from_stmt(stmt, &mut variables);
+            }
         }
-    }
-
-    // Match {% if variable %}, {% for variable %}, etc.
-    let control_re = Regex::new(r"\{%[ \t]+(?:if|for|elif)[ \t]+([a-zA-Z_][a-zA-Z0-9_]*)")
-        .map_err(|e| {
-            OrchestratorError::ExecutionFailed(format!("Regex compilation failed: {}", e))
-        })?;
-
-    for cap in control_re.captures_iter(template) {
-        if let Some(m) = cap.get(1) {
-            let full_var = m.as_str();
-            let top_level = full_var.split('.').next().unwrap_or(full_var);
-            variables.insert(top_level.to_string());
+        _ => {
+            // Fallback: treat the whole thing as a statement
+            extract_vars_from_stmt(&ast, &mut variables);
         }
     }
 
     Ok(variables)
+}
+
+/// Recursively extracts variables from an AST statement.
+fn extract_vars_from_stmt(stmt: &ast::Stmt<'_>, vars: &mut HashSet<String>) {
+    match stmt {
+        ast::Stmt::Template(template) => {
+            for child in &template.children {
+                extract_vars_from_stmt(child, vars);
+            }
+        }
+        ast::Stmt::EmitExpr(emit) => extract_vars_from_expr(&emit.expr, vars),
+        ast::Stmt::EmitRaw(_) => {}
+        ast::Stmt::ForLoop(for_loop) => {
+            extract_vars_from_expr(&for_loop.iter, vars);
+            if let Some(filter_expr) = &for_loop.filter_expr {
+                extract_vars_from_expr(filter_expr, vars);
+            }
+            for stmt in &for_loop.body {
+                extract_vars_from_stmt(stmt, vars);
+            }
+            for stmt in &for_loop.else_body {
+                extract_vars_from_stmt(stmt, vars);
+            }
+        }
+        ast::Stmt::IfCond(if_cond) => {
+            extract_vars_from_expr(&if_cond.expr, vars);
+            for stmt in &if_cond.true_body {
+                extract_vars_from_stmt(stmt, vars);
+            }
+            for stmt in &if_cond.false_body {
+                extract_vars_from_stmt(stmt, vars);
+            }
+        }
+        ast::Stmt::WithBlock(with_block) => {
+            for (_, value_expr) in &with_block.assignments {
+                extract_vars_from_expr(value_expr, vars);
+            }
+            for stmt in &with_block.body {
+                extract_vars_from_stmt(stmt, vars);
+            }
+        }
+        ast::Stmt::Set(set_stmt) => {
+            extract_vars_from_expr(&set_stmt.expr, vars);
+        }
+        ast::Stmt::SetBlock(set_block) => {
+            if let Some(filter_expr) = &set_block.filter {
+                extract_vars_from_expr(filter_expr, vars);
+            }
+            for stmt in &set_block.body {
+                extract_vars_from_stmt(stmt, vars);
+            }
+        }
+        ast::Stmt::AutoEscape(auto_escape) => {
+            extract_vars_from_expr(&auto_escape.enabled, vars);
+            for stmt in &auto_escape.body {
+                extract_vars_from_stmt(stmt, vars);
+            }
+        }
+        ast::Stmt::FilterBlock(filter_block) => {
+            extract_vars_from_expr(&filter_block.filter, vars);
+            for stmt in &filter_block.body {
+                extract_vars_from_stmt(stmt, vars);
+            }
+        }
+        ast::Stmt::Do(do_stmt) => extract_vars_from_call(&do_stmt.call, vars),
+        _ => {}
+    }
+}
+
+/// Recursively extracts variables from an AST expression.
+fn extract_vars_from_expr(expr: &ast::Expr<'_>, vars: &mut HashSet<String>) {
+    match expr {
+        ast::Expr::Var(var) => {
+            // Extract top-level variable name (before any dots)
+            let name = var.id.split('.').next().unwrap_or(var.id);
+            vars.insert(name.to_string());
+        }
+        ast::Expr::Const(_) => {}
+        ast::Expr::GetAttr(get_attr) => {
+            extract_vars_from_expr(&get_attr.expr, vars);
+        }
+        ast::Expr::GetItem(get_item) => {
+            extract_vars_from_expr(&get_item.expr, vars);
+            extract_vars_from_expr(&get_item.subscript_expr, vars);
+        }
+        ast::Expr::Filter(filter) => {
+            if let Some(ref expr) = filter.expr {
+                extract_vars_from_expr(expr, vars);
+            }
+            for arg in &filter.args {
+                extract_vars_from_call_arg(arg, vars);
+            }
+        }
+        ast::Expr::Test(test) => {
+            extract_vars_from_expr(&test.expr, vars);
+            for arg in &test.args {
+                extract_vars_from_call_arg(arg, vars);
+            }
+        }
+        ast::Expr::BinOp(bin_op) => {
+            extract_vars_from_expr(&bin_op.left, vars);
+            extract_vars_from_expr(&bin_op.right, vars);
+        }
+        ast::Expr::UnaryOp(unary_op) => {
+            extract_vars_from_expr(&unary_op.expr, vars);
+        }
+        ast::Expr::Call(call) => extract_vars_from_call(call, vars),
+        ast::Expr::IfExpr(if_expr) => {
+            extract_vars_from_expr(&if_expr.test_expr, vars);
+            extract_vars_from_expr(&if_expr.true_expr, vars);
+            if let Some(false_expr) = &if_expr.false_expr {
+                extract_vars_from_expr(false_expr, vars);
+            }
+        }
+        ast::Expr::List(list) => {
+            for item in &list.items {
+                extract_vars_from_expr(item, vars);
+            }
+        }
+        ast::Expr::Map(map) => {
+            for key in &map.keys {
+                extract_vars_from_expr(key, vars);
+            }
+            for value in &map.values {
+                extract_vars_from_expr(value, vars);
+            }
+        }
+        ast::Expr::Slice(slice) => {
+            extract_vars_from_expr(&slice.expr, vars);
+            if let Some(start) = &slice.start {
+                extract_vars_from_expr(start, vars);
+            }
+            if let Some(stop) = &slice.stop {
+                extract_vars_from_expr(stop, vars);
+            }
+            if let Some(step) = &slice.step {
+                extract_vars_from_expr(step, vars);
+            }
+        }
+    }
+}
+
+fn extract_vars_from_call(call: &ast::Call<'_>, vars: &mut HashSet<String>) {
+    extract_vars_from_expr(&call.expr, vars);
+    for arg in &call.args {
+        extract_vars_from_call_arg(arg, vars);
+    }
+}
+
+fn extract_vars_from_call_arg(arg: &ast::CallArg<'_>, vars: &mut HashSet<String>) {
+    match arg {
+        ast::CallArg::Pos(expr)
+        | ast::CallArg::PosSplat(expr)
+        | ast::CallArg::Kwarg(_, expr)
+        | ast::CallArg::KwargSplat(expr) => extract_vars_from_expr(expr, vars),
+    }
 }
 
 /// Builds a dependency graph from a strategy map.
@@ -114,8 +266,8 @@ pub fn build_dependency_graph(
         let variables = extract_template_variables(&step.intent_template)?;
 
         for var in variables {
-            // Skip built-in variables like "task" and "previous_output"
-            if var == "task" || var == "previous_output" {
+            // Skip built-in variables like "task"
+            if var == "task" {
                 continue;
             }
 
@@ -180,6 +332,39 @@ mod tests {
 
         assert_eq!(vars.len(), 1);
         assert!(vars.contains("step_1_output"));
+    }
+
+    #[test]
+    fn test_extract_variables_in_filter_with_args() {
+        // Test complex case: filters with arguments that are also variables
+        let template = "{{ my_var | filter(other_var) | another_filter(third_var, 'constant') }}";
+        let vars = extract_template_variables(template).unwrap();
+
+        // Should extract all three variables
+        assert_eq!(vars.len(), 3);
+        assert!(vars.contains("my_var"));
+        assert!(vars.contains("other_var"));
+        assert!(vars.contains("third_var"));
+    }
+
+    #[test]
+    fn test_extract_variables_complex_expressions() {
+        // Test complex expressions with nested filters, conditionals, and operations
+        let template = r#"
+            {% if condition_var %}
+                {{ data.field | process(param_var) }}
+                {{ result_var + offset_var }}
+            {% endif %}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+
+        // Should extract top-level variables from all parts
+        assert_eq!(vars.len(), 5);
+        assert!(vars.contains("condition_var"));
+        assert!(vars.contains("data"));
+        assert!(vars.contains("param_var"));
+        assert!(vars.contains("result_var"));
+        assert!(vars.contains("offset_var"));
     }
 
     #[test]
@@ -283,13 +468,13 @@ mod tests {
             "step_1".to_string(),
             "First".to_string(),
             "Agent1".to_string(),
-            "Do {{ task }} with {{ previous_output }}".to_string(),
+            "Do {{ task }}".to_string(),
             "Output 1".to_string(),
         ));
 
         let graph = build_dependency_graph(&strategy).unwrap();
 
-        // step_1 should have no dependencies (task and previous_output are built-ins)
+        // step_1 should have no dependencies (task is a built-in)
         assert!(graph.get_dependencies("step_1").is_empty());
     }
 
