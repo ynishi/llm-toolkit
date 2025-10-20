@@ -57,6 +57,7 @@ pub mod blueprint;
 pub mod config;
 pub mod error;
 pub mod parallel;
+mod parallel_orchestrator;
 pub mod strategy;
 
 // Prompt definitions require both derive (ToPrompt macro) and agent (for usage)
@@ -66,6 +67,7 @@ pub mod prompts;
 pub use blueprint::BlueprintWorkflow;
 pub use config::OrchestratorConfig;
 pub use error::OrchestratorError;
+pub use parallel_orchestrator::{ParallelOrchestrationResult, ParallelOrchestrator};
 pub use strategy::{
     AggregationMode, LoopAggregation, LoopBlock, LoopType, RedesignStrategy, StrategyInstruction,
     StrategyMap, StrategyStep, TerminateInstruction,
