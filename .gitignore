@@ -21,3 +21,6 @@ target
 #.idea/
 
 /workspace/
+
+# Remove Cargo.lock from gitignore if creating a binary crate
+Cargo.lock
