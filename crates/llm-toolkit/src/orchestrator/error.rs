@@ -56,6 +56,13 @@ pub enum OrchestratorError {
     /// The internal agent failed to recover even after a fallback attempt.
     #[error("The internal agent failed to recover even after a fallback attempt: {0}")]
     InternalAgentUnrecoverable(String),
+
+    /// A step execution timed out.
+    #[error("Step '{step_id}' timed out after {timeout:?}")]
+    StepTimeout {
+        step_id: String,
+        timeout: std::time::Duration,
+    },
 }
 
 impl OrchestratorError {

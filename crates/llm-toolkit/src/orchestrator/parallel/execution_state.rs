@@ -116,6 +116,15 @@ impl ExecutionStateManager {
             .collect()
     }
 
+    /// Returns all step IDs that were skipped due to failed dependencies.
+    pub fn get_skipped_steps(&self) -> Vec<String> {
+        self.states
+            .iter()
+            .filter(|(_, state)| matches!(state, StepState::Skipped))
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
     /// Returns true if all steps are in the Completed state.
     pub fn all_completed(&self) -> bool {
         !self.states.is_empty()

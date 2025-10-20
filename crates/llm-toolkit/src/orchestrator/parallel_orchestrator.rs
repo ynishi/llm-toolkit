@@ -254,16 +254,42 @@ impl ParallelOrchestrator {
 
         // 4. Build final result
         let final_context = shared_context.lock().await.clone();
-        let steps_skipped =
-            exec_state.get_ready_steps().len() + exec_state.get_running_steps().len();
+        let steps_skipped = exec_state.get_skipped_steps().len();
 
         if exec_state.has_failures() {
             let failed_steps = exec_state.get_failed_steps();
-            let error_msg = format!(
-                "Workflow failed: {} step(s) failed, {} skipped",
-                failed_steps.len(),
-                steps_skipped
-            );
+
+            // Check if any failures were due to timeout
+            let mut has_timeout = false;
+            let mut error_details = Vec::new();
+
+            for (step_id, err) in &failed_steps {
+                match &**err {
+                    OrchestratorError::StepTimeout { .. } => {
+                        has_timeout = true;
+                        error_details.push(format!("{}: {}", step_id, err));
+                    }
+                    _ => {
+                        error_details.push(format!("{}: {}", step_id, err));
+                    }
+                }
+            }
+
+            let error_msg = if has_timeout {
+                format!(
+                    "Workflow failed: {} step(s) timed out, {} skipped. Details: {}",
+                    failed_steps.len(),
+                    steps_skipped,
+                    error_details.join("; ")
+                )
+            } else {
+                format!(
+                    "Workflow failed: {} step(s) failed, {} skipped",
+                    failed_steps.len(),
+                    steps_skipped
+                )
+            };
+
             Ok(ParallelOrchestrationResult::failure(
                 steps_executed,
                 steps_skipped,
@@ -294,6 +320,7 @@ impl ParallelOrchestrator {
         shared_context: Arc<Mutex<HashMap<String, JsonValue>>>,
     ) -> Vec<(String, Result<JsonValue, OrchestratorError>)> {
         let mut tasks = Vec::new();
+        let step_timeout = self.config.step_timeout;
 
         for step_id in step_ids {
             // Find the step definition
@@ -349,11 +376,34 @@ impl ParallelOrchestrator {
                         Err(e) => return (step_id.clone(), Err(e)),
                     };
 
-                    // Execute agent
-                    let result = agent
-                        .execute_dynamic(intent.into())
+                    // Execute agent with optional timeout
+                    let result = if let Some(timeout_duration) = step_timeout {
+                        match tokio::time::timeout(
+                            timeout_duration,
+                            agent.execute_dynamic(intent.into()),
+                        )
                         .await
-                        .map_err(|e| e.into());
+                        {
+                            Ok(Ok(output)) => Ok(output),
+                            Ok(Err(e)) => Err(e.into()),
+                            Err(_) => {
+                                warn!(
+                                    step_id = %step_id,
+                                    timeout = ?timeout_duration,
+                                    "Step execution timed out"
+                                );
+                                Err(OrchestratorError::StepTimeout {
+                                    step_id: step_id.clone(),
+                                    timeout: timeout_duration,
+                                })
+                            }
+                        }
+                    } else {
+                        agent
+                            .execute_dynamic(intent.into())
+                            .await
+                            .map_err(|e| e.into())
+                    };
 
                     (step_id.clone(), result)
                 }
