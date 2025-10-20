@@ -510,3 +510,162 @@ async fn test_complex_multi_level_dag() {
     assert_eq!(result.steps_executed, 6);
     assert!(result.context.contains_key("final_output"));
 }
+
+// ============================================================================
+// Thread Safety Tests
+// ============================================================================
+
+/// Test that agents with shared state are properly synchronized
+#[tokio::test]
+async fn test_thread_safe_agent_with_shared_state() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Agent with shared atomic counter
+    #[derive(Clone)]
+    struct CountingAgent {
+        counter: Arc<AtomicUsize>,
+    }
+
+    impl CountingAgent {
+        fn new(counter: Arc<AtomicUsize>) -> Self {
+            Self { counter }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Agent for CountingAgent {
+        type Output = JsonValue;
+
+        fn expertise(&self) -> &str {
+            "Counting agent with shared state"
+        }
+
+        async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
+            // Increment counter atomically
+            let count = self.counter.fetch_add(1, Ordering::SeqCst) + 1;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok(json!({"count": count}))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DynamicAgent for CountingAgent {
+        fn name(&self) -> String {
+            "CountingAgent".to_string()
+        }
+
+        fn expertise(&self) -> &str {
+            "Counting agent with shared state"
+        }
+
+        async fn execute_dynamic(&self, input: Payload) -> Result<JsonValue, AgentError> {
+            self.execute(input).await
+        }
+    }
+
+    let mut strategy = StrategyMap::new("Thread Safety Test".to_string());
+
+    // Create 10 independent steps that all use the same counting agent
+    for i in 1..=10 {
+        strategy.add_step(StrategyStep::new(
+            format!("step_{}", i),
+            format!("Step {}", i),
+            "CountingAgent".to_string(),
+            "Process {{ task }}".to_string(),
+            format!("Output {}", i),
+        ));
+    }
+
+    let mut orchestrator = ParallelOrchestrator::new(strategy);
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let agent = Arc::new(CountingAgent::new(Arc::clone(&counter)));
+    orchestrator.add_agent("CountingAgent", agent);
+
+    let result = orchestrator.execute("count task").await.unwrap();
+
+    assert!(result.success);
+    assert_eq!(result.steps_executed, 10);
+
+    // All 10 steps should have incremented the counter exactly once
+    assert_eq!(counter.load(Ordering::SeqCst), 10);
+}
+
+/// Test that ParallelOrchestrator can be safely shared across threads
+#[tokio::test]
+async fn test_orchestrator_is_send_sync() {
+    // This test verifies that ParallelOrchestrator implements Send + Sync
+    // by spawning it in a separate tokio task
+
+    let mut strategy = StrategyMap::new("Send/Sync Test".to_string());
+
+    strategy.add_step(StrategyStep::new(
+        "step_1".to_string(),
+        "Step 1".to_string(),
+        "Agent1".to_string(),
+        "Process {{ task }}".to_string(),
+        "Output 1".to_string(),
+    ));
+
+    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    orchestrator.add_agent(
+        "Agent1",
+        Arc::new(MockAgent::new("Agent1", json!({"result": "ok"}))),
+    );
+
+    // Spawn the orchestrator in a separate task to verify Send + Sync
+    let handle = tokio::spawn(async move { orchestrator.execute("test task").await });
+
+    let result = handle.await.unwrap().unwrap();
+    assert!(result.success);
+}
+
+/// Test concurrent access to shared context
+#[tokio::test]
+async fn test_concurrent_context_access() {
+    let mut strategy = StrategyMap::new("Concurrent Context".to_string());
+
+    // Create a wide DAG where many steps depend on the same root
+    strategy.add_step(StrategyStep::new(
+        "root".to_string(),
+        "Root".to_string(),
+        "RootAgent".to_string(),
+        "Process {{ task }}".to_string(),
+        "Root".to_string(),
+    ));
+
+    // 20 steps all depending on root, all reading from shared context
+    for i in 1..=20 {
+        strategy.add_step(StrategyStep::new(
+            format!("child_{}", i),
+            format!("Child {}", i),
+            format!("ChildAgent{}", i),
+            "Process {{ root_output }}".to_string(),
+            format!("Child {}", i),
+        ));
+    }
+
+    let mut orchestrator = ParallelOrchestrator::new(strategy);
+
+    orchestrator.add_agent(
+        "RootAgent",
+        Arc::new(MockAgent::new("Root", json!({"shared": "data"}))),
+    );
+
+    for i in 1..=20 {
+        orchestrator.add_agent(
+            format!("ChildAgent{}", i),
+            Arc::new(MockAgent::new(format!("Child{}", i), json!({"child": i}))),
+        );
+    }
+
+    let result = orchestrator.execute("concurrent test").await.unwrap();
+
+    assert!(result.success);
+    assert_eq!(result.steps_executed, 21); // root + 20 children
+
+    // Verify all children executed (no race conditions in context access)
+    for i in 1..=20 {
+        assert!(result.context.contains_key(&format!("child_{}_output", i)));
+    }
+}

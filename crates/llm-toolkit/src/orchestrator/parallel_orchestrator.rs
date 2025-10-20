@@ -9,7 +9,7 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::{Instrument, debug, info, info_span, warn};
 
 use super::parallel::{
     DependencyGraph, ExecutionStateManager, ParallelOrchestratorConfig, StepState,
@@ -132,10 +132,13 @@ impl ParallelOrchestrator {
         &mut self,
         task: &str,
     ) -> Result<ParallelOrchestrationResult, OrchestratorError> {
-        info!("Starting parallel orchestration for task: {}", task);
+        let total_steps = self.strategy.steps.len();
 
-        // 1. Build dependency graph
-        let dep_graph = build_dependency_graph(&self.strategy)?;
+        async {
+            info!("Starting parallel orchestration for task: {}", task);
+
+            // 1. Build dependency graph
+            let dep_graph = build_dependency_graph(&self.strategy)?;
         debug!(
             "Built dependency graph with {} nodes",
             dep_graph.node_count()
@@ -159,7 +162,7 @@ impl ParallelOrchestrator {
         // Mark zero-dependency steps as Ready
         for step_id in dep_graph.get_zero_dependency_steps() {
             exec_state.set_state(&step_id, StepState::Ready);
-            debug!("Step {} is ready (no dependencies)", step_id);
+            debug!(step_id = %step_id, "Step marked as Ready (no dependencies)");
         }
 
         let mut steps_executed = 0;
@@ -182,6 +185,14 @@ impl ParallelOrchestrator {
             }
 
             wave_number += 1;
+            let wave_span = info_span!(
+                "wave",
+                wave_number = wave_number,
+                ready_steps = ready_steps.len()
+            );
+
+            let _wave_guard = wave_span.enter();
+
             info!(
                 "Executing wave {} with {} steps",
                 wave_number,
@@ -191,6 +202,7 @@ impl ParallelOrchestrator {
             // Execute wave
             for step_id in &ready_steps {
                 exec_state.set_state(step_id, StepState::Running);
+                debug!(step_id = %step_id, "Step execution started");
             }
 
             let results = self
@@ -207,6 +219,7 @@ impl ParallelOrchestrator {
                 match result {
                     Ok(output) => {
                         exec_state.set_state(&step_id, StepState::Completed);
+                        info!(step_id = %step_id, "Step completed successfully");
                         steps_executed += 1;
 
                         // Store output in context
@@ -229,7 +242,7 @@ impl ParallelOrchestrator {
                         self.unlock_dependents(&step_id, &dep_graph, &mut exec_state);
                     }
                     Err(e) => {
-                        warn!("Step {} failed: {}", step_id, e);
+                        warn!(step_id = %step_id, error = %e, "Step failed");
                         exec_state.set_state(&step_id, StepState::Failed(Arc::new(e)));
 
                         // Cascade skipped to dependents
@@ -263,6 +276,13 @@ impl ParallelOrchestrator {
                 final_context,
             ))
         }
+        }
+        .instrument(info_span!(
+            "parallel_orchestrator_execute",
+            task = %task,
+            total_steps = total_steps,
+        ))
+        .await
     }
 
     /// Executes a wave of independent steps concurrently.
@@ -312,22 +332,33 @@ impl ParallelOrchestrator {
 
             let context = Arc::clone(&shared_context);
 
-            // Spawn task
-            let task = tokio::spawn(async move {
-                // Render intent template
-                let intent = match Self::render_template(&step.intent_template, &context).await {
-                    Ok(i) => i,
-                    Err(e) => return (step_id.clone(), Err(e)),
-                };
+            // Create span for this step
+            let step_span = info_span!(
+                "parallel_step",
+                step_id = %step.step_id,
+                agent_name = %step.assigned_agent,
+            );
 
-                // Execute agent
-                let result = agent
-                    .execute_dynamic(intent.into())
-                    .await
-                    .map_err(|e| e.into());
+            // Spawn task with span
+            let task = tokio::spawn(
+                async move {
+                    // Render intent template
+                    let intent = match Self::render_template(&step.intent_template, &context).await
+                    {
+                        Ok(i) => i,
+                        Err(e) => return (step_id.clone(), Err(e)),
+                    };
 
-                (step_id.clone(), result)
-            });
+                    // Execute agent
+                    let result = agent
+                        .execute_dynamic(intent.into())
+                        .await
+                        .map_err(|e| e.into());
+
+                    (step_id.clone(), result)
+                }
+                .instrument(step_span),
+            );
 
             tasks.push(task);
         }
@@ -381,7 +412,7 @@ impl ParallelOrchestrator {
                 )
             {
                 exec_state.set_state(&dependent_id, StepState::Ready);
-                debug!("Step {} is now ready", dependent_id);
+                debug!(step_id = %dependent_id, "Step marked as Ready (dependencies completed)");
             }
         }
     }
@@ -405,7 +436,7 @@ impl ParallelOrchestrator {
             for dependent in dep_graph.get_dependents(&step_id) {
                 if !matches!(exec_state.get_state(&dependent), Some(StepState::Completed)) {
                     exec_state.set_state(&dependent, StepState::Skipped);
-                    debug!("Step {} skipped due to failed dependency", dependent);
+                    debug!(step_id = %dependent, failed_dependency = %step_id, "Step skipped due to failed dependency");
                     to_skip.push(dependent.clone());
                 }
             }
