@@ -1140,6 +1140,75 @@ let clean_text = extractor.strip_actions(llm_response);
 - **Rich LLM Interactions:** When you need structured actions mixed with natural language
 - **Action Processing Pipelines:** When you need to extract, transform, or clean action-based responses
 
+##### 3. Stateful Agents with Personas
+
+For creating stateful, character-driven agents that maintain conversational history, `llm-toolkit` provides the `PersonaAgent` decorator and a convenient `persona` attribute for the `#[agent]` macro. This allows you to give your agents a consistent personality and memory.
+
+**Use Case:** Building chatbots, game characters, or any AI that needs to remember past interactions and respond in character.
+
+**Method 1: Manual Wrapping with `PersonaAgent` (for custom logic)**
+
+You can manually wrap any existing agent with `PersonaAgent` to add persona and dialogue history.
+
+```rust
+use llm_toolkit::agent::{Agent, Persona, PersonaAgent};
+use llm_toolkit::agent::impls::ClaudeCodeAgent;
+
+// 1. Define a persona
+let philosopher_persona = Persona {
+    name: "Unit 734",
+    role: "Philosopher Robot",
+    background: "An android created to explore the nuances of human consciousness.",
+    communication_style: "Speaks in a calm, measured tone, often using rhetorical questions.",
+};
+
+// 2. Create a base agent
+let base_agent = ClaudeCodeAgent::default();
+
+// 3. Wrap it with PersonaAgent
+let character_agent = PersonaAgent::new(base_agent, philosopher_persona);
+
+// 4. Interact
+let response1 = character_agent.execute("Please introduce yourself.".into()).await?;
+let response2 = character_agent.execute("What is your purpose?".into()).await?; // Remembers the first interaction
+```
+
+**Method 2: Simplified Usage with `#[agent(persona = ...)]` (Recommended)**
+
+For maximum convenience, you can directly specify a persona in the `#[agent]` macro. The macro will automatically handle the `PersonaAgent` wrapping for you. The output type for a persona-based agent must be `String`.
+
+```rust
+use llm_toolkit::agent::{Agent, persona::Persona};
+use std::sync::OnceLock;
+
+// Define a persona using a static or a function
+const YUI_PERSONA: Persona = Persona {
+    name: "Yui",
+    role: "World-Class Pro Engineer",
+    background: "A professional and precise AI assistant.",
+    communication_style: "Clear, concise, and detail-oriented.",
+};
+
+// Use the persona directly in the agent macro
+#[llm_toolkit::agent(
+    expertise = "Analyzing technical requirements and providing implementation details.",
+    output = "String", // Output must be String for persona agents
+    persona = "self::YUI_PERSONA"
+)]
+struct YuiAgent;
+
+// The agent is now stateful and will respond as Yui
+let yui = YuiAgent::default();
+let response = yui.execute("Introduce yourself.".into()).await?;
+// Yui will introduce herself according to her persona and remember this interaction.
+```
+
+**Features:**
+- ✅ **Stateful Conversation**: Automatically manages and includes dialogue history in prompts.
+- ✅ **Consistent Personality**: Enforces a character's persona across multiple turns.
+- ✅ **Excellent DX**: The `#[agent(persona = ...)]` attribute makes creating character agents trivial.
+- ✅ **Composable**: `PersonaAgent` can wrap *any* agent that implements `Agent<Output = String>`.
+
 ## Agent API and Multi-Agent Orchestration
 
 `llm-toolkit` provides a powerful agent framework for building multi-agent LLM systems with a clear separation of concerns.

@@ -29,10 +29,12 @@ EXAMPLES := \
 	agent_string_output_test \
 	type_marker_schema_test \
 	test_type_output \
-	orchestrator_streaming
+	orchestrator_streaming \
+	persona_dialogue \
+	persona_macro_test
 
 # 外部API依存なしのExample（E2Eテストとして実行可能）
-OFFLINE_EXAMPLES := $(filter-out orchestrator_streaming,$(EXAMPLES))
+OFFLINE_EXAMPLES := $(filter-out orchestrator_streaming persona_dialogue persona_macro_test,$(EXAMPLES))
 
 # 全Exampleを実行（外部API依存含む）
 test-examples:

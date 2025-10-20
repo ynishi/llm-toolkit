@@ -121,6 +121,9 @@ pub use prompt::{PromptPart, PromptSetError, ToPrompt, ToPromptFor, ToPromptSet}
 pub use agent::{Agent, AgentError};
 
 #[cfg(feature = "agent")]
+pub use agent::persona::{Persona, PersonaAgent};
+
+#[cfg(feature = "agent")]
 pub use orchestrator::{
     BlueprintWorkflow, Orchestrator, OrchestratorError, StrategyMap, TypeMarker,
 };

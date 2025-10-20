@@ -3895,6 +3895,7 @@ struct AgentAttrs {
     default_inner: Option<String>,
     max_retries: Option<u32>,
     profile: Option<String>,
+    persona: Option<syn::Expr>,
 }
 
 impl Parse for AgentAttrs {
@@ -3907,6 +3908,7 @@ impl Parse for AgentAttrs {
         let mut default_inner = None;
         let mut max_retries = None;
         let mut profile = None;
+        let mut persona = None;
 
         let pairs = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
 
@@ -3985,6 +3987,17 @@ impl Parse for AgentAttrs {
                         profile = Some(lit_str.value());
                     }
                 }
+                Meta::NameValue(nv) if nv.path.is_ident("persona") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = &nv.value
+                    {
+                        // Parse the string as an expression (e.g., "self::MAI_PERSONA" or "mai_persona()")
+                        let expr: syn::Expr = syn::parse_str(&lit_str.value())?;
+                        persona = Some(expr);
+                    }
+                }
                 _ => {}
             }
         }
@@ -3998,6 +4011,7 @@ impl Parse for AgentAttrs {
             default_inner,
             max_retries,
             profile,
+            persona,
         })
     }
 }
@@ -4019,6 +4033,7 @@ fn parse_agent_attrs(attrs: &[syn::Attribute]) -> syn::Result<AgentAttrs> {
         default_inner: None,
         max_retries: None,
         profile: None,
+        persona: None,
     })
 }
 
@@ -4364,10 +4379,21 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
         .unwrap_or_else(|| String::from("claude"));
     let model = agent_attrs.model;
     let profile = agent_attrs.profile;
+    let persona = agent_attrs.persona;
 
     // Check if output type is String (no JSON enforcement needed)
     let output_type_str = quote!(#output_type).to_string().replace(" ", "");
     let is_string_output = output_type_str == "String" || output_type_str == "&str";
+
+    // Validate: if persona is specified, output must be String
+    if persona.is_some() && !is_string_output {
+        return syn::Error::new_spanned(
+            struct_name,
+            "When using persona attribute, output type must be String (PersonaAgent requires Output = String)"
+        )
+        .to_compile_error()
+        .into();
+    }
 
     // Determine crate path
     let found_crate =
@@ -4401,25 +4427,146 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    // Generate struct definition
-    let struct_def = quote! {
-        #vis struct #struct_name<#inner_generic_ident = #default_agent_type> {
-            inner: #inner_generic_ident,
-        }
+    // Generate struct definition - wrap with PersonaAgent if persona is specified
+    let (struct_def, _actual_inner_type, uses_persona) = if let Some(ref _persona_path) = persona {
+        // When persona is specified, the inner type is PersonaAgent<ActualInner>
+        // The generic parameter needs the Agent<Output = String> bound
+        let wrapped_type =
+            quote! { #crate_path::agent::persona::PersonaAgent<#inner_generic_ident> };
+        let struct_def = quote! {
+            #vis struct #struct_name<#inner_generic_ident: #crate_path::agent::Agent<Output = String> + Send + Sync = #default_agent_type> {
+                inner: #wrapped_type,
+            }
+        };
+        (struct_def, wrapped_type, true)
+    } else {
+        // Normal case: inner type is the generic parameter itself
+        let struct_def = quote! {
+            #vis struct #struct_name<#inner_generic_ident = #default_agent_type> {
+                inner: #inner_generic_ident,
+            }
+        };
+        (struct_def, quote! { #inner_generic_ident }, false)
     };
 
-    // Generate basic constructor
-    let constructors = quote! {
-        impl<#inner_generic_ident> #struct_name<#inner_generic_ident> {
-            /// Create a new agent with a custom inner agent implementation
-            pub fn new(inner: #inner_generic_ident) -> Self {
-                Self { inner }
+    // Generate basic constructor - wrap with PersonaAgent if needed
+    let constructors = if let Some(ref persona_path) = persona {
+        quote! {
+            impl<#inner_generic_ident: #crate_path::agent::Agent<Output = String> + Send + Sync> #struct_name<#inner_generic_ident> {
+                /// Create a new agent with a custom inner agent implementation wrapped in PersonaAgent
+                pub fn new(inner: #inner_generic_ident) -> Self {
+                    let persona_agent = #crate_path::agent::persona::PersonaAgent::new(
+                        inner,
+                        #persona_path.clone()
+                    );
+                    Self { inner: persona_agent }
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl<#inner_generic_ident> #struct_name<#inner_generic_ident> {
+                /// Create a new agent with a custom inner agent implementation
+                pub fn new(inner: #inner_generic_ident) -> Self {
+                    Self { inner }
+                }
             }
         }
     };
 
     // Generate backend-specific constructors and Default implementation
-    let (backend_constructors, default_impl) = if agent_attrs.default_inner.is_some() {
+    let (backend_constructors, default_impl) = if let Some(ref _persona_path) = persona {
+        // With persona: wrap backend agents with PersonaAgent
+        let agent_init = match backend.as_str() {
+            "gemini" => {
+                let mut builder = quote! { #crate_path::agent::impls::GeminiAgent::new() };
+                if let Some(model_str) = model.as_deref() {
+                    builder = quote! { #builder.with_model_str(#model_str) };
+                }
+                if let Some(profile_str) = profile.as_deref() {
+                    let profile_expr = match profile_str.to_lowercase().as_str() {
+                        "creative" => quote! { #crate_path::agent::ExecutionProfile::Creative },
+                        "balanced" => quote! { #crate_path::agent::ExecutionProfile::Balanced },
+                        "deterministic" => {
+                            quote! { #crate_path::agent::ExecutionProfile::Deterministic }
+                        }
+                        _ => quote! { #crate_path::agent::ExecutionProfile::Balanced },
+                    };
+                    builder = quote! { #builder.with_execution_profile(#profile_expr) };
+                }
+                builder
+            }
+            _ => {
+                let mut builder = quote! { #crate_path::agent::impls::ClaudeCodeAgent::new() };
+                if let Some(model_str) = model.as_deref() {
+                    builder = quote! { #builder.with_model_str(#model_str) };
+                }
+                if let Some(profile_str) = profile.as_deref() {
+                    let profile_expr = match profile_str.to_lowercase().as_str() {
+                        "creative" => quote! { #crate_path::agent::ExecutionProfile::Creative },
+                        "balanced" => quote! { #crate_path::agent::ExecutionProfile::Balanced },
+                        "deterministic" => {
+                            quote! { #crate_path::agent::ExecutionProfile::Deterministic }
+                        }
+                        _ => quote! { #crate_path::agent::ExecutionProfile::Balanced },
+                    };
+                    builder = quote! { #builder.with_execution_profile(#profile_expr) };
+                }
+                builder
+            }
+        };
+
+        let backend_constructors = match backend.as_str() {
+            "claude" => {
+                quote! {
+                    impl #struct_name {
+                        /// Create a new agent with ClaudeCodeAgent backend wrapped in PersonaAgent
+                        pub fn with_claude() -> Self {
+                            let base_agent = #crate_path::agent::impls::ClaudeCodeAgent::new();
+                            Self::new(base_agent)
+                        }
+
+                        /// Create a new agent with ClaudeCodeAgent backend and specific model wrapped in PersonaAgent
+                        pub fn with_claude_model(model: &str) -> Self {
+                            let base_agent = #crate_path::agent::impls::ClaudeCodeAgent::new()
+                                .with_model_str(model);
+                            Self::new(base_agent)
+                        }
+                    }
+                }
+            }
+            "gemini" => {
+                quote! {
+                    impl #struct_name {
+                        /// Create a new agent with GeminiAgent backend wrapped in PersonaAgent
+                        pub fn with_gemini() -> Self {
+                            let base_agent = #crate_path::agent::impls::GeminiAgent::new();
+                            Self::new(base_agent)
+                        }
+
+                        /// Create a new agent with GeminiAgent backend and specific model wrapped in PersonaAgent
+                        pub fn with_gemini_model(model: &str) -> Self {
+                            let base_agent = #crate_path::agent::impls::GeminiAgent::new()
+                                .with_model_str(model);
+                            Self::new(base_agent)
+                        }
+                    }
+                }
+            }
+            _ => quote! {},
+        };
+
+        let default_impl = quote! {
+            impl Default for #struct_name {
+                fn default() -> Self {
+                    let base_agent = #agent_init;
+                    Self::new(base_agent)
+                }
+            }
+        };
+
+        (backend_constructors, default_impl)
+    } else if agent_attrs.default_inner.is_some() {
         // Custom type - generate Default impl for the default type
         let default_impl = quote! {
             impl Default for #struct_name {
@@ -4492,50 +4639,76 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // Generate Agent trait implementation
-    let agent_impl = quote! {
-        #[async_trait::async_trait]
-        impl<#inner_generic_ident> #crate_path::agent::Agent for #struct_name<#inner_generic_ident>
-        where
-            #inner_generic_ident: #crate_path::agent::Agent<Output = String>,
-        {
-            type Output = #output_type;
+    let agent_impl = if uses_persona {
+        // When using persona, simply delegate to PersonaAgent (which already implements Agent)
+        quote! {
+            #[async_trait::async_trait]
+            impl<#inner_generic_ident> #crate_path::agent::Agent for #struct_name<#inner_generic_ident>
+            where
+                #inner_generic_ident: #crate_path::agent::Agent<Output = String> + Send + Sync,
+            {
+                type Output = String;
 
-            fn expertise(&self) -> &str {
-                #enhanced_expertise
+                fn expertise(&self) -> &str {
+                    self.inner.expertise()
+                }
+
+                async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
+                    self.inner.execute(intent).await
+                }
+
+                async fn is_available(&self) -> Result<(), #crate_path::agent::AgentError> {
+                    self.inner.is_available().await
+                }
             }
+        }
+    } else {
+        // Normal case: handle JSON parsing for structured output
+        quote! {
+            #[async_trait::async_trait]
+            impl<#inner_generic_ident> #crate_path::agent::Agent for #struct_name<#inner_generic_ident>
+            where
+                #inner_generic_ident: #crate_path::agent::Agent<Output = String>,
+            {
+                type Output = #output_type;
 
-            async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
-                // Prepend expertise to the payload
-                let enhanced_payload = intent.prepend_text(self.expertise());
+                fn expertise(&self) -> &str {
+                    #enhanced_expertise
+                }
 
-                // Use the inner agent with the enhanced payload
-                let response = self.inner.execute(enhanced_payload).await?;
+                async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
+                    // Prepend expertise to the payload
+                    let enhanced_payload = intent.prepend_text(self.expertise());
 
-                // Extract JSON from the response
-                let json_str = #crate_path::extract_json(&response)
-                    .map_err(|e| #crate_path::agent::AgentError::ParseError {
-                        message: e.to_string(),
-                        reason: #crate_path::agent::error::ParseErrorReason::MarkdownExtractionFailed,
-                    })?;
+                    // Use the inner agent with the enhanced payload
+                    let response = self.inner.execute(enhanced_payload).await?;
 
-                // Deserialize into output type
-                serde_json::from_str(&json_str).map_err(|e| {
-                    let reason = if e.is_eof() {
-                        #crate_path::agent::error::ParseErrorReason::UnexpectedEof
-                    } else if e.is_syntax() {
-                        #crate_path::agent::error::ParseErrorReason::InvalidJson
-                    } else {
-                        #crate_path::agent::error::ParseErrorReason::SchemaMismatch
-                    };
-                    #crate_path::agent::AgentError::ParseError {
-                        message: e.to_string(),
-                        reason,
-                    }
-                })
-            }
+                    // Extract JSON from the response
+                    let json_str = #crate_path::extract_json(&response)
+                        .map_err(|e| #crate_path::agent::AgentError::ParseError {
+                            message: e.to_string(),
+                            reason: #crate_path::agent::error::ParseErrorReason::MarkdownExtractionFailed,
+                        })?;
 
-            async fn is_available(&self) -> Result<(), #crate_path::agent::AgentError> {
-                self.inner.is_available().await
+                    // Deserialize into output type
+                    serde_json::from_str(&json_str).map_err(|e| {
+                        let reason = if e.is_eof() {
+                            #crate_path::agent::error::ParseErrorReason::UnexpectedEof
+                        } else if e.is_syntax() {
+                            #crate_path::agent::error::ParseErrorReason::InvalidJson
+                        } else {
+                            #crate_path::agent::error::ParseErrorReason::SchemaMismatch
+                        };
+                        #crate_path::agent::AgentError::ParseError {
+                            message: e.to_string(),
+                            reason,
+                        }
+                    })
+                }
+
+                async fn is_available(&self) -> Result<(), #crate_path::agent::AgentError> {
+                    self.inner.is_available().await
+                }
             }
         }
     };
