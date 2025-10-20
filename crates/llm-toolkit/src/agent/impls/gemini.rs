@@ -257,11 +257,13 @@ impl Agent for GeminiAgent {
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         let payload = intent;
 
-        // Extract text content for now (images not yet supported in this integration)
+        // Extract text content for now (attachments not yet supported in this integration)
         let text_intent = payload.to_text();
 
-        if payload.has_images() {
-            log::warn!("GeminiAgent: Images in payload are not yet supported and will be ignored");
+        if payload.has_attachments() {
+            log::warn!(
+                "GeminiAgent: Attachments in payload are not yet supported and will be ignored"
+            );
         }
 
         let mut cmd = self.build_command(&text_intent)?;

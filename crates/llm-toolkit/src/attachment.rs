@@ -4,6 +4,7 @@
 //! that can be consumed by subsequent agents in a workflow.
 
 use std::path::PathBuf;
+use url::Url;
 
 /// Represents a resource that can be attached to a payload or produced by an agent.
 ///
@@ -20,7 +21,7 @@ pub enum Attachment {
     ///
     /// Note: Remote fetching is not yet implemented. This variant is reserved
     /// for future functionality.
-    Remote(String),
+    Remote(Url),
 
     /// In-memory data with optional name and MIME type.
     InMemory {
@@ -50,6 +51,11 @@ impl Attachment {
 
     /// Creates a new remote URL attachment.
     ///
+    /// # Panics
+    ///
+    /// Panics if the URL string is invalid. For fallible construction, use `Url::parse()`
+    /// and construct `Attachment::Remote(url)` directly.
+    ///
     /// # Examples
     ///
     /// ```
@@ -57,8 +63,8 @@ impl Attachment {
     ///
     /// let attachment = Attachment::remote("https://example.com/image.png");
     /// ```
-    pub fn remote(url: impl Into<String>) -> Self {
-        Self::Remote(url.into())
+    pub fn remote(url: &str) -> Self {
+        Self::Remote(Url::parse(url).expect("Invalid URL"))
     }
 
     /// Creates a new in-memory attachment from raw bytes.
@@ -127,8 +133,8 @@ impl Attachment {
                 .and_then(|n| n.to_str())
                 .map(|s| s.to_string()),
             Self::Remote(url) => url
-                .split('/')
-                .next_back()
+                .path_segments()
+                .and_then(|mut segments| segments.next_back())
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string()),
             Self::InMemory { file_name, .. } => file_name.clone(),
@@ -158,26 +164,11 @@ impl Attachment {
         }
     }
 
-    /// Infers MIME type from file extension.
+    /// Infers MIME type from file extension using the `mime_guess` crate.
     fn infer_mime_type_from_path(path: &std::path::Path) -> Option<String> {
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .and_then(|ext| match ext.to_lowercase().as_str() {
-                "jpg" | "jpeg" => Some("image/jpeg".to_string()),
-                "png" => Some("image/png".to_string()),
-                "gif" => Some("image/gif".to_string()),
-                "webp" => Some("image/webp".to_string()),
-                "bmp" => Some("image/bmp".to_string()),
-                "svg" => Some("image/svg+xml".to_string()),
-                "pdf" => Some("application/pdf".to_string()),
-                "json" => Some("application/json".to_string()),
-                "xml" => Some("application/xml".to_string()),
-                "txt" => Some("text/plain".to_string()),
-                "html" | "htm" => Some("text/html".to_string()),
-                "csv" => Some("text/csv".to_string()),
-                "md" => Some("text/markdown".to_string()),
-                _ => None,
-            })
+        mime_guess::from_path(path)
+            .first()
+            .map(|mime| mime.to_string())
     }
 
     /// Loads the attachment data as bytes.
@@ -263,6 +254,18 @@ pub trait ToAttachments {
 /// It provides metadata about what attachment keys a type will produce,
 /// which is used by the Agent derive macro to augment the agent's expertise.
 ///
+/// # Design Philosophy
+///
+/// This trait intentionally does **not** include a `descriptions()` method.
+/// Instead, types implementing `AttachmentSchema` should also implement
+/// `ToPrompt`, which already provides `prompt_schema()` that includes
+/// field descriptions from doc comments.
+///
+/// **Why not duplicate descriptions?**
+/// - `ToPrompt::prompt_schema()` already includes field descriptions
+/// - Adding `attachment_descriptions()` would be redundant
+/// - Users who need schema + descriptions should use `ToPrompt`
+///
 /// # Examples
 ///
 /// ```
@@ -278,16 +281,25 @@ pub trait ToAttachments {
 ///
 /// assert_eq!(MyOutput::attachment_keys(), &["chart", "thumbnail"]);
 /// ```
+///
+/// # Integration with ToPrompt
+///
+/// For full schema with descriptions, implement both traits:
+///
+/// ```ignore
+/// #[derive(ToPrompt, ToAttachments)]
+/// struct ImageGeneratorOutput {
+///     /// Visual chart of the analysis results
+///     #[attachment(key = "analysis_chart")]
+///     pub chart_bytes: Vec<u8>,
+/// }
+///
+/// // AttachmentSchema::attachment_keys() returns: ["analysis_chart"]
+/// // ToPrompt::prompt_schema() returns full schema with descriptions
+/// ```
 pub trait AttachmentSchema {
     /// Returns a static slice of attachment keys this type produces.
     fn attachment_keys() -> &'static [&'static str];
-
-    /// Optional: Returns descriptions for each attachment key.
-    ///
-    /// The tuple format is `(key, description)`.
-    fn attachment_descriptions() -> Option<&'static [(&'static str, &'static str)]> {
-        None
-    }
 }
 
 // === Blanket implementations for common types ===
@@ -355,7 +367,7 @@ mod tests {
         let attachment = Attachment::remote(url);
 
         match attachment {
-            Attachment::Remote(u) => assert_eq!(u, url),
+            Attachment::Remote(u) => assert_eq!(u.as_str(), url),
             _ => panic!("Expected Remote variant"),
         }
     }
@@ -659,32 +671,6 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert_eq!(keys[0], "image");
         assert_eq!(keys[1], "data");
-    }
-
-    #[test]
-    fn test_attachment_schema_with_descriptions() {
-        struct TestOutput;
-
-        impl AttachmentSchema for TestOutput {
-            fn attachment_keys() -> &'static [&'static str] {
-                &["chart", "report"]
-            }
-
-            fn attachment_descriptions() -> Option<&'static [(&'static str, &'static str)]> {
-                Some(&[
-                    ("chart", "Visual chart of the data"),
-                    ("report", "Detailed text report"),
-                ])
-            }
-        }
-
-        let keys = TestOutput::attachment_keys();
-        assert_eq!(keys, &["chart", "report"]);
-
-        let descriptions = TestOutput::attachment_descriptions().unwrap();
-        assert_eq!(descriptions.len(), 2);
-        assert_eq!(descriptions[0].0, "chart");
-        assert_eq!(descriptions[0].1, "Visual chart of the data");
     }
 
     #[test]

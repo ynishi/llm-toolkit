@@ -1174,18 +1174,18 @@ let result = agent.execute(payload).await?;
 
 ```rust
 use llm_toolkit::agent::Payload;
-use std::path::PathBuf;
+use llm_toolkit::attachment::Attachment;
 
-// Combine text and images
+// Combine text and attachments
 let payload = Payload::text("What's in this image?")
-    .with_image(PathBuf::from("/path/to/image.png"));
+    .with_attachment(Attachment::local("/path/to/image.png"));
 
 let result = agent.execute(payload).await?;
 
 // Or from raw image data
 let image_bytes = std::fs::read("/path/to/image.png")?;
 let payload = Payload::text("Describe this screenshot")
-    .with_image_data(image_bytes);
+    .with_attachment(Attachment::in_memory(image_bytes));
 ```
 
 **Backward Compatibility:**

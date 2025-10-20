@@ -26,6 +26,8 @@ tracing-log = "0.2"
 llm-toolkit-macros = { workspace = true, optional = true }
 async-trait = "0.1"
 tokio = { version = "1", features = ["full"], optional = true }
+url = "2.5"
+mime_guess = "2.0"
 
 [dev-dependencies]
 strum.workspace = true

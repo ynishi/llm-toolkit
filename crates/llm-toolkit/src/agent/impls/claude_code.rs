@@ -206,9 +206,9 @@ impl Agent for ClaudeCodeAgent {
             );
         }
 
-        if payload.has_images() {
+        if payload.has_attachments() {
             log::warn!(
-                "ClaudeCodeAgent: Images in payload are not yet supported and will be ignored"
+                "ClaudeCodeAgent: Attachments in payload are not yet supported and will be ignored"
             );
         }
 

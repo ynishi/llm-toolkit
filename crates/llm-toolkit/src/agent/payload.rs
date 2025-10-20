@@ -5,21 +5,16 @@
 
 use crate::attachment::Attachment;
 use std::fmt;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Content that can be included in a payload.
 ///
 /// This enum allows agents to receive different types of input,
-/// including text, images, attachments, and potentially other media types in the future.
+/// including text, attachments, and potentially other media types in the future.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PayloadContent {
     /// Plain text content
     Text(String),
-    /// Image from a file path
-    Image(PathBuf),
-    /// Image from raw bytes (e.g., PNG, JPEG)
-    ImageData(Vec<u8>),
     /// Arbitrary file attachment (local, remote, or in-memory)
     Attachment(Attachment),
 }
@@ -44,9 +39,9 @@ struct PayloadInner {
 /// // Simple text payload
 /// let payload: Payload = "Analyze this text".to_string().into();
 ///
-/// // Multi-modal payload with text and image
+/// // Multi-modal payload with text and attachment
 /// let payload = Payload::text("What's in this image?")
-///     .with_image(PathBuf::from("/path/to/image.png"));
+///     .with_attachment(Attachment::local("/path/to/image.png"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Payload {
@@ -69,24 +64,6 @@ impl Payload {
         Self {
             inner: Arc::new(PayloadInner {
                 contents: vec![PayloadContent::Text(text.into())],
-            }),
-        }
-    }
-
-    /// Creates a payload with a single image from a path.
-    pub fn image(path: PathBuf) -> Self {
-        Self {
-            inner: Arc::new(PayloadInner {
-                contents: vec![PayloadContent::Image(path)],
-            }),
-        }
-    }
-
-    /// Creates a payload with a single image from raw bytes.
-    pub fn image_data(data: Vec<u8>) -> Self {
-        Self {
-            inner: Arc::new(PayloadInner {
-                contents: vec![PayloadContent::ImageData(data)],
             }),
         }
     }
@@ -119,28 +96,6 @@ impl Payload {
     pub fn with_text(self, text: impl Into<String>) -> Self {
         let mut new_contents = self.inner.contents.clone();
         new_contents.push(PayloadContent::Text(text.into()));
-        Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
-        }
-    }
-
-    /// Adds an image from a path to this payload.
-    pub fn with_image(self, path: PathBuf) -> Self {
-        let mut new_contents = self.inner.contents.clone();
-        new_contents.push(PayloadContent::Image(path));
-        Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
-        }
-    }
-
-    /// Adds an image from raw bytes to this payload.
-    pub fn with_image_data(self, data: Vec<u8>) -> Self {
-        let mut new_contents = self.inner.contents.clone();
-        new_contents.push(PayloadContent::ImageData(data));
         Self {
             inner: Arc::new(PayloadInner {
                 contents: new_contents,
@@ -215,14 +170,6 @@ impl Payload {
             .contents
             .iter()
             .all(|c| matches!(c, PayloadContent::Text(_)))
-    }
-
-    /// Returns true if this payload contains any images.
-    pub fn has_images(&self) -> bool {
-        self.inner
-            .contents
-            .iter()
-            .any(|c| matches!(c, PayloadContent::Image(_) | PayloadContent::ImageData(_)))
     }
 
     /// Returns true if this payload contains any attachments.
@@ -311,43 +258,37 @@ mod tests {
 
     #[test]
     fn test_payload_to_text() {
+        use crate::attachment::Attachment;
+
         let payload = Payload::text("First line")
             .with_text("Second line")
-            .with_image(PathBuf::from("/test.png"));
+            .with_attachment(Attachment::local("/test.png"));
 
         assert_eq!(payload.to_text(), "First line\nSecond line");
     }
 
     #[test]
     fn test_payload_is_text_only() {
+        use crate::attachment::Attachment;
+
         let text_only = Payload::text("Only text");
         assert!(text_only.is_text_only());
 
-        let with_image = Payload::text("Text").with_image(PathBuf::from("/test.png"));
-        assert!(!with_image.is_text_only());
-    }
-
-    #[test]
-    fn test_payload_has_images() {
-        let text_only = Payload::text("Only text");
-        assert!(!text_only.has_images());
-
-        let with_image = Payload::text("Text").with_image(PathBuf::from("/test.png"));
-        assert!(with_image.has_images());
-
-        let with_image_data = Payload::text("Text").with_image_data(vec![1, 2, 3]);
-        assert!(with_image_data.has_images());
+        let with_attachment = Payload::text("Text").with_attachment(Attachment::local("/test.png"));
+        assert!(!with_attachment.is_text_only());
     }
 
     #[test]
     fn test_payload_builder_pattern() {
+        use crate::attachment::Attachment;
+
         let payload = Payload::new()
-            .with_text("Question: What's in this image?")
-            .with_image(PathBuf::from("/path/to/image.png"))
+            .with_text("Question: What's in this attachment?")
+            .with_attachment(Attachment::local("/path/to/file.png"))
             .with_text("Additional context");
 
         assert_eq!(payload.contents().len(), 3);
-        assert!(payload.has_images());
+        assert!(payload.has_attachments());
         assert!(!payload.is_text_only());
     }
 
@@ -361,12 +302,14 @@ mod tests {
 
     #[test]
     fn test_prepend_text_with_multimodal() {
+        use crate::attachment::Attachment;
+
         let payload = Payload::text("User question")
-            .with_image(PathBuf::from("/test.png"))
+            .with_attachment(Attachment::local("/test.png"))
             .prepend_text("System instructions");
 
         assert_eq!(payload.contents().len(), 3);
-        assert!(payload.has_images());
+        assert!(payload.has_attachments());
         // First element should be the prepended text
         assert!(matches!(
             &payload.contents()[0],
@@ -439,7 +382,7 @@ mod tests {
         use crate::attachment::Attachment;
 
         let attachment1 = Attachment::in_memory(vec![1, 2, 3]);
-        let attachment2 = Attachment::local(PathBuf::from("/test/file.png"));
+        let attachment2 = Attachment::local("/test/file.png");
 
         let payload = Payload::text("Text")
             .with_attachment(attachment1.clone())
@@ -455,13 +398,12 @@ mod tests {
         use crate::attachment::Attachment;
 
         let payload = Payload::text("Question")
-            .with_image(PathBuf::from("/image.jpg"))
+            .with_attachment(Attachment::local("/image.jpg"))
             .with_attachment(Attachment::in_memory(vec![1, 2, 3]))
-            .with_image_data(vec![4, 5, 6])
+            .with_attachment(Attachment::in_memory(vec![4, 5, 6]))
             .with_text("Additional context");
 
         assert_eq!(payload.contents().len(), 5);
-        assert!(payload.has_images());
         assert!(payload.has_attachments());
         assert!(!payload.is_text_only());
     }
@@ -473,7 +415,7 @@ mod tests {
         let payload = Payload::new()
             .with_text("System prompt")
             .with_attachment(Attachment::remote("https://example.com/data.json"))
-            .with_attachment(Attachment::local(PathBuf::from("/local/file.txt")));
+            .with_attachment(Attachment::local("/local/file.txt"));
 
         assert_eq!(payload.contents().len(), 3);
         assert_eq!(payload.attachments().len(), 2);
