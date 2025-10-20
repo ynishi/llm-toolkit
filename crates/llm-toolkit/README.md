@@ -1175,7 +1175,7 @@ let response2 = character_agent.execute("What is your purpose?".into()).await?; 
 
 **Method 2: Simplified Usage with `#[agent(persona = ...)]` (Recommended)**
 
-For maximum convenience, you can directly specify a persona in the `#[agent]` macro. The macro will automatically handle the `PersonaAgent` wrapping for you. The output type for a persona-based agent must be `String`.
+For maximum convenience, you can directly specify a persona in the `#[agent]` macro. The macro will automatically handle the `PersonaAgent` wrapping for you, preserving the inner agent's output type (structured data, attachments, etc.).
 
 ```rust
 use llm_toolkit::agent::{Agent, persona::Persona};
@@ -1192,7 +1192,6 @@ const YUI_PERSONA: Persona = Persona {
 // Use the persona directly in the agent macro
 #[llm_toolkit::agent(
     expertise = "Analyzing technical requirements and providing implementation details.",
-    output = "String", // Output must be String for persona agents
     persona = "self::YUI_PERSONA"
 )]
 struct YuiAgent;
@@ -1207,7 +1206,8 @@ let response = yui.execute("Introduce yourself.".into()).await?;
 - ✅ **Stateful Conversation**: Automatically manages and includes dialogue history in prompts.
 - ✅ **Consistent Personality**: Enforces a character's persona across multiple turns.
 - ✅ **Excellent DX**: The `#[agent(persona = ...)]` attribute makes creating character agents trivial.
-- ✅ **Composable**: `PersonaAgent` can wrap *any* agent that implements `Agent<Output = String>`.
+- ✅ **Composable**: `PersonaAgent` can wrap *any* agent that implements `Agent`.
+- ✅ **Multimodal-Friendly**: Accepts full `Payload` inputs so persona agents can inspect attachments.
 
 ## Agent API and Multi-Agent Orchestration
 

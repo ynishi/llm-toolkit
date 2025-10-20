@@ -3895,6 +3895,7 @@ struct AgentAttrs {
     default_inner: Option<String>,
     max_retries: Option<u32>,
     profile: Option<String>,
+
     persona: Option<syn::Expr>,
 }
 
@@ -4385,16 +4386,6 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
     let output_type_str = quote!(#output_type).to_string().replace(" ", "");
     let is_string_output = output_type_str == "String" || output_type_str == "&str";
 
-    // Validate: if persona is specified, output must be String
-    if persona.is_some() && !is_string_output {
-        return syn::Error::new_spanned(
-            struct_name,
-            "When using persona attribute, output type must be String (PersonaAgent requires Output = String)"
-        )
-        .to_compile_error()
-        .into();
-    }
-
     // Determine crate path
     let found_crate =
         crate_name("llm-toolkit").expect("llm-toolkit should be present in `Cargo.toml`");
@@ -4430,11 +4421,11 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generate struct definition - wrap with PersonaAgent if persona is specified
     let (struct_def, _actual_inner_type, uses_persona) = if let Some(ref _persona_path) = persona {
         // When persona is specified, the inner type is PersonaAgent<ActualInner>
-        // The generic parameter needs the Agent<Output = String> bound
+        // The generic parameter needs the base Agent bounds to be preserved
         let wrapped_type =
             quote! { #crate_path::agent::persona::PersonaAgent<#inner_generic_ident> };
         let struct_def = quote! {
-            #vis struct #struct_name<#inner_generic_ident: #crate_path::agent::Agent<Output = String> + Send + Sync = #default_agent_type> {
+            #vis struct #struct_name<#inner_generic_ident: #crate_path::agent::Agent + Send + Sync = #default_agent_type> {
                 inner: #wrapped_type,
             }
         };
@@ -4452,7 +4443,7 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generate basic constructor - wrap with PersonaAgent if needed
     let constructors = if let Some(ref persona_path) = persona {
         quote! {
-            impl<#inner_generic_ident: #crate_path::agent::Agent<Output = String> + Send + Sync> #struct_name<#inner_generic_ident> {
+            impl<#inner_generic_ident: #crate_path::agent::Agent + Send + Sync> #struct_name<#inner_generic_ident> {
                 /// Create a new agent with a custom inner agent implementation wrapped in PersonaAgent
                 pub fn new(inner: #inner_generic_ident) -> Self {
                     let persona_agent = #crate_path::agent::persona::PersonaAgent::new(
@@ -4645,9 +4636,10 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
             #[async_trait::async_trait]
             impl<#inner_generic_ident> #crate_path::agent::Agent for #struct_name<#inner_generic_ident>
             where
-                #inner_generic_ident: #crate_path::agent::Agent<Output = String> + Send + Sync,
+                #inner_generic_ident: #crate_path::agent::Agent + Send + Sync,
+                <#inner_generic_ident as #crate_path::agent::Agent>::Output: Send,
             {
-                type Output = String;
+                type Output = <#inner_generic_ident as #crate_path::agent::Agent>::Output;
 
                 fn expertise(&self) -> &str {
                     self.inner.expertise()

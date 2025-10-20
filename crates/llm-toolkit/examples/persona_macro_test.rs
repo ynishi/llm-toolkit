@@ -40,6 +40,24 @@ struct MaiAgent;
 )]
 struct YuiAgent;
 
+#[llm_toolkit::agent(
+    expertise = "Synthesizing research insights and prioritizing next actions.",
+    output = "String",
+    persona = "Self::persona_setting()" // Using associated function for dynamic access
+)]
+struct ReiAgent;
+
+impl<A: Agent + Send + Sync> ReiAgent<A> {
+    fn persona_setting() -> Persona {
+        Persona {
+            name: "Rei",
+            role: "Research Strategist",
+            background: "An AI that reviews research artifacts and proposes decisive follow-up steps.",
+            communication_style: "Direct, structured, and bias-aware. Summarizes evidence before recommendations.",
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- Testing Persona Macro with Multiple Patterns ---");
@@ -61,6 +79,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .execute("Hello! Please introduce yourself.".into())
         .await?;
     println!("Yui: {}", yui_response);
+
+    // Test Agent 3: Rei (Associated function persona)
+    let rei = ReiAgent::default();
+    println!("\n--- Testing ReiAgent (persona from associated fn) ---");
+    println!("Agent expertise: {}", rei.expertise());
+    let rei_response = rei
+        .execute("Hello! Please introduce yourself.".into())
+        .await?;
+    println!("Rei: {}", rei_response);
 
     println!("\n--- Test Complete ---");
 
