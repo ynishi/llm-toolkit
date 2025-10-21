@@ -330,12 +330,13 @@ impl ParallelOrchestrator {
                                     execution_manager: global_exec_state.clone(),
                                 };
 
-                                let state_json = serde_json::to_string_pretty(&state).map_err(|e| {
-                                    OrchestratorError::ExecutionFailed(format!(
-                                        "Failed to serialize state: {}",
-                                        e
-                                    ))
-                                })?;
+                                let state_json =
+                                    serde_json::to_string_pretty(&state).map_err(|e| {
+                                        OrchestratorError::ExecutionFailed(format!(
+                                            "Failed to serialize state: {}",
+                                            e
+                                        ))
+                                    })?;
 
                                 tokio::fs::write(save_path, state_json).await.map_err(|e| {
                                     OrchestratorError::ExecutionFailed(format!(
@@ -613,18 +614,19 @@ impl ParallelOrchestrator {
 
         // Initialize step states, preserving completed/paused states from resume
         for step in &segment.steps {
-            if let Some(initial_state) = initial_exec_state {
-                if let Some(saved_state) = initial_state.get_state(&step.step_id) {
-                    // If the step was already completed or paused, preserve that state
-                    match saved_state {
-                        StepState::Completed | StepState::PausedForApproval { .. } => {
-                            exec_state.set_state(&step.step_id, saved_state.clone());
-                            continue;
-                        }
-                        _ => {}
+            if let Some(initial_state) = initial_exec_state
+                && let Some(saved_state) = initial_state.get_state(&step.step_id)
+            {
+                // If the step was already completed or paused, preserve that state
+                match saved_state {
+                    StepState::Completed | StepState::PausedForApproval { .. } => {
+                        exec_state.set_state(&step.step_id, saved_state.clone());
+                        continue;
                     }
+                    _ => {}
                 }
             }
+
             // Default: mark as Pending
             exec_state.set_state(&step.step_id, StepState::Pending);
         }
@@ -723,7 +725,10 @@ impl ParallelOrchestrator {
 
                                 self.unlock_dependents(&step_id, &dep_graph, &mut exec_state);
                             }
-                            crate::agent::AgentOutput::RequiresApproval { message_for_human, current_payload } => {
+                            crate::agent::AgentOutput::RequiresApproval {
+                                message_for_human,
+                                current_payload,
+                            } => {
                                 info!(step_id = %step_id, "Step requires approval");
                                 exec_state.set_state(
                                     &step_id,

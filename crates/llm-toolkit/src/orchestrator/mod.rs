@@ -1217,7 +1217,8 @@ impl Orchestrator {
                         AgentOutput::Success(json_value) => json_value,
                         AgentOutput::RequiresApproval { .. } => {
                             return Err(OrchestratorError::ExecutionFailed(
-                                "Agent requires approval but orchestrator does not support HIL".to_string()
+                                "Agent requires approval but orchestrator does not support HIL"
+                                    .to_string(),
                             ));
                         }
                     };
@@ -1546,7 +1547,8 @@ impl Orchestrator {
                         AgentOutput::Success(json_value) => json_value,
                         AgentOutput::RequiresApproval { .. } => {
                             return Err(OrchestratorError::ExecutionFailed(
-                                "Agent requires approval but orchestrator does not support HIL".to_string()
+                                "Agent requires approval but orchestrator does not support HIL"
+                                    .to_string(),
                             ));
                         }
                     };
