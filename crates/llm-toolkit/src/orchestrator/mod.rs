@@ -75,7 +75,7 @@ pub use strategy::{
     StrategyMap, StrategyStep, TerminateInstruction,
 };
 
-use crate::agent::{Agent, AgentAdapter, DynamicAgent};
+use crate::agent::{Agent, AgentAdapter, AgentOutput, DynamicAgent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -1211,7 +1211,17 @@ impl Orchestrator {
                 .ok_or_else(|| OrchestratorError::AgentNotFound(step.assigned_agent.clone()))?;
 
             match agent.execute_dynamic(intent.into()).await {
-                Ok(output) => {
+                Ok(agent_output) => {
+                    // Unwrap AgentOutput to get the JsonValue
+                    let output = match agent_output {
+                        AgentOutput::Success(json_value) => json_value,
+                        AgentOutput::RequiresApproval { .. } => {
+                            return Err(OrchestratorError::ExecutionFailed(
+                                "Agent requires approval but orchestrator does not support HIL".to_string()
+                            ));
+                        }
+                    };
+
                     info!("Step {} completed successfully", step_index + 1);
 
                     // Store JSON result in context with default key
@@ -1529,7 +1539,17 @@ impl Orchestrator {
 
                     // Note: Error handling for agent execution will be integrated later
                     // For now, we convert the error directly
-                    let output = agent.execute_dynamic(intent.into()).await?;
+                    let agent_output = agent.execute_dynamic(intent.into()).await?;
+
+                    // Unwrap AgentOutput to get the JsonValue
+                    let output = match agent_output {
+                        AgentOutput::Success(json_value) => json_value,
+                        AgentOutput::RequiresApproval { .. } => {
+                            return Err(OrchestratorError::ExecutionFailed(
+                                "Agent requires approval but orchestrator does not support HIL".to_string()
+                            ));
+                        }
+                    };
 
                     // Store result in context
                     self.context

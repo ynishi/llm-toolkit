@@ -13,6 +13,8 @@ use std::collections::HashMap;
 /// - `Ready` -> `Running` (when execution begins)
 /// - `Running` -> `Completed` (on success)
 /// - `Running` -> `Failed` (on error)
+/// - `Running` -> `PausedForApproval` (when human approval is required)
+/// - `PausedForApproval` -> `Running` (when approval is granted)
 /// - Any state -> `Skipped` (when a dependency fails)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StepState {
@@ -28,6 +30,13 @@ pub enum StepState {
     Failed(String),
     /// Step was skipped due to a failed dependency
     Skipped,
+    /// Step is paused and waiting for human approval
+    PausedForApproval {
+        /// Message describing what approval is needed
+        message: String,
+        /// Payload data for the approval request
+        payload: serde_json::Value,
+    },
 }
 
 impl PartialEq for StepState {
@@ -39,6 +48,16 @@ impl PartialEq for StepState {
             (StepState::Completed, StepState::Completed) => true,
             (StepState::Skipped, StepState::Skipped) => true,
             (StepState::Failed(e1), StepState::Failed(e2)) => e1 == e2,
+            (
+                StepState::PausedForApproval {
+                    message: m1,
+                    payload: p1,
+                },
+                StepState::PausedForApproval {
+                    message: m2,
+                    payload: p2,
+                },
+            ) => m1 == m2 && p1 == p2,
             _ => false,
         }
     }

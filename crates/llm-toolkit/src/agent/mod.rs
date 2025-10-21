@@ -246,6 +246,23 @@ pub use payload::{Payload, PayloadContent};
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 
+/// The output type for agent execution.
+///
+/// This enum represents the result of agent execution, allowing agents to either
+/// return a successful result or request human approval before proceeding.
+#[derive(Debug, Clone)]
+pub enum AgentOutput {
+    /// The agent completed successfully with the given output.
+    Success(serde_json::Value),
+    /// The agent requires human approval before proceeding.
+    ///
+    /// Contains a message for the human and the current state of the payload.
+    RequiresApproval {
+        message_for_human: String,
+        current_payload: serde_json::Value,
+    },
+}
+
 /// The core trait for defining an agent.
 ///
 /// An agent represents a reusable capability that can execute tasks based on
@@ -330,8 +347,8 @@ pub type BoxedAgent<T> = Box<dyn Agent<Output = T>>;
 /// agent collections while maintaining type safety at the agent implementation level.
 #[async_trait]
 pub trait DynamicAgent: Send + Sync {
-    /// Execute the agent and return the output as a JSON value.
-    async fn execute_dynamic(&self, intent: Payload) -> Result<serde_json::Value, AgentError>;
+    /// Execute the agent and return the output, which may require human approval.
+    async fn execute_dynamic(&self, intent: Payload) -> Result<AgentOutput, AgentError>;
 
     /// Returns the name of this agent.
     fn name(&self) -> String;
@@ -396,9 +413,11 @@ impl<T: Serialize + DeserializeOwned> AgentAdapter<T> {
 
 #[async_trait]
 impl<T: Serialize + DeserializeOwned> DynamicAgent for AgentAdapter<T> {
-    async fn execute_dynamic(&self, intent: Payload) -> Result<serde_json::Value, AgentError> {
+    async fn execute_dynamic(&self, intent: Payload) -> Result<AgentOutput, AgentError> {
         let output = self.inner.execute(intent).await?;
-        serde_json::to_value(output).map_err(|e| AgentError::SerializationFailed(e.to_string()))
+        let json_value = serde_json::to_value(output)
+            .map_err(|e| AgentError::SerializationFailed(e.to_string()))?;
+        Ok(AgentOutput::Success(json_value))
     }
 
     fn name(&self) -> String {

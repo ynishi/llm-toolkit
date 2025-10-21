@@ -3,7 +3,7 @@
 //! These tests verify that structured tracing events and spans are properly
 //! emitted during workflow execution.
 
-use llm_toolkit::agent::{Agent, AgentError, DynamicAgent, Payload};
+use llm_toolkit::agent::{Agent, AgentError, AgentOutput, DynamicAgent, Payload};
 use llm_toolkit::orchestrator::{ParallelOrchestrator, StrategyMap, StrategyStep};
 use serde_json::{Value as JsonValue, json};
 use std::sync::Arc;
@@ -95,8 +95,9 @@ impl DynamicAgent for SimpleAgent {
         "Simple test agent"
     }
 
-    async fn execute_dynamic(&self, input: Payload) -> Result<JsonValue, AgentError> {
-        self.execute(input).await
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(output))
     }
 }
 
@@ -382,8 +383,9 @@ async fn test_failure_events() {
             "Failing agent"
         }
 
-        async fn execute_dynamic(&self, input: Payload) -> Result<JsonValue, AgentError> {
-            self.execute(input).await
+        async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+            let output = self.execute(input).await?;
+            Ok(AgentOutput::Success(output))
         }
     }
 

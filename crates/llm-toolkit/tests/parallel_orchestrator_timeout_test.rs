@@ -3,7 +3,7 @@
 //! These tests verify that per-step timeout enforcement works correctly
 //! and that timed-out steps properly propagate to dependents.
 
-use llm_toolkit::agent::{Agent, AgentError, DynamicAgent, Payload};
+use llm_toolkit::agent::{Agent, AgentError, AgentOutput, DynamicAgent, Payload};
 use llm_toolkit::orchestrator::parallel::ParallelOrchestratorConfig;
 use llm_toolkit::orchestrator::{ParallelOrchestrator, StrategyMap, StrategyStep};
 use serde_json::{Value as JsonValue, json};
@@ -53,8 +53,9 @@ impl DynamicAgent for FastAgent {
         "Fast test agent"
     }
 
-    async fn execute_dynamic(&self, input: Payload) -> Result<JsonValue, AgentError> {
-        self.execute(input).await
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(output))
     }
 }
 
@@ -97,8 +98,9 @@ impl DynamicAgent for SlowAgent {
         "Slow test agent"
     }
 
-    async fn execute_dynamic(&self, input: Payload) -> Result<JsonValue, AgentError> {
-        self.execute(input).await
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(output))
     }
 }
 

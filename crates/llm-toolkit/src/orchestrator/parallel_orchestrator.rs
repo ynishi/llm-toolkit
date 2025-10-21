@@ -39,6 +39,10 @@ pub struct ParallelOrchestrationResult {
     pub terminated: bool,
     /// Optional termination payload rendered from the instruction
     pub termination_reason: Option<String>,
+    /// Indicates whether execution was paused for human approval
+    pub paused: bool,
+    /// Reason for pause (human-readable message from agent)
+    pub pause_reason: Option<String>,
 }
 
 impl ParallelOrchestrationResult {
@@ -52,6 +56,8 @@ impl ParallelOrchestrationResult {
             error: None,
             terminated: false,
             termination_reason: None,
+            paused: false,
+            pause_reason: None,
         }
     }
 
@@ -70,6 +76,8 @@ impl ParallelOrchestrationResult {
             error: Some(error),
             terminated: false,
             termination_reason: None,
+            paused: false,
+            pause_reason: None,
         }
     }
 
@@ -88,6 +96,28 @@ impl ParallelOrchestrationResult {
             error: None,
             terminated: true,
             termination_reason,
+            paused: false,
+            pause_reason: None,
+        }
+    }
+
+    /// Creates a result representing a paused execution awaiting approval.
+    pub fn paused(
+        steps_executed: usize,
+        steps_skipped: usize,
+        context: HashMap<String, JsonValue>,
+        pause_reason: String,
+    ) -> Self {
+        Self {
+            success: true,
+            steps_executed,
+            steps_skipped,
+            context,
+            error: None,
+            terminated: false,
+            termination_reason: None,
+            paused: true,
+            pause_reason: Some(pause_reason),
         }
     }
 }
@@ -266,6 +296,7 @@ impl ParallelOrchestrator {
                             segment,
                             Arc::clone(&shared_context),
                             cancellation_token.clone(),
+                            Some(&global_exec_state),
                         )
                         .await?;
 
@@ -276,6 +307,52 @@ impl ParallelOrchestrator {
                     for step in &segment.steps {
                         if let Some(state) = segment_result.exec_state.get_state(&step.step_id) {
                             global_exec_state.set_state(&step.step_id, state.clone());
+                        }
+                    }
+
+                    // Check for paused steps (HIL)
+                    for step in &segment.steps {
+                        if let Some(StepState::PausedForApproval { message, .. }) =
+                            global_exec_state.get_state(&step.step_id)
+                        {
+                            info!(
+                                "Execution paused at step {} for human approval",
+                                step.step_id
+                            );
+                            let final_context = shared_context.lock().await.clone();
+                            steps_skipped_total +=
+                                Self::count_steps_in_segments(&segments, segment_index + 1);
+
+                            // Save state before returning if requested
+                            if let Some(save_path) = save_state_to {
+                                let state = OrchestrationState {
+                                    context: final_context.clone(),
+                                    execution_manager: global_exec_state.clone(),
+                                };
+
+                                let state_json = serde_json::to_string_pretty(&state).map_err(|e| {
+                                    OrchestratorError::ExecutionFailed(format!(
+                                        "Failed to serialize state: {}",
+                                        e
+                                    ))
+                                })?;
+
+                                tokio::fs::write(save_path, state_json).await.map_err(|e| {
+                                    OrchestratorError::ExecutionFailed(format!(
+                                        "Failed to write state file: {}",
+                                        e
+                                    ))
+                                })?;
+
+                                debug!("State saved to {:?} before pause", save_path);
+                            }
+
+                            return Ok(ParallelOrchestrationResult::paused(
+                                steps_executed_total,
+                                steps_skipped_total,
+                                final_context,
+                                message.clone(),
+                            ));
                         }
                     }
 
@@ -392,7 +469,7 @@ impl ParallelOrchestrator {
         step_lookup: &HashMap<String, StrategyStep>,
         shared_context: Arc<Mutex<HashMap<String, JsonValue>>>,
         cancellation_token: CancellationToken,
-    ) -> Vec<(String, Result<JsonValue, OrchestratorError>)> {
+    ) -> Vec<(String, Result<crate::agent::AgentOutput, OrchestratorError>)> {
         let mut tasks = Vec::new();
         let step_timeout = self.config.step_timeout;
 
@@ -465,7 +542,7 @@ impl ParallelOrchestrator {
                                 agent.execute_dynamic(intent.into()),
                             ) => {
                                 match timeout_result {
-                                    Ok(Ok(output)) => Ok(output),
+                                    Ok(Ok(agent_output)) => Ok(agent_output),
                                     Ok(Err(e)) => Err(e.into()),
                                     Err(_) => {
                                         warn!(
@@ -519,6 +596,7 @@ impl ParallelOrchestrator {
         segment: &ExecutionSegment,
         shared_context: Arc<Mutex<HashMap<String, JsonValue>>>,
         cancellation_token: CancellationToken,
+        initial_exec_state: Option<&ExecutionStateManager>,
     ) -> Result<SegmentOutcome, OrchestratorError> {
         if segment.steps.is_empty() {
             return Ok(SegmentOutcome {
@@ -533,15 +611,46 @@ impl ParallelOrchestrator {
         let dep_graph = build_dependency_graph(&subset_strategy)?;
         let mut exec_state = ExecutionStateManager::new();
 
+        // Initialize step states, preserving completed/paused states from resume
         for step in &segment.steps {
+            if let Some(initial_state) = initial_exec_state {
+                if let Some(saved_state) = initial_state.get_state(&step.step_id) {
+                    // If the step was already completed or paused, preserve that state
+                    match saved_state {
+                        StepState::Completed | StepState::PausedForApproval { .. } => {
+                            exec_state.set_state(&step.step_id, saved_state.clone());
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // Default: mark as Pending
             exec_state.set_state(&step.step_id, StepState::Pending);
         }
 
         let step_lookup = Self::create_step_lookup(&segment.steps);
 
         for step_id in dep_graph.get_zero_dependency_steps() {
-            exec_state.set_state(&step_id, StepState::Ready);
-            debug!(step_id = %step_id, "Step marked as Ready (no dependencies)");
+            // Only mark as Ready if not already Completed or PausedForApproval
+            if !matches!(
+                exec_state.get_state(&step_id),
+                Some(StepState::Completed) | Some(StepState::PausedForApproval { .. })
+            ) {
+                exec_state.set_state(&step_id, StepState::Ready);
+                debug!(step_id = %step_id, "Step marked as Ready (no dependencies)");
+            }
+        }
+
+        // Unlock dependents for already-completed steps (when resuming)
+        for step in &segment.steps {
+            if matches!(
+                exec_state.get_state(&step.step_id),
+                Some(StepState::Completed)
+            ) {
+                debug!(step_id = %step.step_id, "Unlocking dependents of already-completed step");
+                self.unlock_dependents(&step.step_id, &dep_graph, &mut exec_state);
+            }
         }
 
         let mut steps_executed = 0usize;
@@ -593,24 +702,39 @@ impl ParallelOrchestrator {
             // Process results
             for (step_id, result) in results {
                 match result {
-                    Ok(output) => {
-                        exec_state.set_state(&step_id, StepState::Completed);
-                        info!(step_id = %step_id, "Step completed successfully");
-                        steps_executed += 1;
+                    Ok(agent_output) => {
+                        match agent_output {
+                            crate::agent::AgentOutput::Success(value) => {
+                                exec_state.set_state(&step_id, StepState::Completed);
+                                info!(step_id = %step_id, "Step completed successfully");
+                                steps_executed += 1;
 
-                        {
-                            let mut ctx = shared_context.lock().await;
+                                {
+                                    let mut ctx = shared_context.lock().await;
 
-                            if let Some(step) = step_lookup.get(&step_id) {
-                                let output_key = step
-                                    .output_key
-                                    .clone()
-                                    .unwrap_or_else(|| format!("{}_output", step_id));
-                                ctx.insert(output_key, output);
+                                    if let Some(step) = step_lookup.get(&step_id) {
+                                        let output_key = step
+                                            .output_key
+                                            .clone()
+                                            .unwrap_or_else(|| format!("{}_output", step_id));
+                                        ctx.insert(output_key, value);
+                                    }
+                                }
+
+                                self.unlock_dependents(&step_id, &dep_graph, &mut exec_state);
+                            }
+                            crate::agent::AgentOutput::RequiresApproval { message_for_human, current_payload } => {
+                                info!(step_id = %step_id, "Step requires approval");
+                                exec_state.set_state(
+                                    &step_id,
+                                    StepState::PausedForApproval {
+                                        message: message_for_human,
+                                        payload: current_payload,
+                                    },
+                                );
+                                // Note: We do NOT call cascade_skipped here, as this is not a failure
                             }
                         }
-
-                        self.unlock_dependents(&step_id, &dep_graph, &mut exec_state);
                     }
                     Err(e) => {
                         warn!(step_id = %step_id, error = %e, "Step failed");

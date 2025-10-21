@@ -3,7 +3,7 @@
 //! These tests verify the orchestrator's ability to execute workflows
 //! with various dependency patterns in parallel.
 
-use llm_toolkit::agent::{Agent, AgentError, DynamicAgent, Payload};
+use llm_toolkit::agent::{Agent, AgentError, AgentOutput, DynamicAgent, Payload};
 use llm_toolkit::orchestrator::{
     LoopBlock, ParallelOrchestrator, StrategyInstruction, StrategyMap, StrategyStep,
     TerminateInstruction,
@@ -78,8 +78,9 @@ impl DynamicAgent for MockAgent {
         "Mock agent for testing"
     }
 
-    async fn execute_dynamic(&self, input: Payload) -> Result<JsonValue, AgentError> {
-        self.execute(input).await
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(output))
     }
 }
 
@@ -123,8 +124,9 @@ impl DynamicAgent for FailingAgent {
         "Failing agent for testing"
     }
 
-    async fn execute_dynamic(&self, input: Payload) -> Result<JsonValue, AgentError> {
-        self.execute(input).await
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(output))
     }
 }
 
@@ -701,8 +703,9 @@ async fn test_thread_safe_agent_with_shared_state() {
             "Counting agent with shared state"
         }
 
-        async fn execute_dynamic(&self, input: Payload) -> Result<JsonValue, AgentError> {
-            self.execute(input).await
+        async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+            let output = self.execute(input).await?;
+            Ok(AgentOutput::Success(output))
         }
     }
 
@@ -1003,13 +1006,11 @@ async fn test_save_and_resume_comprehensive() {
 
     assert!(result_second.success, "Second run should succeed");
 
-    // When resuming, the current implementation re-runs all steps in the segment
-    // TODO: This should be 2 (only step2 and step3), but the current implementation
-    // doesn't skip individual steps based on saved state - it only skips entire segments.
-    // For a sequential workflow where all steps are in one segment, all steps get re-executed.
+    // When resuming, the orchestrator now properly skips already-completed steps
+    // Only step2 and step3 should execute (step1 was already completed and saved)
     assert_eq!(
-        result_second.steps_executed, 3,
-        "All steps are re-executed (current behavior)"
+        result_second.steps_executed, 2,
+        "Only step2 and step3 should execute (step1 was already completed)"
     );
     assert_eq!(
         result_second.steps_skipped, 0,
