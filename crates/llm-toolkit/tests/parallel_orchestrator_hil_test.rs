@@ -5,8 +5,7 @@
 
 use llm_toolkit::agent::{Agent, AgentError, AgentOutput, DynamicAgent, Payload};
 use llm_toolkit::orchestrator::{
-    OrchestrationState, ParallelOrchestrator, StrategyMap, StrategyStep,
-    parallel::StepState,
+    OrchestrationState, ParallelOrchestrator, StrategyMap, StrategyStep, parallel::StepState,
 };
 use serde_json::{Value as JsonValue, json};
 use std::sync::Arc;
@@ -25,11 +24,7 @@ struct ApprovalAgent {
 }
 
 impl ApprovalAgent {
-    fn new(
-        name: impl Into<String>,
-        message: impl Into<String>,
-        payload: JsonValue,
-    ) -> Self {
+    fn new(name: impl Into<String>, message: impl Into<String>, payload: JsonValue) -> Self {
         Self {
             agent_name: name.into(),
             approval_message: message.into(),
@@ -156,8 +151,11 @@ async fn test_orchestrator_pauses_on_approval_request() {
 
     // Verify execution paused
     assert!(result.paused, "Execution should be paused");
-    assert_eq!(result.success, true, "Paused execution is still successful");
-    assert_eq!(result.steps_executed, 0, "No steps should complete when paused");
+    assert!(result.success, "Paused execution is still successful");
+    assert_eq!(
+        result.steps_executed, 0,
+        "No steps should complete when paused"
+    );
     assert!(
         result.pause_reason.is_some(),
         "Pause reason should be present"
@@ -243,8 +241,7 @@ async fn test_orchestrator_resumes_after_approval() {
     assert!(state_file_path.exists(), "State file should be created");
 
     // Read the saved state
-    let state_json =
-        std::fs::read_to_string(&state_file_path).expect("Failed to read state file");
+    let state_json = std::fs::read_to_string(&state_file_path).expect("Failed to read state file");
     let mut saved_state: OrchestrationState =
         serde_json::from_str(&state_json).expect("Failed to deserialize state");
 
