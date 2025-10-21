@@ -67,7 +67,7 @@ pub mod prompts;
 pub use blueprint::BlueprintWorkflow;
 pub use config::OrchestratorConfig;
 pub use error::OrchestratorError;
-pub use parallel_orchestrator::{ParallelOrchestrationResult, ParallelOrchestrator};
+pub use parallel_orchestrator::{OrchestrationState, ParallelOrchestrationResult, ParallelOrchestrator};
 pub use strategy::{
     AggregationMode, LoopAggregation, LoopBlock, LoopType, RedesignStrategy, StrategyInstruction,
     StrategyMap, StrategyStep, TerminateInstruction,

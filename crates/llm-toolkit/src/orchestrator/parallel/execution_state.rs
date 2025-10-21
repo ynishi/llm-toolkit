@@ -3,9 +3,8 @@
 //! This module provides a state machine to track the lifecycle of each step
 //! during concurrent execution.
 
-use crate::orchestrator::OrchestratorError;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// The execution state of a step in the parallel orchestrator.
 ///
@@ -15,7 +14,7 @@ use std::sync::Arc;
 /// - `Running` -> `Completed` (on success)
 /// - `Running` -> `Failed` (on error)
 /// - Any state -> `Skipped` (when a dependency fails)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StepState {
     /// Step is waiting for dependencies to complete
     Pending,
@@ -26,7 +25,7 @@ pub enum StepState {
     /// Step completed successfully
     Completed,
     /// Step failed with an error
-    Failed(Arc<OrchestratorError>),
+    Failed(String),
     /// Step was skipped due to a failed dependency
     Skipped,
 }
@@ -39,7 +38,7 @@ impl PartialEq for StepState {
             (StepState::Running, StepState::Running) => true,
             (StepState::Completed, StepState::Completed) => true,
             (StepState::Skipped, StepState::Skipped) => true,
-            (StepState::Failed(e1), StepState::Failed(e2)) => Arc::ptr_eq(e1, e2),
+            (StepState::Failed(e1), StepState::Failed(e2)) => e1 == e2,
             _ => false,
         }
     }
@@ -63,7 +62,7 @@ impl PartialEq for StepState {
 /// assert_eq!(ready_steps.len(), 1);
 /// assert!(ready_steps.contains(&"step_1".to_string()));
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionStateManager {
     states: HashMap<String, StepState>,
 }
@@ -170,12 +169,12 @@ impl ExecutionStateManager {
     }
 
     /// Returns all steps in Failed state with their errors.
-    pub fn get_failed_steps(&self) -> Vec<(String, Arc<OrchestratorError>)> {
+    pub fn get_failed_steps(&self) -> Vec<(String, String)> {
         self.states
             .iter()
             .filter_map(|(id, state)| {
                 if let StepState::Failed(err) = state {
-                    Some((id.clone(), Arc::clone(err)))
+                    Some((id.clone(), err.clone()))
                 } else {
                     None
                 }
@@ -306,10 +305,7 @@ mod tests {
     fn test_has_failures() {
         let mut manager = ExecutionStateManager::new();
         manager.set_state("step_1", StepState::Completed);
-        manager.set_state(
-            "step_2",
-            StepState::Failed(Arc::new(OrchestratorError::ExecutionFailed("test".into()))),
-        );
+        manager.set_state("step_2", StepState::Failed("test error".to_string()));
 
         assert!(manager.has_failures());
     }
@@ -371,13 +367,13 @@ mod tests {
     #[test]
     fn test_get_failed_steps() {
         let mut manager = ExecutionStateManager::new();
-        let error = Arc::new(OrchestratorError::ExecutionFailed("test error".into()));
         manager.set_state("step_1", StepState::Completed);
-        manager.set_state("step_2", StepState::Failed(Arc::clone(&error)));
+        manager.set_state("step_2", StepState::Failed("test error".to_string()));
 
         let failed = manager.get_failed_steps();
         assert_eq!(failed.len(), 1);
         assert_eq!(failed[0].0, "step_2");
+        assert_eq!(failed[0].1, "test error");
     }
 
     #[test]
@@ -399,14 +395,11 @@ mod tests {
 
     #[test]
     fn test_step_state_failed_equality() {
-        let error1 = Arc::new(OrchestratorError::ExecutionFailed("error1".into()));
-        let error2 = Arc::new(OrchestratorError::ExecutionFailed("error2".into()));
-        let error1_clone = Arc::clone(&error1);
+        let error1 = "error1".to_string();
+        let error2 = "error2".to_string();
+        let error1_clone = error1.clone();
 
-        assert_eq!(
-            StepState::Failed(Arc::clone(&error1)),
-            StepState::Failed(error1_clone)
-        );
+        assert_eq!(StepState::Failed(error1.clone()), StepState::Failed(error1_clone));
         assert_ne!(StepState::Failed(error1), StepState::Failed(error2));
     }
 }

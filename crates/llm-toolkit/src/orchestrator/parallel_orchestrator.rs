@@ -7,9 +7,11 @@ use crate::agent::DynamicAgent;
 use crate::orchestrator::{
     OrchestratorError, StrategyInstruction, StrategyMap, StrategyStep, TerminateInstruction,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::mem;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -90,6 +92,18 @@ impl ParallelOrchestrationResult {
     }
 }
 
+/// Serializable state for resuming orchestration.
+///
+/// This struct captures the complete state of an orchestration at a point in time,
+/// allowing execution to be paused and resumed later.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OrchestrationState {
+    /// Shared context containing all step outputs and task information
+    pub context: HashMap<String, JsonValue>,
+    /// Execution state manager tracking the status of all steps
+    pub execution_manager: ExecutionStateManager,
+}
+
 #[derive(Debug, Clone)]
 struct ExecutionSegment {
     steps: Vec<StrategyStep>,
@@ -167,6 +181,8 @@ impl ParallelOrchestrator {
     ///
     /// * `task` - The task description to process
     /// * `cancellation_token` - Token to cancel execution
+    /// * `resume_from` - Optional path to a saved state file to resume from
+    /// * `save_state_to` - Optional path to save state after each segment
     ///
     /// # Returns
     ///
@@ -175,6 +191,8 @@ impl ParallelOrchestrator {
         &mut self,
         task: &str,
         cancellation_token: CancellationToken,
+        resume_from: Option<&Path>,
+        save_state_to: Option<&Path>,
     ) -> Result<ParallelOrchestrationResult, OrchestratorError> {
         let total_steps = self.strategy.steps.len();
 
@@ -192,24 +210,89 @@ impl ParallelOrchestrator {
             }
 
             let segments = Self::build_segments(&prefix_instructions);
-            let shared_context = Arc::new(Mutex::new(HashMap::new()));
 
-            {
-                let mut ctx = shared_context.lock().await;
-                ctx.insert("task".to_string(), JsonValue::String(task.to_string()));
-            }
+            // Initialize or restore state
+            let (shared_context, mut global_exec_state) = if let Some(resume_path) = resume_from {
+                // Resume from saved state
+                info!("Resuming orchestration from state file: {:?}", resume_path);
+                let state_json = tokio::fs::read_to_string(resume_path)
+                    .await
+                    .map_err(|e| OrchestratorError::ExecutionFailed(format!(
+                        "Failed to read resume state file: {}", e
+                    )))?;
+
+                let state: OrchestrationState = serde_json::from_str(&state_json)
+                    .map_err(|e| OrchestratorError::ExecutionFailed(format!(
+                        "Failed to deserialize state: {}", e
+                    )))?;
+
+                (Arc::new(Mutex::new(state.context)), state.execution_manager)
+            } else {
+                // Start fresh
+                let context = Arc::new(Mutex::new(HashMap::new()));
+                {
+                    let mut ctx = context.lock().await;
+                    ctx.insert("task".to_string(), JsonValue::String(task.to_string()));
+                }
+                (context, ExecutionStateManager::new())
+            };
 
             let mut steps_executed_total = 0usize;
             let mut steps_skipped_total = 0usize;
 
             for (segment_index, segment) in segments.iter().enumerate() {
                 if !segment.steps.is_empty() {
+                    // Check if all steps in this segment are already completed (when resuming)
+                    let all_completed = segment.steps.iter().all(|step| {
+                        matches!(
+                            global_exec_state.get_state(&step.step_id),
+                            Some(StepState::Completed)
+                        )
+                    });
+
+                    if all_completed {
+                        info!(
+                            "Segment {} already completed, skipping execution",
+                            segment_index
+                        );
+                        continue;
+                    }
+
                     let segment_result = self
                         .execute_segment(segment, Arc::clone(&shared_context), cancellation_token.clone())
                         .await?;
 
                     steps_executed_total += segment_result.steps_executed;
                     steps_skipped_total += segment_result.exec_state.get_skipped_steps().len();
+
+                    // Merge segment state into global state
+                    for step in &segment.steps {
+                        if let Some(state) = segment_result.exec_state.get_state(&step.step_id) {
+                            global_exec_state.set_state(&step.step_id, state.clone());
+                        }
+                    }
+
+                    // Save state if requested
+                    if let Some(save_path) = save_state_to {
+                        let context_snapshot = shared_context.lock().await.clone();
+                        let state = OrchestrationState {
+                            context: context_snapshot,
+                            execution_manager: global_exec_state.clone(),
+                        };
+
+                        let state_json = serde_json::to_string_pretty(&state)
+                            .map_err(|e| OrchestratorError::ExecutionFailed(format!(
+                                "Failed to serialize state: {}", e
+                            )))?;
+
+                        tokio::fs::write(save_path, state_json)
+                            .await
+                            .map_err(|e| OrchestratorError::ExecutionFailed(format!(
+                                "Failed to write state file: {}", e
+                            )))?;
+
+                        debug!("State saved to {:?}", save_path);
+                    }
 
                     if segment_result.exec_state.has_failures() {
                         let final_context = shared_context.lock().await.clone();
@@ -221,7 +304,7 @@ impl ParallelOrchestrator {
                         let mut error_details = Vec::new();
 
                         for (step_id, err) in &failed_steps {
-                            if matches!(**err, OrchestratorError::StepTimeout { .. }) {
+                            if err.contains("timed out") {
                                 has_timeout = true;
                             }
                             error_details.push(format!("{}: {}", step_id, err));
@@ -516,7 +599,7 @@ impl ParallelOrchestrator {
                     }
                     Err(e) => {
                         warn!(step_id = %step_id, error = %e, "Step failed");
-                        exec_state.set_state(&step_id, StepState::Failed(Arc::new(e)));
+                        exec_state.set_state(&step_id, StepState::Failed(e.to_string()));
                         self.cascade_skipped(&step_id, &dep_graph, &mut exec_state);
                     }
                 }
