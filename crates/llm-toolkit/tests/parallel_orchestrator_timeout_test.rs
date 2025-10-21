@@ -156,7 +156,10 @@ async fn test_step_timeout_enforcement() {
         Arc::new(SlowAgent::new("SlowAgent", Duration::from_secs(2))),
     );
 
-    let result = orchestrator.execute("timeout test", CancellationToken::new(), None, None).await.unwrap();
+    let result = orchestrator
+        .execute("timeout test", CancellationToken::new(), None, None)
+        .await
+        .unwrap();
 
     // Should fail due to timeout
     assert!(!result.success, "Workflow should fail due to timeout");
@@ -205,7 +208,10 @@ async fn test_timeout_propagates_to_dependents() {
         Arc::new(FastAgent::new("FastAgent", json!({"ok": true}))),
     );
 
-    let result = orchestrator.execute("propagation test", CancellationToken::new(), None, None).await.unwrap();
+    let result = orchestrator
+        .execute("propagation test", CancellationToken::new(), None, None)
+        .await
+        .unwrap();
 
     // Should fail due to timeout
     assert!(!result.success, "Workflow should fail");
@@ -238,7 +244,10 @@ async fn test_no_timeout_when_step_completes_quickly() {
         Arc::new(FastAgent::new("FastAgent", json!({"ok": true}))),
     );
 
-    let result = orchestrator.execute("no timeout test", CancellationToken::new(), None, None).await.unwrap();
+    let result = orchestrator
+        .execute("no timeout test", CancellationToken::new(), None, None)
+        .await
+        .unwrap();
 
     // Should succeed
     assert!(result.success, "Workflow should succeed");
@@ -294,7 +303,10 @@ async fn test_timeout_with_multiple_independent_steps() {
         Arc::new(FastAgent::new("FastAgent2", json!({"ok": 2}))),
     );
 
-    let result = orchestrator.execute("multiple steps test", CancellationToken::new(), None, None).await.unwrap();
+    let result = orchestrator
+        .execute("multiple steps test", CancellationToken::new(), None, None)
+        .await
+        .unwrap();
 
     // Should fail overall, but fast steps should complete
     assert!(!result.success, "Workflow should fail due to one timeout");
@@ -326,7 +338,12 @@ async fn test_no_timeout_when_config_has_none() {
     );
 
     let result = orchestrator
-        .execute("no config timeout test", CancellationToken::new(), None, None)
+        .execute(
+            "no config timeout test",
+            CancellationToken::new(),
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -381,7 +398,9 @@ async fn test_workflow_cancellation() {
 
     // Spawn orchestrator execution
     let execution_handle = tokio::spawn(async move {
-        orchestrator.execute("cancellation test", cancel_token_clone, None, None).await
+        orchestrator
+            .execute("cancellation test", cancel_token_clone, None, None)
+            .await
     });
 
     // Wait a bit to ensure step1 starts

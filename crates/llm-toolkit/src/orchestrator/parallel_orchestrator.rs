@@ -215,16 +215,19 @@ impl ParallelOrchestrator {
             let (shared_context, mut global_exec_state) = if let Some(resume_path) = resume_from {
                 // Resume from saved state
                 info!("Resuming orchestration from state file: {:?}", resume_path);
-                let state_json = tokio::fs::read_to_string(resume_path)
-                    .await
-                    .map_err(|e| OrchestratorError::ExecutionFailed(format!(
-                        "Failed to read resume state file: {}", e
-                    )))?;
+                let state_json = tokio::fs::read_to_string(resume_path).await.map_err(|e| {
+                    OrchestratorError::ExecutionFailed(format!(
+                        "Failed to read resume state file: {}",
+                        e
+                    ))
+                })?;
 
-                let state: OrchestrationState = serde_json::from_str(&state_json)
-                    .map_err(|e| OrchestratorError::ExecutionFailed(format!(
-                        "Failed to deserialize state: {}", e
-                    )))?;
+                let state: OrchestrationState = serde_json::from_str(&state_json).map_err(|e| {
+                    OrchestratorError::ExecutionFailed(format!(
+                        "Failed to deserialize state: {}",
+                        e
+                    ))
+                })?;
 
                 (Arc::new(Mutex::new(state.context)), state.execution_manager)
             } else {
@@ -259,7 +262,11 @@ impl ParallelOrchestrator {
                     }
 
                     let segment_result = self
-                        .execute_segment(segment, Arc::clone(&shared_context), cancellation_token.clone())
+                        .execute_segment(
+                            segment,
+                            Arc::clone(&shared_context),
+                            cancellation_token.clone(),
+                        )
                         .await?;
 
                     steps_executed_total += segment_result.steps_executed;
@@ -280,16 +287,19 @@ impl ParallelOrchestrator {
                             execution_manager: global_exec_state.clone(),
                         };
 
-                        let state_json = serde_json::to_string_pretty(&state)
-                            .map_err(|e| OrchestratorError::ExecutionFailed(format!(
-                                "Failed to serialize state: {}", e
-                            )))?;
+                        let state_json = serde_json::to_string_pretty(&state).map_err(|e| {
+                            OrchestratorError::ExecutionFailed(format!(
+                                "Failed to serialize state: {}",
+                                e
+                            ))
+                        })?;
 
-                        tokio::fs::write(save_path, state_json)
-                            .await
-                            .map_err(|e| OrchestratorError::ExecutionFailed(format!(
-                                "Failed to write state file: {}", e
-                            )))?;
+                        tokio::fs::write(save_path, state_json).await.map_err(|e| {
+                            OrchestratorError::ExecutionFailed(format!(
+                                "Failed to write state file: {}",
+                                e
+                            ))
+                        })?;
 
                         debug!("State saved to {:?}", save_path);
                     }
@@ -572,7 +582,12 @@ impl ParallelOrchestrator {
             }
 
             let results = self
-                .execute_wave(ready_steps, &step_lookup, Arc::clone(&shared_context), cancellation_token.clone())
+                .execute_wave(
+                    ready_steps,
+                    &step_lookup,
+                    Arc::clone(&shared_context),
+                    cancellation_token.clone(),
+                )
                 .await;
 
             // Process results

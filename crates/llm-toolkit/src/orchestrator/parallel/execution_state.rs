@@ -399,7 +399,10 @@ mod tests {
         let error2 = "error2".to_string();
         let error1_clone = error1.clone();
 
-        assert_eq!(StepState::Failed(error1.clone()), StepState::Failed(error1_clone));
+        assert_eq!(
+            StepState::Failed(error1.clone()),
+            StepState::Failed(error1_clone)
+        );
         assert_ne!(StepState::Failed(error1), StepState::Failed(error2));
     }
 }

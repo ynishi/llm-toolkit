@@ -66,9 +66,7 @@ pub enum OrchestratorError {
 
     /// A step execution was cancelled.
     #[error("Step '{step_id}' was cancelled")]
-    Cancelled {
-        step_id: String,
-    },
+    Cancelled { step_id: String },
 }
 
 impl OrchestratorError {
