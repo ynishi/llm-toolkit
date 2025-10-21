@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, info, info_span, warn};
 
 use super::parallel::{
@@ -165,6 +166,7 @@ impl ParallelOrchestrator {
     /// # Arguments
     ///
     /// * `task` - The task description to process
+    /// * `cancellation_token` - Token to cancel execution
     ///
     /// # Returns
     ///
@@ -172,6 +174,7 @@ impl ParallelOrchestrator {
     pub async fn execute(
         &mut self,
         task: &str,
+        cancellation_token: CancellationToken,
     ) -> Result<ParallelOrchestrationResult, OrchestratorError> {
         let total_steps = self.strategy.steps.len();
 
@@ -202,7 +205,7 @@ impl ParallelOrchestrator {
             for (segment_index, segment) in segments.iter().enumerate() {
                 if !segment.steps.is_empty() {
                     let segment_result = self
-                        .execute_segment(segment, Arc::clone(&shared_context))
+                        .execute_segment(segment, Arc::clone(&shared_context), cancellation_token.clone())
                         .await?;
 
                     steps_executed_total += segment_result.steps_executed;
@@ -295,6 +298,7 @@ impl ParallelOrchestrator {
         step_ids: Vec<String>,
         step_lookup: &HashMap<String, StrategyStep>,
         shared_context: Arc<Mutex<HashMap<String, JsonValue>>>,
+        cancellation_token: CancellationToken,
     ) -> Vec<(String, Result<JsonValue, OrchestratorError>)> {
         let mut tasks = Vec::new();
         let step_timeout = self.config.step_timeout;
@@ -335,6 +339,7 @@ impl ParallelOrchestrator {
             };
 
             let context = Arc::clone(&shared_context);
+            let cancel_token = cancellation_token.clone();
 
             // Create span for this step
             let step_span = info_span!(
@@ -353,33 +358,48 @@ impl ParallelOrchestrator {
                         Err(e) => return (step_id.clone(), Err(e)),
                     };
 
-                    // Execute agent with optional timeout
+                    // Execute agent with optional timeout and cancellation
                     let result = if let Some(timeout_duration) = step_timeout {
-                        match tokio::time::timeout(
-                            timeout_duration,
-                            agent.execute_dynamic(intent.into()),
-                        )
-                        .await
-                        {
-                            Ok(Ok(output)) => Ok(output),
-                            Ok(Err(e)) => Err(e.into()),
-                            Err(_) => {
-                                warn!(
-                                    step_id = %step_id,
-                                    timeout = ?timeout_duration,
-                                    "Step execution timed out"
-                                );
-                                Err(OrchestratorError::StepTimeout {
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => {
+                                warn!(step_id = %step_id, "Step cancelled");
+                                Err(OrchestratorError::Cancelled {
                                     step_id: step_id.clone(),
-                                    timeout: timeout_duration,
                                 })
+                            }
+                            timeout_result = tokio::time::timeout(
+                                timeout_duration,
+                                agent.execute_dynamic(intent.into()),
+                            ) => {
+                                match timeout_result {
+                                    Ok(Ok(output)) => Ok(output),
+                                    Ok(Err(e)) => Err(e.into()),
+                                    Err(_) => {
+                                        warn!(
+                                            step_id = %step_id,
+                                            timeout = ?timeout_duration,
+                                            "Step execution timed out"
+                                        );
+                                        Err(OrchestratorError::StepTimeout {
+                                            step_id: step_id.clone(),
+                                            timeout: timeout_duration,
+                                        })
+                                    }
+                                }
                             }
                         }
                     } else {
-                        agent
-                            .execute_dynamic(intent.into())
-                            .await
-                            .map_err(|e| e.into())
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => {
+                                warn!(step_id = %step_id, "Step cancelled");
+                                Err(OrchestratorError::Cancelled {
+                                    step_id: step_id.clone(),
+                                })
+                            }
+                            agent_result = agent.execute_dynamic(intent.into()) => {
+                                agent_result.map_err(|e| e.into())
+                            }
+                        }
                     };
 
                     (step_id.clone(), result)
@@ -405,6 +425,7 @@ impl ParallelOrchestrator {
         &self,
         segment: &ExecutionSegment,
         shared_context: Arc<Mutex<HashMap<String, JsonValue>>>,
+        cancellation_token: CancellationToken,
     ) -> Result<SegmentOutcome, OrchestratorError> {
         if segment.steps.is_empty() {
             return Ok(SegmentOutcome {
@@ -468,7 +489,7 @@ impl ParallelOrchestrator {
             }
 
             let results = self
-                .execute_wave(ready_steps, &step_lookup, Arc::clone(&shared_context))
+                .execute_wave(ready_steps, &step_lookup, Arc::clone(&shared_context), cancellation_token.clone())
                 .await;
 
             // Process results

@@ -7,6 +7,7 @@ use llm_toolkit::agent::{Agent, AgentError, DynamicAgent, Payload};
 use llm_toolkit::orchestrator::{ParallelOrchestrator, StrategyMap, StrategyStep};
 use serde_json::{Value as JsonValue, json};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::Level;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -131,7 +132,7 @@ async fn test_top_level_span_created() {
         Arc::new(SimpleAgent::new("Agent1", json!({"ok": true}))),
     );
 
-    let _result = orchestrator.execute("test task").await.unwrap();
+    let _result = orchestrator.execute("test task", CancellationToken::new()).await.unwrap();
 
     let output = writer.get_output();
 
@@ -205,7 +206,7 @@ async fn test_wave_spans_created() {
         Arc::new(SimpleAgent::new("Agent3", json!({"ok": 3}))),
     );
 
-    let _result = orchestrator.execute("wave test").await.unwrap();
+    let _result = orchestrator.execute("wave test", CancellationToken::new()).await.unwrap();
 
     let output = writer.get_output();
 
@@ -252,7 +253,7 @@ async fn test_step_spans_created() {
         Arc::new(SimpleAgent::new("Agent1", json!({"ok": true}))),
     );
 
-    let _result = orchestrator.execute("step test").await.unwrap();
+    let _result = orchestrator.execute("step test", CancellationToken::new()).await.unwrap();
 
     let output = writer.get_output();
 
@@ -305,7 +306,7 @@ async fn test_state_transition_events() {
         Arc::new(SimpleAgent::new("Agent1", json!({"ok": true}))),
     );
 
-    let _result = orchestrator.execute("state test").await.unwrap();
+    let _result = orchestrator.execute("state test", CancellationToken::new()).await.unwrap();
 
     let output = writer.get_output();
 
@@ -398,7 +399,7 @@ async fn test_failure_events() {
         Arc::new(SimpleAgent::new("Agent2", json!({"ok": 2}))),
     );
 
-    let _result = orchestrator.execute("failure test").await.unwrap();
+    let _result = orchestrator.execute("failure test", CancellationToken::new()).await.unwrap();
 
     let output = writer.get_output();
 
@@ -445,7 +446,7 @@ async fn test_span_hierarchy() {
         Arc::new(SimpleAgent::new("Agent1", json!({"ok": true}))),
     );
 
-    let _result = orchestrator.execute("hierarchy test").await.unwrap();
+    let _result = orchestrator.execute("hierarchy test", CancellationToken::new()).await.unwrap();
 
     let output = writer.get_output();
 

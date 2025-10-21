@@ -12,6 +12,7 @@ use serde_json::{Value as JsonValue, json};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 // ============================================================================
 // Mock Agents
@@ -179,7 +180,7 @@ async fn test_simple_sequential_dag() {
         Arc::new(MockAgent::new("Agent3", json!({"result": "step3"}))),
     );
 
-    let result = orchestrator.execute("test task").await.unwrap();
+    let result = orchestrator.execute("test task", CancellationToken::new()).await.unwrap();
 
     assert!(result.success);
     assert_eq!(result.steps_executed, 3);
@@ -247,7 +248,7 @@ async fn test_diamond_dag() {
     orchestrator.add_agent("Agent3", agent3);
     orchestrator.add_agent("Agent4", agent4);
 
-    let result = orchestrator.execute("test task").await.unwrap();
+    let result = orchestrator.execute("test task", CancellationToken::new()).await.unwrap();
 
     assert!(result.success);
     assert_eq!(result.steps_executed, 4);
@@ -302,7 +303,7 @@ async fn test_independent_steps_parallel_execution() {
     );
 
     let start = Instant::now();
-    let result = orchestrator.execute("test task").await.unwrap();
+    let result = orchestrator.execute("test task", CancellationToken::new()).await.unwrap();
     let duration = start.elapsed();
 
     assert!(result.success);
@@ -376,7 +377,7 @@ async fn test_error_handling_and_cascade() {
         )),
     );
 
-    let result = orchestrator.execute("test task").await.unwrap();
+    let result = orchestrator.execute("test task", CancellationToken::new()).await.unwrap();
 
     // Workflow should fail
     assert!(!result.success);
@@ -430,7 +431,7 @@ async fn test_custom_output_keys() {
         Arc::new(MockAgent::new("Agent2", json!({"result": "used_custom"}))),
     );
 
-    let result = orchestrator.execute("test task").await.unwrap();
+    let result = orchestrator.execute("test task", CancellationToken::new()).await.unwrap();
 
     assert!(result.success);
     assert_eq!(result.steps_executed, 2);
@@ -495,7 +496,7 @@ async fn test_parallel_execution_stops_before_loop() {
         Arc::new(MockAgent::new("LoopAgent", json!({"result": "loop"}))),
     );
 
-    let result = orchestrator.execute("loop task").await.unwrap();
+    let result = orchestrator.execute("loop task", CancellationToken::new()).await.unwrap();
 
     assert!(result.success);
     assert!(!result.terminated);
@@ -544,7 +545,7 @@ async fn test_parallel_execution_with_terminate_instruction() {
         Arc::new(MockAgent::new("Agent2", json!({"result": "unused"}))),
     );
 
-    let result = orchestrator.execute("terminate task").await.unwrap();
+    let result = orchestrator.execute("terminate task", CancellationToken::new()).await.unwrap();
 
     assert!(result.success);
     assert!(result.terminated);
@@ -622,7 +623,7 @@ async fn test_complex_multi_level_dag() {
         );
     }
 
-    let result = orchestrator.execute("complex task").await.unwrap();
+    let result = orchestrator.execute("complex task", CancellationToken::new()).await.unwrap();
 
     assert!(result.success);
     assert_eq!(result.steps_executed, 6);
@@ -700,7 +701,7 @@ async fn test_thread_safe_agent_with_shared_state() {
     let agent = Arc::new(CountingAgent::new(Arc::clone(&counter)));
     orchestrator.add_agent("CountingAgent", agent);
 
-    let result = orchestrator.execute("count task").await.unwrap();
+    let result = orchestrator.execute("count task", CancellationToken::new()).await.unwrap();
 
     assert!(result.success);
     assert_eq!(result.steps_executed, 10);
@@ -732,7 +733,7 @@ async fn test_orchestrator_is_send_sync() {
     );
 
     // Spawn the orchestrator in a separate task to verify Send + Sync
-    let handle = tokio::spawn(async move { orchestrator.execute("test task").await });
+    let handle = tokio::spawn(async move { orchestrator.execute("test task", CancellationToken::new()).await });
 
     let result = handle.await.unwrap().unwrap();
     assert!(result.success);
@@ -777,7 +778,7 @@ async fn test_concurrent_context_access() {
         );
     }
 
-    let result = orchestrator.execute("concurrent test").await.unwrap();
+    let result = orchestrator.execute("concurrent test", CancellationToken::new()).await.unwrap();
 
     assert!(result.success);
     assert_eq!(result.steps_executed, 21); // root + 20 children

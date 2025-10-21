@@ -63,6 +63,12 @@ pub enum OrchestratorError {
         step_id: String,
         timeout: std::time::Duration,
     },
+
+    /// A step execution was cancelled.
+    #[error("Step '{step_id}' was cancelled")]
+    Cancelled {
+        step_id: String,
+    },
 }
 
 impl OrchestratorError {
