@@ -9,6 +9,7 @@ EXAMPLES := \
 	derive_prompt \
 	examples_section_test \
 	multimodal_prompt \
+	multi_agent_dialogue \
 	to_prompt_for_test \
 	external_template \
 	define_intent_comprehensive \
@@ -17,6 +18,7 @@ EXAMPLES := \
 	orchestrator_fast_path_e2e \
 	orchestrator_get_typed_output \
 	check_claude \
+	conversational_agent_builder \
 	agent_derive \
 	agent_auto_json_test \
 	agent_with_toprompt_schema \

@@ -2,7 +2,7 @@ use super::{Agent, AgentError, Payload};
 use crate::agent::history::HistoryAwareAgent;
 use crate::agent::persona::{Persona, PersonaAgent};
 use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 /// A builder for creating conversational agents with optional persona and history management.
 ///
@@ -300,9 +300,7 @@ mod tests {
             communication_style: "Friendly",
         };
 
-        let chat = Chat::new(test_agent.clone())
-            .with_persona(persona)
-            .build();
+        let chat = Chat::new(test_agent.clone()).with_persona(persona).build();
 
         // First call
         let _ = chat.execute(Payload::text("Hi")).await.unwrap();

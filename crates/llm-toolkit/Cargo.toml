@@ -27,6 +27,7 @@ llm-toolkit-macros = { workspace = true, optional = true }
 async-trait = "0.1"
 tokio = { version = "1", features = ["full"], optional = true }
 tokio-util = { version = "0.7", optional = true }
+futures = { workspace = true, optional = true }
 url = "2.5"
 mime_guess = "2.0"
 
@@ -40,7 +41,7 @@ tempfile = "3.8"
 [features]
 default = []
 derive = ["llm-toolkit-macros"]
-agent = ["tokio", "tokio-util", "derive"]
+agent = ["tokio", "tokio-util", "futures", "derive"]
 
 [[example]]
 name = "derive_prompt"

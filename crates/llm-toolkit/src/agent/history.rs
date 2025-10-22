@@ -90,7 +90,10 @@ where
         // Add to history after execution
         let mut history = self.dialogue_history.lock().await;
         history.push(format!("User: {}", user_request));
-        history.push(format!("Assistant: {}", format_response_for_history(&response)));
+        history.push(format!(
+            "Assistant: {}",
+            format_response_for_history(&response)
+        ));
 
         Ok(response)
     }

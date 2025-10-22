@@ -52,10 +52,7 @@ where
         let system_prompt = self.persona.to_prompt();
         let user_request = intent.to_text();
 
-        let final_prompt = format!(
-            "{}\n\n# Request\n{}",
-            system_prompt, user_request
-        );
+        let final_prompt = format!("{}\n\n# Request\n{}", system_prompt, user_request);
 
         let mut final_payload = Payload::text(final_prompt);
 
@@ -141,5 +138,4 @@ mod tests {
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0], &attachment);
     }
-
 }

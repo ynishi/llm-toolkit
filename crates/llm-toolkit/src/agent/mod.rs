@@ -231,6 +231,9 @@ pub mod history;
 #[cfg(feature = "agent")]
 pub mod chat;
 
+#[cfg(feature = "agent")]
+pub mod dialogue;
+
 /// Defines the execution profile for an agent, controlling its behavior.
 ///
 /// This enum provides a semantic way to configure agents for different tasks

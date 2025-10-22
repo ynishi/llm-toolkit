@@ -1,7 +1,7 @@
+use async_trait::async_trait;
 use llm_toolkit::agent::chat::Chat;
 use llm_toolkit::agent::persona::Persona;
 use llm_toolkit::agent::{Agent, AgentError, Payload};
-use async_trait::async_trait;
 
 // 1. Define a mock base agent for demonstration.
 #[derive(Clone)]
@@ -44,9 +44,15 @@ async fn main() {
     // Pattern 2: Stateful Chat with Persona (HistoryAwareAgent<PersonaAgent<MockAgent>>)
     let character_session = Chat::new(MockAgent).with_persona(YUI_PERSONA).build();
     println!("\n--- Pattern 2: Stateful Chat with Persona ---");
-    let res3 = character_session.execute("First message with persona".into()).await.unwrap();
+    let res3 = character_session
+        .execute("First message with persona".into())
+        .await
+        .unwrap();
     println!("Response 3: {}", res3);
-    let res4 = character_session.execute("Second message with persona".into()).await.unwrap();
+    let res4 = character_session
+        .execute("Second message with persona".into())
+        .await
+        .unwrap();
     println!("Response 4: {}", res4);
 
     // Pattern 3: Stateless Persona Agent (PersonaAgent<MockAgent>)
@@ -55,9 +61,15 @@ async fn main() {
         .with_history(false)
         .build();
     println!("\n--- Pattern 3: Stateless Persona Agent ---");
-    let res5 = stateless_persona.execute("A stateless message".into()).await.unwrap();
+    let res5 = stateless_persona
+        .execute("A stateless message".into())
+        .await
+        .unwrap();
     println!("Response 5: {}", res5);
-    let res6 = stateless_persona.execute("Another stateless message".into()).await.unwrap();
+    let res6 = stateless_persona
+        .execute("Another stateless message".into())
+        .await
+        .unwrap();
     println!("Response 6: {}", res6); // This call should have no memory of the previous one.
 
     println!("\n--- Example Finished ---");
