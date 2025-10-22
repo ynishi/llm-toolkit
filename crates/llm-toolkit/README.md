@@ -1209,6 +1209,65 @@ let response = yui.execute("Introduce yourself.".into()).await?;
 - ✅ **Composable**: `PersonaAgent` can wrap *any* agent that implements `Agent`.
 - ✅ **Multimodal-Friendly**: Accepts full `Payload` inputs so persona agents can inspect attachments.
 
+##### 4. Multi-Agent Dialogue Simulation
+
+For use cases that require simulating conversations *between* multiple AI agents, the `Dialogue` component provides a powerful and flexible solution. It manages the turn-taking, shared history, and execution flow, enabling complex multi-agent interactions like brainstorming sessions or workflow pipelines.
+
+**Core Concepts:**
+
+-   **`Dialogue`**: The main orchestrator for the conversation.
+-   **Execution Strategy**: Determines how agents interact. Two strategies are provided:
+    -   **`Sequential`**: A pipeline where agents execute in a chain (`A -> B -> C`), with the output of one becoming the input for the next. Ideal for data processing workflows.
+    -   **`Broadcast`**: A 1-to-N pattern where all agents respond to the same prompt. Ideal for brainstorming or getting multiple perspectives.
+
+**Usage Example:**
+
+```rust
+use llm_toolkit::agent::chat::Chat;
+use llm_toolkit::agent::dialogue::Dialogue;
+use llm_toolkit::agent::persona::Persona;
+use llm_toolkit::agent::{Agent, AgentError, Payload};
+use async_trait::async_trait;
+
+// (Mock agent and personas for demonstration)
+# #[derive(Clone)]
+# struct MockLLMAgent { agent_type: String }
+# #[async_trait]
+# impl Agent for MockLLMAgent {
+#     type Output = String;
+#     fn expertise(&self) -> &str { "mock" }
+#     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
+#         let last_line = intent.to_text().lines().last().unwrap_or("").to_string();
+#         Ok(format!("[{}] processed: '{}'", self.agent_type, last_line))
+#     }
+# }
+# const SUMMARIZER_PERSONA: Persona = Persona { name: "Summarizer", role: "Summarizer", background: "...", communication_style: "..." };
+# const TRANSLATOR_PERSONA: Persona = Persona { name: "Translator", role: "Translator", background: "...", communication_style: "..." };
+# const CRITIC_PERSONA: Persona = Persona { name: "Critic", role: "Critic", background: "...", communication_style: "..." };
+
+// --- Pattern 1: Sequential Pipeline ---
+let summarizer = Chat::new(MockLLMAgent { agent_type: "Summarizer".to_string() })
+    .with_persona(SUMMARIZER_PERSONA).with_history(false).build();
+let translator = Chat::new(MockLLMAgent { agent_type: "Translator".to_string() })
+    .with_persona(TRANSLATOR_PERSONA).with_history(false).build();
+
+let mut dialogue = Dialogue::sequential();
+dialogue.add_participant(summarizer).add_participant(translator);
+let final_result = dialogue.run("A long article text...".to_string()).await?;
+// final_result: Ok(vec!["[Translator] processed: '[Summarizer] processed: 'A long article text...'"])
+
+// --- Pattern 2: Broadcast ---
+let critic = Chat::new(MockLLMAgent { agent_type: "Critic".to_string() })
+    .with_persona(CRITIC_PERSONA).with_history(false).build();
+let translator_b = Chat::new(MockLLMAgent { agent_type: "Translator".to_string() })
+    .with_persona(TRANSLATOR_PERSONA).with_history(false).build();
+
+let mut dialogue = Dialogue::broadcast();
+dialogue.add_participant(critic).add_participant(translator_b);
+let responses = dialogue.run("The new API design is complete.".to_string()).await?;
+// responses: Ok(vec!["[Critic] processed: 'The new API design is complete.'", "[Translator] processed: 'The new API design is complete.'"])
+```
+
 ## Agent API and Multi-Agent Orchestration
 
 `llm-toolkit` provides a powerful agent framework for building multi-agent LLM systems with a clear separation of concerns.
