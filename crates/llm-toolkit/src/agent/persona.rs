@@ -2,8 +2,6 @@ use super::{Agent, AgentError, Payload, PayloadContent};
 use crate::ToPrompt;
 use async_trait::async_trait;
 use serde::Serialize;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[derive(ToPrompt, Serialize, Clone, Debug)]
 #[prompt(template = "
@@ -27,7 +25,6 @@ pub struct Persona {
 pub struct PersonaAgent<T: Agent> {
     inner_agent: T,
     persona: Persona,
-    dialogue_history: Arc<Mutex<Vec<String>>>,
 }
 
 impl<T: Agent> PersonaAgent<T> {
@@ -35,7 +32,6 @@ impl<T: Agent> PersonaAgent<T> {
         Self {
             inner_agent,
             persona,
-            dialogue_history: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -56,14 +52,9 @@ where
         let system_prompt = self.persona.to_prompt();
         let user_request = intent.to_text();
 
-        let history_prompt = {
-            let history = self.dialogue_history.lock().await;
-            history.join("\n")
-        };
-
         let final_prompt = format!(
-            "{}\n\n# Conversation History\n{}\n\n# New Request\n{}",
-            system_prompt, history_prompt, user_request
+            "{}\n\n# Request\n{}",
+            system_prompt, user_request
         );
 
         let mut final_payload = Payload::text(final_prompt);
@@ -74,28 +65,7 @@ where
             }
         }
 
-        let response = self.inner_agent.execute(final_payload).await?;
-
-        let mut history = self.dialogue_history.lock().await;
-
-        if !user_request.is_empty() {
-            history.push(format!("User: {}", user_request));
-        }
-
-        history.push(format!(
-            "Assistant: {}",
-            format_response_for_history(&response)
-        ));
-
-        Ok(response)
-    }
-}
-
-fn format_response_for_history<T: Serialize>(response: &T) -> String {
-    match serde_json::to_value(response) {
-        Ok(serde_json::Value::String(text)) => text,
-        Ok(other) => other.to_string(),
-        Err(_) => "<non-serializable response>".to_string(),
+        self.inner_agent.execute(final_payload).await
     }
 }
 
@@ -105,7 +75,6 @@ mod tests {
     use crate::agent::{Agent, AgentError, Payload};
     use crate::attachment::Attachment;
     use async_trait::async_trait;
-    use serde::Deserialize;
     use serde::de::DeserializeOwned;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -173,38 +142,4 @@ mod tests {
         assert_eq!(attachments[0], &attachment);
     }
 
-    #[derive(Clone, Serialize, Deserialize)]
-    struct StructuredResponse {
-        message: String,
-        value: u32,
-    }
-
-    #[tokio::test]
-    async fn persona_agent_records_structured_history() {
-        let persona = Persona {
-            name: "Tester",
-            role: "Structured Recorder",
-            background: "Ensures structured outputs are captured.",
-            communication_style: "Analytical.",
-        };
-
-        let response = StructuredResponse {
-            message: "done".to_string(),
-            value: 42,
-        };
-        let base_agent = RecordingAgent::new(response.clone());
-        let persona_agent = PersonaAgent::new(base_agent, persona);
-
-        let payload = Payload::text("Provide structured response");
-        let _ = persona_agent.execute(payload).await.unwrap();
-
-        let history = persona_agent.dialogue_history.lock().await.clone();
-        assert_eq!(history.len(), 2);
-        assert!(history[1].contains("\"message\":\"done\""));
-        assert!(history[1].contains("\"value\":42"));
-        assert!(
-            history[1].starts_with("Assistant: "),
-            "Assistant responses should be prefixed"
-        );
-    }
 }

@@ -225,6 +225,12 @@ pub mod retry;
 #[cfg(feature = "agent")]
 pub mod persona;
 
+#[cfg(feature = "agent")]
+pub mod history;
+
+#[cfg(feature = "agent")]
+pub mod chat;
+
 /// Defines the execution profile for an agent, controlling its behavior.
 ///
 /// This enum provides a semantic way to configure agents for different tasks
