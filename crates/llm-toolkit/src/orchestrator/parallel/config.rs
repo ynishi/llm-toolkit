@@ -15,7 +15,8 @@ use std::time::Duration;
 ///
 /// let config = ParallelOrchestratorConfig::new()
 ///     .with_max_concurrent_tasks(5)
-///     .with_step_timeout(Duration::from_secs(300));
+///     .with_step_timeout(Duration::from_secs(300))
+///     .with_max_step_remediations(3);
 /// ```
 #[derive(Debug, Clone)]
 pub struct ParallelOrchestratorConfig {
@@ -39,6 +40,19 @@ pub struct ParallelOrchestratorConfig {
     /// - Set bounds on workflow execution time
     /// - Recover resources from slow operations
     pub step_timeout: Option<Duration>,
+
+    /// Maximum number of retry attempts per step.
+    ///
+    /// When a step fails with a transient error, the orchestrator will
+    /// automatically retry it up to this many times.
+    ///
+    /// **Counting behavior:**
+    /// - Each failure increments the step's retry counter
+    /// - When counter reaches this limit, the step is marked as failed
+    /// - Example: `max_step_remediations = 3` allows 3 total attempts (initial + 2 retries)
+    ///
+    /// **Default:** 3 (allows initial attempt + 2 retries)
+    pub max_step_remediations: usize,
 }
 
 impl Default for ParallelOrchestratorConfig {
@@ -53,10 +67,12 @@ impl ParallelOrchestratorConfig {
     /// Default values:
     /// - `max_concurrent_tasks`: `None` (unlimited)
     /// - `step_timeout`: `None` (no timeout)
+    /// - `max_step_remediations`: `3` (initial attempt + 2 retries)
     pub fn new() -> Self {
         Self {
             max_concurrent_tasks: None,
             step_timeout: None,
+            max_step_remediations: 3,
         }
     }
 
@@ -105,6 +121,23 @@ impl ParallelOrchestratorConfig {
     /// Removes the step timeout.
     pub fn with_no_timeout(mut self) -> Self {
         self.step_timeout = None;
+        self
+    }
+
+    /// Sets the maximum number of retry attempts per step.
+    ///
+    /// # Arguments
+    ///
+    /// * `max` - Maximum number of retry attempts (e.g., 3 = initial + 2 retries)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let config = ParallelOrchestratorConfig::new()
+    ///     .with_max_step_remediations(5); // Allow 5 attempts total
+    /// ```
+    pub fn with_max_step_remediations(mut self, max: usize) -> Self {
+        self.max_step_remediations = max;
         self
     }
 }

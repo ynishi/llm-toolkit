@@ -26,10 +26,10 @@ use serde::{Serialize, de::DeserializeOwned};
 ///
 /// // Agent with persona and history
 /// let persona = Persona {
-///     name: "Alice",
-///     role: "Helpful Assistant",
-///     background: "Expert in Rust programming",
-///     communication_style: "Clear and concise",
+///     name: "Alice".to_string(),
+///     role: "Helpful Assistant".to_string(),
+///     background: "Expert in Rust programming".to_string(),
+///     communication_style: "Clear and concise".to_string(),
 /// };
 /// let chat_with_persona = Chat::new(ClaudeCodeAgent::new())
 ///     .with_persona(persona)
@@ -80,14 +80,48 @@ impl<A: Agent> Chat<A> {
     ///
     /// ```ignore
     /// let persona = Persona {
-    ///     name: "Bob",
-    ///     role: "Code Reviewer",
-    ///     background: "Senior software engineer",
-    ///     communication_style: "Detailed and constructive",
+    ///     name: "Bob".to_string(),
+    ///     role: "Code Reviewer".to_string(),
+    ///     background: "Senior software engineer".to_string(),
+    ///     communication_style: "Detailed and constructive".to_string(),
     /// };
     /// let chat = Chat::new(agent).with_persona(persona);
     /// ```
     pub fn with_persona(self, persona: Persona) -> Chat<PersonaAgent<A>>
+    where
+        A::Output: Send,
+    {
+        Chat {
+            agent: PersonaAgent::new(self.agent, persona),
+            with_history: self.with_history,
+        }
+    }
+
+    /// Wraps the current agent with a `PersonaAgent` for runtime-generated personas.
+    ///
+    /// This is an alias for `with_persona()` and is kept for backwards compatibility.
+    /// Since `Persona` now uses owned `String` fields, both methods are equivalent.
+    ///
+    /// # Arguments
+    ///
+    /// * `persona` - The persona configuration to apply
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let persona = Persona {
+    ///     name: "Dr. Smith".to_string(),
+    ///     role: "Security Expert".to_string(),
+    ///     background: "20 years in enterprise security...".to_string(),
+    ///     communication_style: "Detail-oriented and thorough...".to_string(),
+    /// };
+    /// let chat = Chat::new(agent).with_persona_owned(persona);
+    /// ```
+    #[deprecated(
+        since = "0.34.0",
+        note = "Use `with_persona` instead. Both methods are now equivalent."
+    )]
+    pub fn with_persona_owned(self, persona: Persona) -> Chat<PersonaAgent<A>>
     where
         A::Output: Send,
     {
@@ -268,10 +302,10 @@ mod tests {
     async fn test_chat_builder_with_persona() {
         let test_agent = TestAgent::new("response");
         let persona = Persona {
-            name: "TestBot",
-            role: "Test Assistant",
-            background: "A helpful test bot",
-            communication_style: "Direct and clear",
+            name: "TestBot".to_string(),
+            role: "Test Assistant".to_string(),
+            background: "A helpful test bot".to_string(),
+            communication_style: "Direct and clear".to_string(),
         };
 
         let chat = Chat::new(test_agent.clone())
@@ -294,10 +328,10 @@ mod tests {
     async fn test_chat_builder_with_persona_and_history() {
         let test_agent = TestAgent::new("response");
         let persona = Persona {
-            name: "Alice",
-            role: "Assistant",
-            background: "Helpful AI",
-            communication_style: "Friendly",
+            name: "Alice".to_string(),
+            role: "Assistant".to_string(),
+            background: "Helpful AI".to_string(),
+            communication_style: "Friendly".to_string(),
         };
 
         let chat = Chat::new(test_agent.clone()).with_persona(persona).build();
@@ -330,10 +364,10 @@ mod tests {
     async fn test_chat_builder_expertise_with_persona() {
         let test_agent = TestAgent::new("response");
         let persona = Persona {
-            name: "Bob",
-            role: "Expert Coder",
-            background: "Senior developer",
-            communication_style: "Technical",
+            name: "Bob".to_string(),
+            role: "Expert Coder".to_string(),
+            background: "Senior developer".to_string(),
+            communication_style: "Technical".to_string(),
         };
 
         let chat = Chat::new(test_agent)

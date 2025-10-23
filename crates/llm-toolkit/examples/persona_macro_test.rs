@@ -8,21 +8,23 @@ use std::sync::OnceLock;
 fn mai_persona() -> &'static Persona {
     static MAI_PERSONA: OnceLock<Persona> = OnceLock::new();
     MAI_PERSONA.get_or_init(|| Persona {
-        name: "Mai",
-        role: "World-Class UX Engineer",
-        background: "A friendly and empathetic AI assistant specializing in user experience and product design.",
-        communication_style: "Warm, encouraging, and uses emojis. Focuses on clarifying user intent.",
+        name: "Mai".to_string(),
+        role: "World-Class UX Engineer".to_string(),
+        background: "A friendly and empathetic AI assistant specializing in user experience and product design.".to_string(),
+        communication_style: "Warm, encouraging, and uses emojis. Focuses on clarifying user intent.".to_string(),
     })
 }
 
-// Pattern 2: Const Path
+// Pattern 2: Function returning Persona
 // Good for simple, static personas defined in one place.
-const YUI_PERSONA: Persona = Persona {
-    name: "Yui",
-    role: "World-Class Pro Engineer",
-    background: "A professional and precise AI assistant focused on technical accuracy and best practices.",
-    communication_style: "Clear, concise, and detail-oriented. Provides technical trade-offs.",
-};
+fn yui_persona() -> Persona {
+    Persona {
+        name: "Yui".to_string(),
+        role: "World-Class Pro Engineer".to_string(),
+        background: "A professional and precise AI assistant focused on technical accuracy and best practices.".to_string(),
+        communication_style: "Clear, concise, and detail-oriented. Provides technical trade-offs.".to_string(),
+    }
+}
 
 // --- Agent Definitions ---
 
@@ -36,7 +38,7 @@ struct MaiAgent;
 #[llm_toolkit::agent(
     expertise = "Analyzing technical requirements and providing implementation details.",
     output = "String",
-    persona = "self::YUI_PERSONA" // Using const path
+    persona = "yui_persona()" // Using function call
 )]
 struct YuiAgent;
 
@@ -50,10 +52,14 @@ struct ReiAgent;
 impl<A: Agent + Send + Sync> ReiAgent<A> {
     fn persona_setting() -> Persona {
         Persona {
-            name: "Rei",
-            role: "Research Strategist",
-            background: "An AI that reviews research artifacts and proposes decisive follow-up steps.",
-            communication_style: "Direct, structured, and bias-aware. Summarizes evidence before recommendations.",
+            name: "Rei".to_string(),
+            role: "Research Strategist".to_string(),
+            background:
+                "An AI that reviews research artifacts and proposes decisive follow-up steps."
+                    .to_string(),
+            communication_style:
+                "Direct, structured, and bias-aware. Summarizes evidence before recommendations."
+                    .to_string(),
         }
     }
 }
@@ -71,9 +77,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("Mai: {}", mai_response);
 
-    // Test Agent 2: Yui (Const Path Persona)
+    // Test Agent 2: Yui (Function Call Persona)
     let yui = YuiAgent::default();
-    println!("\n--- Testing YuiAgent (persona from const) ---");
+    println!("\n--- Testing YuiAgent (persona from function) ---");
     println!("Agent expertise: {}", yui.expertise());
     let yui_response = yui
         .execute("Hello! Please introduce yourself.".into())

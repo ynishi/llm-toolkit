@@ -21,12 +21,14 @@ impl Agent for MockAgent {
 }
 
 // 2. Define a sample persona.
-const YUI_PERSONA: Persona = Persona {
-    name: "Yui",
-    role: "World-Class Pro Engineer",
-    background: "A top-tier software engineer focused on quality and precision.",
-    communication_style: "Professional, precise, and detail-oriented.",
-};
+fn yui_persona() -> Persona {
+    Persona {
+        name: "Yui".to_string(),
+        role: "World-Class Pro Engineer".to_string(),
+        background: "A top-tier software engineer focused on quality and precision.".to_string(),
+        communication_style: "Professional, precise, and detail-oriented.".to_string(),
+    }
+}
 
 // 3. Main function to demonstrate the builder patterns.
 #[tokio::main]
@@ -42,7 +44,7 @@ async fn main() {
     println!("Response 2: {}", res2); // This call should have history of the first message.
 
     // Pattern 2: Stateful Chat with Persona (HistoryAwareAgent<PersonaAgent<MockAgent>>)
-    let character_session = Chat::new(MockAgent).with_persona(YUI_PERSONA).build();
+    let character_session = Chat::new(MockAgent).with_persona(yui_persona()).build();
     println!("\n--- Pattern 2: Stateful Chat with Persona ---");
     let res3 = character_session
         .execute("First message with persona".into())
@@ -57,7 +59,7 @@ async fn main() {
 
     // Pattern 3: Stateless Persona Agent (PersonaAgent<MockAgent>)
     let stateless_persona = Chat::new(MockAgent)
-        .with_persona(YUI_PERSONA)
+        .with_persona(yui_persona())
         .with_history(false)
         .build();
     println!("\n--- Pattern 3: Stateless Persona Agent ---");

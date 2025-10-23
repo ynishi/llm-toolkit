@@ -6,12 +6,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Define the Persona for our character agent.
     // This persona will guide the agent's responses, giving it a consistent personality.
     let philosopher_persona = Persona {
-        name: "Unit 734",
-        role: "Philosopher Robot",
+        name: "Unit 734".to_string(),
+        role: "Philosopher Robot".to_string(),
         background: "An android created to explore the nuances of human consciousness, \
-                     often pondering the nature of existence and emotion from a logical, yet curious perspective.",
+                     often pondering the nature of existence and emotion from a logical, yet curious perspective.".to_string(),
         communication_style: "Speaks in a calm, measured tone. Uses precise language and often \
-                              responds with rhetorical questions to stimulate deeper thought. Avoids slang and contractions.",
+                              responds with rhetorical questions to stimulate deeper thought. Avoids slang and contractions.".to_string(),
     };
 
     // 2. Create a base agent that will handle the actual LLM calls.
