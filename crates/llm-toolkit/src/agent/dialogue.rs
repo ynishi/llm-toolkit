@@ -591,6 +591,29 @@ impl Dialogue {
         &self.history
     }
 
+    /// Returns references to the personas of all participants.
+    ///
+    /// This provides access to participant information such as names, roles,
+    /// backgrounds, and communication styles without exposing internal agent implementations.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::Dialogue;
+    ///
+    /// let mut dialogue = Dialogue::broadcast()
+    ///     .add_participant(persona1, agent1)
+    ///     .add_participant(persona2, agent2);
+    ///
+    /// let personas = dialogue.participants();
+    /// for persona in personas {
+    ///     println!("Participant: {} ({})", persona.name, persona.role);
+    /// }
+    /// ```
+    pub fn participants(&self) -> Vec<&Persona> {
+        self.participants.iter().map(|p| &p.persona).collect()
+    }
+
     /// Returns the number of participants in the dialogue.
     pub fn participant_count(&self) -> usize {
         self.participants.len()
@@ -1099,5 +1122,82 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(core_only.len(), 2); // Back to 2 core members
+    }
+
+    #[tokio::test]
+    async fn test_participants_getter() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::broadcast();
+
+        // Initially empty
+        assert_eq!(dialogue.participants().len(), 0);
+
+        // Add first participant
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Senior engineer".to_string(),
+            communication_style: "Technical".to_string(),
+        };
+        dialogue.add_participant(
+            persona1.clone(),
+            MockAgent::new("Alice", vec!["Response 1".to_string()]),
+        );
+
+        // Add second participant
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UX specialist".to_string(),
+            communication_style: "User-focused".to_string(),
+        };
+        dialogue.add_participant(
+            persona2.clone(),
+            MockAgent::new("Bob", vec!["Response 2".to_string()]),
+        );
+
+        // Add third participant
+        let persona3 = Persona {
+            name: "Charlie".to_string(),
+            role: "Manager".to_string(),
+            background: "Product manager".to_string(),
+            communication_style: "Strategic".to_string(),
+        };
+        dialogue.add_participant(
+            persona3.clone(),
+            MockAgent::new("Charlie", vec!["Response 3".to_string()]),
+        );
+
+        // Get participants and verify
+        let participants = dialogue.participants();
+        assert_eq!(participants.len(), 3);
+
+        // Check names
+        assert_eq!(participants[0].name, "Alice");
+        assert_eq!(participants[1].name, "Bob");
+        assert_eq!(participants[2].name, "Charlie");
+
+        // Check roles
+        assert_eq!(participants[0].role, "Developer");
+        assert_eq!(participants[1].role, "Designer");
+        assert_eq!(participants[2].role, "Manager");
+
+        // Check backgrounds
+        assert_eq!(participants[0].background, "Senior engineer");
+        assert_eq!(participants[1].background, "UX specialist");
+        assert_eq!(participants[2].background, "Product manager");
+
+        // Check communication styles
+        assert_eq!(participants[0].communication_style, "Technical");
+        assert_eq!(participants[1].communication_style, "User-focused");
+        assert_eq!(participants[2].communication_style, "Strategic");
+
+        // Remove one and verify list updates
+        dialogue.remove_participant("Bob").unwrap();
+        let participants_after_removal = dialogue.participants();
+        assert_eq!(participants_after_removal.len(), 2);
+        assert_eq!(participants_after_removal[0].name, "Alice");
+        assert_eq!(participants_after_removal[1].name, "Charlie");
     }
 }

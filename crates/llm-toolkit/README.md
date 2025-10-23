@@ -1268,6 +1268,34 @@ let responses = dialogue.run("The new API design is complete.".to_string()).awai
 // responses: Ok(vec!["[Critic] processed: 'The new API design is complete.'", "[Translator] processed: 'The new API design is complete.'"])
 ```
 
+**Available Methods:**
+
+The `Dialogue` component provides several methods for managing conversations:
+
+-   **`participants() -> Vec<&Persona>`**: Access the list of participant personas. Useful for inspecting names, roles, backgrounds, and communication styles.
+-   **`participant_count() -> usize`**: Get the current number of participants.
+-   **`add_participant(persona, agent)`**: Dynamically add a new participant to the conversation.
+-   **`remove_participant(name)`**: Remove a participant by name (useful for guest participants).
+-   **`history() -> &[DialogueTurn]`**: Access the complete conversation history.
+
+```rust
+// Inspect participants
+let personas = dialogue.participants();
+for persona in personas {
+    println!("Participant: {} ({})", persona.name, persona.role);
+}
+
+// Dynamically manage participants
+dialogue.add_participant(expert_persona, expert_agent);
+dialogue.run("Get expert opinion".to_string()).await?;
+dialogue.remove_participant("Expert")?;
+
+// Access conversation history
+for turn in dialogue.history() {
+    println!("[{}]: {}", turn.participant_name, turn.content);
+}
+```
+
 ## Agent API and Multi-Agent Orchestration
 
 `llm-toolkit` provides a powerful agent framework for building multi-agent LLM systems with a clear separation of concerns.
