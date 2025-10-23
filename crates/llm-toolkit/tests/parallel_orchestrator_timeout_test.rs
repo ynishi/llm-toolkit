@@ -5,7 +5,9 @@
 
 use llm_toolkit::agent::{Agent, AgentError, AgentOutput, DynamicAgent, Payload};
 use llm_toolkit::orchestrator::parallel::ParallelOrchestratorConfig;
-use llm_toolkit::orchestrator::{ParallelOrchestrator, StrategyMap, StrategyStep};
+use llm_toolkit::orchestrator::{
+    BlueprintWorkflow, ParallelOrchestrator, StrategyMap, StrategyStep,
+};
 use serde_json::{Value as JsonValue, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -150,7 +152,10 @@ async fn test_step_timeout_enforcement() {
     let config =
         ParallelOrchestratorConfig::default().with_step_timeout(Duration::from_millis(100));
 
-    let mut orchestrator = ParallelOrchestrator::with_config(strategy, config);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
+    orchestrator.set_config(config);
 
     // Add agent that sleeps for 2 seconds (will timeout)
     orchestrator.add_agent(
@@ -199,7 +204,10 @@ async fn test_timeout_propagates_to_dependents() {
     let config =
         ParallelOrchestratorConfig::default().with_step_timeout(Duration::from_millis(100));
 
-    let mut orchestrator = ParallelOrchestrator::with_config(strategy, config);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
+    orchestrator.set_config(config);
 
     orchestrator.add_agent(
         "SlowAgent",
@@ -239,7 +247,10 @@ async fn test_no_timeout_when_step_completes_quickly() {
     // Create orchestrator with 1 second timeout (plenty of time)
     let config = ParallelOrchestratorConfig::default().with_step_timeout(Duration::from_secs(1));
 
-    let mut orchestrator = ParallelOrchestrator::with_config(strategy, config);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
+    orchestrator.set_config(config);
 
     orchestrator.add_agent(
         "FastAgent",
@@ -290,7 +301,10 @@ async fn test_timeout_with_multiple_independent_steps() {
     let config =
         ParallelOrchestratorConfig::default().with_step_timeout(Duration::from_millis(100));
 
-    let mut orchestrator = ParallelOrchestrator::with_config(strategy, config);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
+    orchestrator.set_config(config);
 
     orchestrator.add_agent(
         "FastAgent1",
@@ -331,7 +345,10 @@ async fn test_no_timeout_when_config_has_none() {
     let config = ParallelOrchestratorConfig::default();
     assert!(config.step_timeout.is_none());
 
-    let mut orchestrator = ParallelOrchestrator::with_config(strategy, config);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
+    orchestrator.set_config(config);
 
     // Add agent that sleeps for 200ms
     orchestrator.add_agent(
@@ -382,7 +399,9 @@ async fn test_workflow_cancellation() {
         "Output 2".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
 
     // Add agents
     orchestrator.add_agent(

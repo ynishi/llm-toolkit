@@ -5,7 +5,8 @@
 
 use llm_toolkit::agent::{Agent, AgentError, AgentOutput, DynamicAgent, Payload};
 use llm_toolkit::orchestrator::{
-    OrchestrationState, ParallelOrchestrator, StrategyMap, StrategyStep, parallel::StepState,
+    BlueprintWorkflow, OrchestrationState, ParallelOrchestrator, StrategyMap, StrategyStep,
+    parallel::StepState,
 };
 use serde_json::{Value as JsonValue, json};
 use std::sync::Arc;
@@ -127,7 +128,9 @@ async fn test_orchestrator_pauses_on_approval_request() {
         "Approval requested".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
 
     // Register approval agent
     orchestrator.add_agent(
@@ -200,7 +203,9 @@ async fn test_orchestrator_resumes_after_approval() {
     // First Run: Execute until pause
     // ========================================================================
 
-    let mut orchestrator_first = ParallelOrchestrator::new(strategy.clone());
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator_first = ParallelOrchestrator::new(blueprint);
+    orchestrator_first.set_strategy(strategy.clone());
 
     orchestrator_first.add_agent(
         "ApprovalAgent",
@@ -295,7 +300,9 @@ async fn test_orchestrator_resumes_after_approval() {
     // Second Run: Resume from modified state
     // ========================================================================
 
-    let mut orchestrator_second = ParallelOrchestrator::new(strategy.clone());
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator_second = ParallelOrchestrator::new(blueprint);
+    orchestrator_second.set_strategy(strategy.clone());
 
     orchestrator_second.add_agent(
         "ApprovalAgent",

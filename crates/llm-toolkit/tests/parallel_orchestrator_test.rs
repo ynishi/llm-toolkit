@@ -5,8 +5,8 @@
 
 use llm_toolkit::agent::{Agent, AgentError, AgentOutput, DynamicAgent, Payload};
 use llm_toolkit::orchestrator::{
-    LoopBlock, ParallelOrchestrator, StrategyInstruction, StrategyMap, StrategyStep,
-    TerminateInstruction,
+    BlueprintWorkflow, LoopBlock, ParallelOrchestrator, StrategyInstruction, StrategyMap,
+    StrategyStep, TerminateInstruction,
 };
 use serde_json::{Value as JsonValue, json};
 use std::sync::Arc;
@@ -166,7 +166,9 @@ async fn test_simple_sequential_dag() {
         "Step 3 complete".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
 
     // Register mock agents
     orchestrator.add_agent(
@@ -241,7 +243,9 @@ async fn test_diamond_dag() {
         "Merge".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
 
     let agent1 = Arc::new(MockAgent::new("Agent1", json!({"result": "root"})));
     let agent2 = Arc::new(MockAgent::new("Agent2", json!({"result": "left"})));
@@ -293,7 +297,9 @@ async fn test_independent_steps_parallel_execution() {
         "Output 3".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
 
     // Each agent takes 100ms
     let delay = Duration::from_millis(100);
@@ -369,7 +375,9 @@ async fn test_error_handling_and_cascade() {
         "Independent".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
 
     orchestrator.add_agent(
         "SuccessAgent",
@@ -434,7 +442,9 @@ async fn test_custom_output_keys() {
         "Output 2".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
 
     orchestrator.add_agent(
         "Agent1",
@@ -499,7 +509,9 @@ async fn test_parallel_execution_stops_before_loop() {
         aggregation: None,
     }));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
     orchestrator.add_agent(
         "Agent1",
         Arc::new(MockAgent::new("Agent1", json!({"result": "s1"}))),
@@ -558,7 +570,9 @@ async fn test_parallel_execution_with_terminate_instruction() {
     }));
     strategy.add_instruction(StrategyInstruction::Step(step2.clone()));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
     orchestrator.add_agent("Agent1", Arc::new(MockAgent::new("Agent1", json!("true"))));
     orchestrator.add_agent(
         "Agent2",
@@ -637,7 +651,9 @@ async fn test_complex_multi_level_dag() {
         "Final".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
 
     for agent_name in &["RootAgent", "L1A", "L1B", "L2A", "L2B", "FinalAgent"] {
         orchestrator.add_agent(
@@ -722,7 +738,9 @@ async fn test_thread_safe_agent_with_shared_state() {
         ));
     }
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
 
     let counter = Arc::new(AtomicUsize::new(0));
     let agent = Arc::new(CountingAgent::new(Arc::clone(&counter)));
@@ -756,7 +774,9 @@ async fn test_orchestrator_is_send_sync() {
         "Output 1".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
     orchestrator.add_agent(
         "Agent1",
         Arc::new(MockAgent::new("Agent1", json!({"result": "ok"}))),
@@ -798,7 +818,9 @@ async fn test_concurrent_context_access() {
         ));
     }
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
 
     orchestrator.add_agent(
         "RootAgent",
@@ -878,7 +900,9 @@ async fn test_save_and_resume_comprehensive() {
     // First Run: Execute with failing step2 and save state
     // ========================================================================
 
-    let mut orchestrator_first = ParallelOrchestrator::new(strategy.clone());
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator_first = ParallelOrchestrator::new(blueprint);
+    orchestrator_first.set_strategy(strategy.clone());
 
     orchestrator_first.add_agent(
         "Agent1",
@@ -971,7 +995,9 @@ async fn test_save_and_resume_comprehensive() {
     // Second Run: Resume from saved state with fixed agent
     // ========================================================================
 
-    let mut orchestrator_second = ParallelOrchestrator::new(strategy.clone());
+    let blueprint2 = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator_second = ParallelOrchestrator::new(blueprint2);
+    orchestrator_second.set_strategy(strategy.clone());
 
     orchestrator_second.add_agent(
         "Agent1",

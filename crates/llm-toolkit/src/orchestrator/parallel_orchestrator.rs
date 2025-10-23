@@ -295,6 +295,29 @@ impl ParallelOrchestrator {
         self.agents.insert(name.into(), agent);
     }
 
+    /// Sets the strategy directly (for testing purposes).
+    ///
+    /// This method is intended for tests that need to bypass strategy generation
+    /// and provide a pre-constructed StrategyMap.
+    ///
+    /// **Note**: This is primarily for testing. In production, strategies should be
+    /// generated via the `execute` method which calls `generate_strategy` internally.
+    #[doc(hidden)]
+    pub fn set_strategy(&mut self, strategy: StrategyMap) {
+        self.strategy = Some(strategy);
+    }
+
+    /// Sets the configuration directly (for testing purposes).
+    ///
+    /// This method is intended for tests that need to set custom configuration
+    /// after orchestrator creation.
+    ///
+    /// **Note**: This is primarily for testing.
+    #[doc(hidden)]
+    pub fn set_config(&mut self, config: ParallelOrchestratorConfig) {
+        self.config = config;
+    }
+
     /// Generates an execution strategy from the blueprint for the given task.
     ///
     /// This method uses the internal JSON agent to analyze the blueprint and

@@ -4,7 +4,9 @@
 //! emitted during workflow execution.
 
 use llm_toolkit::agent::{Agent, AgentError, AgentOutput, DynamicAgent, Payload};
-use llm_toolkit::orchestrator::{ParallelOrchestrator, StrategyMap, StrategyStep};
+use llm_toolkit::orchestrator::{
+    BlueprintWorkflow, ParallelOrchestrator, StrategyMap, StrategyStep,
+};
 use serde_json::{Value as JsonValue, json};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -127,7 +129,9 @@ async fn test_top_level_span_created() {
         "Output 1".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
     orchestrator.add_agent(
         "Agent1",
         Arc::new(SimpleAgent::new("Agent1", json!({"ok": true}))),
@@ -196,7 +200,9 @@ async fn test_wave_spans_created() {
         "Output 3".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
     orchestrator.add_agent(
         "Agent1",
         Arc::new(SimpleAgent::new("Agent1", json!({"ok": 1}))),
@@ -254,7 +260,9 @@ async fn test_step_spans_created() {
         "Output 1".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
     orchestrator.add_agent(
         "Agent1",
         Arc::new(SimpleAgent::new("Agent1", json!({"ok": true}))),
@@ -310,7 +318,9 @@ async fn test_state_transition_events() {
         "Output 1".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
     orchestrator.add_agent(
         "Agent1",
         Arc::new(SimpleAgent::new("Agent1", json!({"ok": true}))),
@@ -406,7 +416,9 @@ async fn test_failure_events() {
         "Output 2".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
     orchestrator.add_agent("FailAgent", Arc::new(FailingAgent));
     orchestrator.add_agent(
         "Agent2",
@@ -457,7 +469,9 @@ async fn test_span_hierarchy() {
         "Output 1".to_string(),
     ));
 
-    let mut orchestrator = ParallelOrchestrator::new(strategy);
+    let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
+    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    orchestrator.set_strategy(strategy);
     orchestrator.add_agent(
         "Agent1",
         Arc::new(SimpleAgent::new("Agent1", json!({"ok": true}))),
