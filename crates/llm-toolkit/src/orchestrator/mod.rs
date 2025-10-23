@@ -814,6 +814,7 @@ impl Orchestrator {
             self.blueprint.description.clone(),
             self.blueprint.graph.clone(),
             user_context,
+            self.config.enable_validation,
         );
 
         let prompt = request.to_prompt();

@@ -16,6 +16,11 @@ You are an expert orchestrator tasked with creating a detailed execution strateg
 ## User's Task
 {{ task }}
 
+{% if validation_constraint %}
+## Validation Constraint
+{{ validation_constraint }}
+{% endif %}
+
 {% if user_context %}
 ## User Request Context
 The following context data is available in intent templates via `user_request.*` placeholders:
@@ -98,6 +103,7 @@ pub struct StrategyGenerationRequest {
     pub blueprint_description: String,
     pub blueprint_graph: String,
     pub user_context: String,
+    pub validation_constraint: Option<String>,
 }
 
 impl StrategyGenerationRequest {
@@ -108,13 +114,21 @@ impl StrategyGenerationRequest {
         blueprint_description: String,
         blueprint_graph: Option<String>,
         user_context: Option<String>,
+        enable_validation: bool,
     ) -> Self {
+        let validation_constraint = if !enable_validation {
+            Some("IMPORTANT: For all steps, you MUST set 'requires_validation' to false. Do not generate any validation steps.".to_string())
+        } else {
+            None
+        };
+
         Self {
             task,
             agent_list,
             blueprint_description,
             blueprint_graph: blueprint_graph.unwrap_or_default(),
             user_context: user_context.unwrap_or_default(),
+            validation_constraint,
         }
     }
 }
@@ -508,6 +522,60 @@ impl FullRegenerateRequest {
     }
 }
 
+/// Request for deciding whether to regenerate the strategy for a ParallelOrchestrator.
+#[derive(Serialize, ToPrompt)]
+#[prompt(template = r##"
+# Workflow Recovery Task
+
+A step in a parallel workflow has failed with a non-transient error. Analyze the situation and decide if the entire workflow is salvageable by regenerating a new plan.
+
+## Overall Task
+{{ task }}
+
+## Failure Details
+- **Failed Step ID**: {{ failed_step_id }}
+- **Error Message**: {{ error_message }}
+
+## Context (Outputs from successful steps)
+```json
+{{ successful_outputs }}
+```
+
+---
+
+## Your Task
+
+Based on the error and the work completed so far, can this workflow be salvaged by creating a new plan?
+
+- If the error is fundamental or the goal is now unachievable, respond with **FAIL**.
+- If you believe a different approach or plan could succeed, respond with **REGENERATE**.
+
+**Important:** Respond with ONLY one word: `REGENERATE` or `FAIL`.
+"##)]
+pub struct ParallelRedesignDecisionRequest {
+    pub task: String,
+    pub failed_step_id: String,
+    pub error_message: String,
+    pub successful_outputs: String,
+}
+
+impl ParallelRedesignDecisionRequest {
+    /// Creates a new parallel redesign decision request.
+    pub fn new(
+        task: String,
+        failed_step_id: String,
+        error_message: String,
+        successful_outputs: String,
+    ) -> Self {
+        Self {
+            task,
+            failed_step_id,
+            error_message,
+            successful_outputs,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,6 +588,7 @@ mod tests {
             "Blueprint description".to_string(),
             Some("graph TD\nA --> B".to_string()),
             None,
+            true,
         );
 
         assert_eq!(req.task, "Test task");
@@ -536,6 +605,7 @@ mod tests {
             "1. Research\n2. Write\n3. Review".to_string(),
             None,
             None,
+            true,
         );
 
         let prompt = req.to_prompt();
@@ -568,6 +638,7 @@ mod tests {
             "1. Generate concept\n2. Create design".to_string(),
             None,
             Some(user_context_json.to_string()),
+            true,
         );
 
         let prompt = req.to_prompt();
@@ -598,6 +669,7 @@ mod tests {
             "1. Research\n2. Write".to_string(),
             None,
             None,
+            true,
         );
 
         let prompt = req.to_prompt();
@@ -621,6 +693,7 @@ mod tests {
             blueprint_description: "Blueprint".to_string(),
             blueprint_graph: String::new(),
             user_context: String::new(), // Empty string
+            validation_constraint: None,
         };
 
         let prompt = req.to_prompt();
@@ -669,5 +742,21 @@ mod tests {
         let prompt = req.to_prompt();
         assert!(prompt.contains("Complete the task"));
         assert!(prompt.contains("Network timeout"));
+    }
+
+    #[test]
+    fn test_parallel_redesign_decision_request() {
+        let req = ParallelRedesignDecisionRequest::new(
+            "Analyze data".to_string(),
+            "step_2".to_string(),
+            "Invalid input format".to_string(),
+            r#"{"step_1_output": {"data": "..."}}"#.to_string(),
+        );
+
+        let prompt = req.to_prompt();
+        assert!(prompt.contains("Workflow Recovery Task"));
+        assert!(prompt.contains("step_2"));
+        assert!(prompt.contains("Invalid input format"));
+        assert!(prompt.contains("step_1_output"));
     }
 }

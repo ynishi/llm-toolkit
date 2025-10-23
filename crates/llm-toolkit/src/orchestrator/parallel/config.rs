@@ -3,6 +3,7 @@
 //! This module provides configuration options for controlling concurrency,
 //! timeouts, and other execution parameters.
 
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Configuration for parallel orchestrator execution.
@@ -18,7 +19,7 @@ use std::time::Duration;
 ///     .with_step_timeout(Duration::from_secs(300))
 ///     .with_max_step_remediations(3);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParallelOrchestratorConfig {
     /// Maximum number of steps that can execute concurrently.
     ///
@@ -53,6 +54,29 @@ pub struct ParallelOrchestratorConfig {
     ///
     /// **Default:** 3 (allows initial attempt + 2 retries)
     pub max_step_remediations: usize,
+
+    /// Enable generation of validation steps after each execution step.
+    ///
+    /// When enabled, the orchestrator will generate validation steps that verify
+    /// the output of execution steps, improving reliability and error detection.
+    /// This provides:
+    /// - **Quality assurance:** Automatic validation of step outputs
+    /// - **Early error detection:** Problems caught before downstream steps
+    /// - **Better debugging:** Clear validation failures vs execution failures
+    ///
+    /// **When to disable:**
+    /// - Performance-critical scenarios where validation overhead is unacceptable
+    /// - When agents already include comprehensive internal validation
+    /// - Testing scenarios where you want to observe raw execution behavior
+    ///
+    /// **Default:** `true` (enabled for better reliability)
+    #[serde(default = "default_true")]
+    pub enable_validation: bool,
+}
+
+/// Helper function for serde default value of `true`.
+fn default_true() -> bool {
+    true
 }
 
 impl Default for ParallelOrchestratorConfig {
@@ -68,11 +92,13 @@ impl ParallelOrchestratorConfig {
     /// - `max_concurrent_tasks`: `None` (unlimited)
     /// - `step_timeout`: `None` (no timeout)
     /// - `max_step_remediations`: `3` (initial attempt + 2 retries)
+    /// - `enable_validation`: `true` (enabled for better reliability)
     pub fn new() -> Self {
         Self {
             max_concurrent_tasks: None,
             step_timeout: None,
             max_step_remediations: 3,
+            enable_validation: true,
         }
     }
 
@@ -138,6 +164,24 @@ impl ParallelOrchestratorConfig {
     /// ```
     pub fn with_max_step_remediations(mut self, max: usize) -> Self {
         self.max_step_remediations = max;
+        self
+    }
+
+    /// Sets whether validation steps should be generated after execution steps.
+    ///
+    /// # Arguments
+    ///
+    /// * `enable` - Whether to enable validation step generation
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Disable validation for performance-critical scenarios
+    /// let config = ParallelOrchestratorConfig::new()
+    ///     .with_validation(false);
+    /// ```
+    pub fn with_validation(mut self, enable: bool) -> Self {
+        self.enable_validation = enable;
         self
     }
 }
@@ -220,5 +264,32 @@ mod tests {
         let debug_str = format!("{:?}", config);
         assert!(debug_str.contains("max_concurrent_tasks"));
         assert!(debug_str.contains("5"));
+    }
+
+    #[test]
+    fn test_enable_validation_default() {
+        let config = ParallelOrchestratorConfig::new();
+        assert!(config.enable_validation); // Default is true
+    }
+
+    #[test]
+    fn test_with_validation() {
+        let config = ParallelOrchestratorConfig::new().with_validation(false);
+        assert!(!config.enable_validation);
+
+        let config2 = ParallelOrchestratorConfig::new().with_validation(true);
+        assert!(config2.enable_validation);
+    }
+
+    #[test]
+    fn test_validation_in_builder_chain() {
+        let config = ParallelOrchestratorConfig::new()
+            .with_max_concurrent_tasks(10)
+            .with_validation(false)
+            .with_step_timeout(Duration::from_secs(600));
+
+        assert_eq!(config.max_concurrent_tasks, Some(10));
+        assert!(!config.enable_validation);
+        assert_eq!(config.step_timeout, Some(Duration::from_secs(600)));
     }
 }

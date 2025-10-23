@@ -6,6 +6,10 @@ use thiserror::Error;
 /// Errors that can occur during orchestrator operations.
 #[derive(Debug, Error)]
 pub enum OrchestratorError {
+    /// A signal to the top-level execution loop to restart with a new strategy.
+    #[error("A redesign has been triggered. Restarting execution.")]
+    RedesignAndRestart,
+
     /// An agent execution failed.
     #[error("Agent error: {0}")]
     AgentError(#[from] AgentError),

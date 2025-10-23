@@ -84,17 +84,23 @@ impl DynamicAgent for MockAgent {
     }
 }
 
-/// Agent that always fails
+/// Agent that always fails with a non-transient error
 #[derive(Clone)]
 struct FailingAgent {
     agent_name: String,
+    call_count: Arc<Mutex<usize>>,
 }
 
 impl FailingAgent {
     fn new(name: impl Into<String>) -> Self {
         Self {
             agent_name: name.into(),
+            call_count: Arc::new(Mutex::new(0)),
         }
+    }
+
+    async fn get_call_count(&self) -> usize {
+        *self.call_count.lock().await
     }
 }
 
@@ -107,6 +113,8 @@ impl Agent for FailingAgent {
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
+        *self.call_count.lock().await += 1;
+        // Return a non-transient error (ExecutionFailed is not retryable)
         Err(AgentError::ExecutionFailed(format!(
             "{} failed",
             self.agent_name
@@ -127,6 +135,204 @@ impl DynamicAgent for FailingAgent {
     async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
         let output = self.execute(input).await?;
         Ok(AgentOutput::Success(output))
+    }
+}
+
+/// Agent that always succeeds
+#[derive(Clone)]
+struct SuccessAgent {
+    agent_name: String,
+    output: JsonValue,
+    call_count: Arc<Mutex<usize>>,
+}
+
+impl SuccessAgent {
+    fn new(name: impl Into<String>, output: JsonValue) -> Self {
+        Self {
+            agent_name: name.into(),
+            output,
+            call_count: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    async fn get_call_count(&self) -> usize {
+        *self.call_count.lock().await
+    }
+}
+
+#[async_trait::async_trait]
+impl Agent for SuccessAgent {
+    type Output = JsonValue;
+
+    fn expertise(&self) -> &str {
+        "Success agent for testing"
+    }
+
+    async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
+        *self.call_count.lock().await += 1;
+        Ok(self.output.clone())
+    }
+}
+
+#[async_trait::async_trait]
+impl DynamicAgent for SuccessAgent {
+    fn name(&self) -> String {
+        self.agent_name.clone()
+    }
+
+    fn expertise(&self) -> &str {
+        "Success agent for testing"
+    }
+
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(output))
+    }
+}
+
+/// Mock redesign decision agent that responds with "REGENERATE" for redesign prompts
+#[derive(Clone)]
+struct RedesignDecisionAgent {
+    call_count: Arc<Mutex<usize>>,
+}
+
+impl RedesignDecisionAgent {
+    fn new() -> Self {
+        Self {
+            call_count: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    async fn get_call_count(&self) -> usize {
+        *self.call_count.lock().await
+    }
+}
+
+#[async_trait::async_trait]
+impl Agent for RedesignDecisionAgent {
+    type Output = String;
+
+    fn expertise(&self) -> &str {
+        "Mock redesign decision agent"
+    }
+
+    async fn execute(&self, input: Payload) -> Result<Self::Output, AgentError> {
+        *self.call_count.lock().await += 1;
+
+        // Check if this is a redesign decision prompt
+        let input_str = input.to_text();
+
+        if input_str.contains("Workflow Recovery Task") {
+            Ok("REGENERATE".to_string())
+        } else {
+            Ok("FAIL".to_string())
+        }
+    }
+}
+
+/// Mock strategy generator agent that changes strategy after first call
+#[derive(Clone)]
+struct StrategyGeneratorAgent {
+    call_count: Arc<Mutex<usize>>,
+}
+
+impl StrategyGeneratorAgent {
+    fn new() -> Self {
+        Self {
+            call_count: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    async fn get_call_count(&self) -> usize {
+        *self.call_count.lock().await
+    }
+}
+
+#[async_trait::async_trait]
+impl Agent for StrategyGeneratorAgent {
+    type Output = StrategyMap;
+
+    fn expertise(&self) -> &str {
+        "Mock strategy generator agent"
+    }
+
+    async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
+        let count = {
+            let mut c = self.call_count.lock().await;
+            *c += 1;
+            *c
+        };
+
+        if count == 1 {
+            // First call: create strategy with FailingAgent
+            let mut strategy = StrategyMap::new("Initial Strategy".to_string());
+            strategy.add_step(StrategyStep::new(
+                "step_1".to_string(),
+                "First step".to_string(),
+                "FailingAgent".to_string(),
+                "Process {{ task }}".to_string(),
+                "Step 1".to_string(),
+            ));
+            Ok(strategy)
+        } else {
+            // Second call (after redesign): create strategy with SuccessAgent
+            let mut strategy = StrategyMap::new("Redesigned Strategy".to_string());
+            strategy.add_step(StrategyStep::new(
+                "step_1_fixed".to_string(),
+                "Fixed first step".to_string(),
+                "SuccessAgent".to_string(),
+                "Process {{ task }}".to_string(),
+                "Step 1 Fixed".to_string(),
+            ));
+            Ok(strategy)
+        }
+    }
+}
+
+/// Mock redesign decision agent that always returns "FAIL" (no redesign)
+/// This is useful for tests that want to preserve the old behavior without self-remediation
+#[derive(Clone)]
+struct NoRedesignAgent;
+
+impl NoRedesignAgent {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl Agent for NoRedesignAgent {
+    type Output = String;
+
+    fn expertise(&self) -> &str {
+        "Mock agent that never triggers redesign"
+    }
+
+    async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
+        Ok("FAIL".to_string())
+    }
+}
+
+/// Dummy strategy generator that should never be called
+#[derive(Clone)]
+struct DummyStrategyGenerator;
+
+impl DummyStrategyGenerator {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl Agent for DummyStrategyGenerator {
+    type Output = StrategyMap;
+
+    fn expertise(&self) -> &str {
+        "Dummy strategy generator (should not be called)"
+    }
+
+    async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
+        panic!("DummyStrategyGenerator should never be called");
     }
 }
 
@@ -376,7 +582,12 @@ async fn test_error_handling_and_cascade() {
     ));
 
     let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
-    let mut orchestrator = ParallelOrchestrator::new(blueprint);
+    // Use mock internal agents to prevent self-remediation
+    let mut orchestrator = ParallelOrchestrator::with_internal_agents(
+        blueprint,
+        Box::new(NoRedesignAgent::new()),
+        Box::new(DummyStrategyGenerator::new()),
+    );
     orchestrator.set_strategy(strategy);
 
     orchestrator.add_agent(
@@ -901,7 +1112,12 @@ async fn test_save_and_resume_comprehensive() {
     // ========================================================================
 
     let blueprint = BlueprintWorkflow::new("Test Blueprint".to_string());
-    let mut orchestrator_first = ParallelOrchestrator::new(blueprint);
+    // Use mock internal agents to prevent self-remediation
+    let mut orchestrator_first = ParallelOrchestrator::with_internal_agents(
+        blueprint,
+        Box::new(NoRedesignAgent::new()),
+        Box::new(DummyStrategyGenerator::new()),
+    );
     orchestrator_first.set_strategy(strategy.clone());
 
     orchestrator_first.add_agent(
@@ -996,7 +1212,12 @@ async fn test_save_and_resume_comprehensive() {
     // ========================================================================
 
     let blueprint2 = BlueprintWorkflow::new("Test Blueprint".to_string());
-    let mut orchestrator_second = ParallelOrchestrator::new(blueprint2);
+    // Use mock internal agents to prevent self-remediation
+    let mut orchestrator_second = ParallelOrchestrator::with_internal_agents(
+        blueprint2,
+        Box::new(NoRedesignAgent::new()),
+        Box::new(DummyStrategyGenerator::new()),
+    );
     orchestrator_second.set_strategy(strategy.clone());
 
     orchestrator_second.add_agent(
@@ -1072,5 +1293,114 @@ async fn test_save_and_resume_comprehensive() {
         result_second.context["step_3_output"],
         json!({"result": "step3_success"}),
         "step3 output should match"
+    );
+}
+
+/// Test self-remediation (redesign) functionality on permanent failure
+///
+/// This test verifies that when a workflow encounters a permanent (non-transient) failure,
+/// the orchestrator can:
+/// 1. Detect the permanent failure
+/// 2. Invoke the redesign decision agent
+/// 3. Generate a new strategy
+/// 4. Restart execution with the new strategy
+/// 5. Complete successfully
+#[tokio::test]
+async fn test_self_remediation_on_permanent_failure() {
+    // Create mock internal agents
+    let redesign_decision_agent = RedesignDecisionAgent::new();
+    let strategy_generator_agent = StrategyGeneratorAgent::new();
+
+    // Keep references for call count verification
+    let redesign_decision_agent_ref = redesign_decision_agent.clone();
+    let strategy_generator_agent_ref = strategy_generator_agent.clone();
+
+    // Create orchestrator with custom internal agents
+    let blueprint = BlueprintWorkflow::new("Test Self-Remediation".to_string());
+    let mut orchestrator = ParallelOrchestrator::with_internal_agents(
+        blueprint,
+        Box::new(redesign_decision_agent),
+        Box::new(strategy_generator_agent),
+    );
+
+    // Create worker agents
+    let failing_agent = Arc::new(FailingAgent::new("FailingAgent"));
+    let success_agent = Arc::new(SuccessAgent::new(
+        "SuccessAgent",
+        json!({"result": "success"}),
+    ));
+
+    // Keep references for call count verification
+    let failing_agent_ref = failing_agent.clone();
+    let success_agent_ref = success_agent.clone();
+
+    // Register agents
+    orchestrator.add_agent("FailingAgent", failing_agent);
+    orchestrator.add_agent("SuccessAgent", success_agent);
+
+    // Execute the workflow
+    // First attempt: Strategy generator creates strategy with FailingAgent -> fails
+    // Second attempt: Redesign decision agent returns REGENERATE -> new strategy generated with SuccessAgent -> succeeds
+    let result = orchestrator
+        .execute("test remediation", CancellationToken::new(), None, None)
+        .await
+        .unwrap();
+
+    // ========================================================================
+    // Verify final result
+    // ========================================================================
+
+    assert!(
+        result.success,
+        "Workflow should succeed after self-remediation"
+    );
+
+    // The redesigned strategy should have executed successfully
+    assert_eq!(
+        result.steps_executed, 1,
+        "Should execute 1 step (from the redesigned strategy)"
+    );
+
+    // Verify the final context contains output from the SuccessAgent
+    assert!(
+        result.context.contains_key("step_1_fixed_output"),
+        "Final context should contain output from the fixed step"
+    );
+    assert_eq!(
+        result.context["step_1_fixed_output"],
+        json!({"result": "success"}),
+        "Output should be from SuccessAgent"
+    );
+
+    // ========================================================================
+    // Verify agent call counts
+    // ========================================================================
+
+    // Strategy generator should be called twice (initial + redesign)
+    assert_eq!(
+        strategy_generator_agent_ref.get_call_count().await,
+        2,
+        "StrategyGeneratorAgent should be called twice (initial + redesign)"
+    );
+
+    // Redesign decision agent should be called once (when FailingAgent fails)
+    assert_eq!(
+        redesign_decision_agent_ref.get_call_count().await,
+        1,
+        "RedesignDecisionAgent should be called once (after FailingAgent fails)"
+    );
+
+    // FailingAgent should be called once (in the first strategy)
+    assert_eq!(
+        failing_agent_ref.get_call_count().await,
+        1,
+        "FailingAgent should be called once (in the initial strategy)"
+    );
+
+    // SuccessAgent should be called once (in the redesigned strategy)
+    assert_eq!(
+        success_agent_ref.get_call_count().await,
+        1,
+        "SuccessAgent should be called once (in the redesigned strategy)"
     );
 }

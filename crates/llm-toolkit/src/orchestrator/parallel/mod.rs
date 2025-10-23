@@ -11,4 +11,4 @@ pub mod execution_state;
 pub use config::ParallelOrchestratorConfig;
 pub use dependency_analysis::{build_dependency_graph, extract_template_variables};
 pub use dependency_graph::DependencyGraph;
-pub use execution_state::{ExecutionStateManager, StepState};
+pub use execution_state::{ExecutionStateManager, StepFailure, StepState};

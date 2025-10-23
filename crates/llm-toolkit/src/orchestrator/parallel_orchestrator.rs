@@ -4,9 +4,11 @@
 //! workflow steps concurrently based on their dependencies.
 
 use crate::agent::DynamicAgent;
+use crate::orchestrator::prompts::ParallelRedesignDecisionRequest;
 use crate::orchestrator::{
     OrchestratorError, StrategyInstruction, StrategyMap, StrategyStep, TerminateInstruction,
 };
+use crate::prompt::ToPrompt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -18,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, info, info_span, warn};
 
 use super::parallel::{
-    DependencyGraph, ExecutionStateManager, ParallelOrchestratorConfig, StepState,
+    DependencyGraph, ExecutionStateManager, ParallelOrchestratorConfig, StepFailure, StepState,
     build_dependency_graph,
 };
 
@@ -176,7 +178,6 @@ pub struct ParallelOrchestrator {
     /// Internal string agent for intent generation and redesign decisions.
     /// Output type is String for generating prompts and making decisions.
     #[cfg(feature = "agent")]
-    #[allow(dead_code)]
     internal_agent: Box<dyn crate::agent::Agent<Output = String>>,
 
     /// The currently active execution strategy.
@@ -357,6 +358,7 @@ impl ParallelOrchestrator {
             self.blueprint.description.clone(),
             self.blueprint.graph.clone(),
             None, // No user context for parallel orchestrator initially
+            self.config.enable_validation,
         );
 
         let prompt = request.to_prompt();
@@ -414,19 +416,21 @@ impl ParallelOrchestrator {
             self.strategy = Some(strategy);
         }
 
-        // Get strategy reference (must exist at this point)
-        let strategy = self
-            .strategy
-            .as_ref()
-            .ok_or_else(OrchestratorError::no_strategy)?;
+        // Wrap the execution in a loop to handle RedesignAndRestart errors
+        loop {
+            // Clone the strategy to avoid borrow conflicts in the async block
+            let strategy = self
+                .strategy
+                .clone()
+                .ok_or_else(OrchestratorError::no_strategy)?;
 
-        let total_steps = strategy.steps.len();
+            let total_steps = strategy.steps.len();
 
-        async {
+            let execution_result = async {
             info!("Starting parallel orchestration for task: {}", task);
 
             let (prefix_instructions, truncated_due_to_loop) =
-                Self::collect_parallel_prefix(strategy);
+                Self::collect_parallel_prefix(&strategy);
 
             if truncated_due_to_loop {
                 debug!(
@@ -490,6 +494,7 @@ impl ParallelOrchestrator {
                     let segment_result = self
                         .execute_segment(
                             segment,
+                            &strategy,
                             Arc::clone(&shared_context),
                             cancellation_token.clone(),
                             Some(&global_exec_state),
@@ -584,30 +589,72 @@ impl ParallelOrchestrator {
                             Self::count_steps_in_segments(&segments, segment_index + 1);
 
                         let failed_steps = segment_result.exec_state.get_failed_steps();
-                        let mut has_timeout = false;
                         let mut error_details = Vec::new();
 
                         for (step_id, err) in &failed_steps {
-                            if err.contains("timed out") {
-                                has_timeout = true;
-                            }
                             error_details.push(format!("{}: {}", step_id, err));
                         }
 
-                        let error_msg = if has_timeout {
-                            format!(
-                                "Workflow failed: {} step(s) timed out, {} skipped. Details: {}",
-                                failed_steps.len(),
-                                steps_skipped_total,
-                                error_details.join("; ")
-                            )
-                        } else {
-                            format!(
-                                "Workflow failed: {} step(s) failed, {} skipped",
-                                failed_steps.len(),
-                                steps_skipped_total
-                            )
-                        };
+                        let error_msg = format!(
+                            "Workflow failed: {} step(s) failed, {} skipped. Details: {}",
+                            failed_steps.len(),
+                            steps_skipped_total,
+                            error_details.join("; ")
+                        );
+
+                        // Attempt to handle permanent failure with redesign logic
+                        if let Some((failed_step_id, failure)) =
+                            segment_result.exec_state.get_first_failure()
+                        {
+                            // Match on error kind to decide whether to attempt redesign
+                            if failure.is_timeout() || failure.is_cancelled() {
+                                // For timeout and cancelled errors, bypass redesign logic
+                                info!(
+                                    "Step {} failed with timeout/cancellation, bypassing redesign",
+                                    failed_step_id
+                                );
+                                return Ok(ParallelOrchestrationResult::failure(
+                                    steps_executed_total,
+                                    steps_skipped_total,
+                                    final_context,
+                                    error_msg,
+                                ));
+                            } else {
+                                // For all other error types, attempt redesign
+                                #[cfg(feature = "agent")]
+                                {
+                                    match self
+                                        .handle_permanent_failure(
+                                            task,
+                                            &failed_step_id,
+                                            &failure.message,
+                                            &final_context,
+                                        )
+                                        .await
+                                    {
+                                        Ok(Some(new_strategy)) => {
+                                            // Redesign was successful, update strategy and signal restart
+                                            info!(
+                                                "Redesign successful, updating strategy and restarting execution"
+                                            );
+                                            self.strategy = Some(new_strategy);
+                                            return Err(OrchestratorError::RedesignAndRestart);
+                                        }
+                                        Ok(None) => {
+                                            // Redesign was not chosen or not possible, proceed with failure
+                                            info!("Redesign not chosen, proceeding with workflow failure");
+                                        }
+                                        Err(e) => {
+                                            // Error during redesign decision, log and proceed with original failure
+                                            warn!(
+                                                "Error during redesign decision: {}, proceeding with workflow failure",
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         return Ok(ParallelOrchestrationResult::failure(
                             steps_executed_total,
@@ -650,13 +697,129 @@ impl ParallelOrchestrator {
                 steps_executed_total,
                 final_context,
             ))
+            }
+            .instrument(info_span!(
+                "parallel_orchestrator_execute",
+                task = %task,
+                total_steps = total_steps,
+            ))
+            .await;
+
+            // Handle the result: break on success or non-redesign errors
+            match execution_result {
+                Err(OrchestratorError::RedesignAndRestart) => {
+                    info!("Redesign triggered, restarting execution with new strategy");
+                    // Continue the loop to restart with the new strategy
+                    continue;
+                }
+                Ok(result) => {
+                    // Success case - break and return
+                    break Ok(result);
+                }
+                Err(e) => {
+                    // Other errors - break and return error
+                    break Err(e);
+                }
+            }
         }
-        .instrument(info_span!(
-            "parallel_orchestrator_execute",
-            task = %task,
-            total_steps = total_steps,
-        ))
-        .await
+    }
+
+    /// Handles a permanent failure by deciding whether to regenerate the strategy.
+    ///
+    /// This method uses the internal agent to analyze the failure and determine if the
+    /// workflow can be salvaged by generating a new strategy, or if it should fail permanently.
+    ///
+    /// # Arguments
+    ///
+    /// * `task` - The original task description
+    /// * `failed_step_id` - The ID of the step that failed
+    /// * `error_message` - The error message from the failure
+    /// * `current_context` - The current execution context with outputs from successful steps
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(strategy))` - A new strategy was generated and should be used
+    /// * `Ok(None)` - The workflow should fail permanently
+    /// * `Err(_)` - An error occurred during the decision-making process
+    #[cfg(feature = "agent")]
+    async fn handle_permanent_failure(
+        &mut self,
+        task: &str,
+        failed_step_id: &str,
+        error_message: &str,
+        current_context: &HashMap<String, JsonValue>,
+    ) -> Result<Option<StrategyMap>, OrchestratorError> {
+        debug!(
+            "Handling permanent failure for step {}: {}",
+            failed_step_id, error_message
+        );
+
+        // Serialize the current context to JSON string
+        let successful_outputs = serde_json::to_string_pretty(current_context).map_err(|e| {
+            OrchestratorError::ExecutionFailed(format!(
+                "Failed to serialize context for redesign decision: {}",
+                e
+            ))
+        })?;
+
+        // Create the redesign decision request
+        let request = ParallelRedesignDecisionRequest::new(
+            task.to_string(),
+            failed_step_id.to_string(),
+            error_message.to_string(),
+            successful_outputs,
+        );
+
+        let prompt = request.to_prompt();
+
+        debug!("Parallel redesign decision prompt:\n{}", prompt);
+
+        // Execute the prompt using the internal agent
+        let response = self
+            .internal_agent
+            .execute(prompt.into())
+            .await
+            .map_err(|e| {
+                OrchestratorError::ExecutionFailed(format!(
+                    "Failed to get redesign decision from agent: {}",
+                    e
+                ))
+            })?;
+
+        // Check if the response contains "REGENERATE" (case-insensitive)
+        let response_upper = response.trim().to_uppercase();
+
+        if response_upper.contains("REGENERATE") {
+            info!("Redesign decision: REGENERATE - Generating new strategy");
+
+            // Generate a new strategy
+            let new_strategy = self.generate_strategy(task).await?;
+
+            info!(
+                "Successfully generated new strategy with {} steps",
+                new_strategy.steps.len()
+            );
+
+            Ok(Some(new_strategy))
+        } else {
+            info!("Redesign decision: FAIL - Workflow will terminate");
+            Ok(None)
+        }
+    }
+
+    /// Handles a permanent failure when the agent feature is not enabled.
+    ///
+    /// Without the agent feature, we cannot make intelligent decisions about redesign,
+    /// so we always return None to indicate permanent failure.
+    #[cfg(not(feature = "agent"))]
+    async fn handle_permanent_failure(
+        &mut self,
+        _task: &str,
+        _failed_step_id: &str,
+        _error_message: &str,
+        _current_context: &HashMap<String, JsonValue>,
+    ) -> Result<Option<StrategyMap>, OrchestratorError> {
+        Ok(None)
     }
 
     /// Executes a wave of independent steps concurrently with retry logic.
@@ -879,6 +1042,7 @@ impl ParallelOrchestrator {
     async fn execute_segment(
         &self,
         segment: &ExecutionSegment,
+        strategy: &StrategyMap,
         shared_context: Arc<Mutex<HashMap<String, JsonValue>>>,
         cancellation_token: CancellationToken,
         initial_exec_state: Option<&ExecutionStateManager>,
@@ -890,9 +1054,6 @@ impl ParallelOrchestrator {
             });
         }
 
-        let strategy = self.strategy.as_ref().ok_or_else(|| {
-            OrchestratorError::ExecutionFailed("Strategy not available".to_string())
-        })?;
         let mut subset_strategy = StrategyMap::new(strategy.goal.clone());
         subset_strategy.steps = segment.steps.clone();
 
@@ -1030,7 +1191,10 @@ impl ParallelOrchestrator {
                     }
                     Err(e) => {
                         warn!(step_id = %step_id, error = %e, "Step failed");
-                        exec_state.set_state(&step_id, StepState::Failed(e.to_string()));
+                        exec_state.set_state(
+                            &step_id,
+                            StepState::Failed(StepFailure::from_orchestrator_error(&e)),
+                        );
                         self.cascade_skipped(&step_id, &dep_graph, &mut exec_state);
                     }
                 }

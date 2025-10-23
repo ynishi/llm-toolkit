@@ -1,5 +1,6 @@
 //! Configuration for orchestrator execution behavior.
 
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Configuration for orchestrator execution behavior.
@@ -21,7 +22,7 @@ use std::time::Duration;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestratorConfig {
     /// Maximum number of remediations (redesigns/retries) allowed per step.
     ///
@@ -145,6 +146,29 @@ pub struct OrchestratorConfig {
     ///
     /// **Default:** 50 (reasonable limit for most workflows)
     pub max_total_loop_iterations: usize,
+
+    /// Enable generation of validation steps after each execution step.
+    ///
+    /// When enabled, the orchestrator will generate validation steps that verify
+    /// the output of execution steps, improving reliability and error detection.
+    /// This provides:
+    /// - **Quality assurance:** Automatic validation of step outputs
+    /// - **Early error detection:** Problems caught before downstream steps
+    /// - **Better debugging:** Clear validation failures vs execution failures
+    ///
+    /// **When to disable:**
+    /// - Performance-critical scenarios where validation overhead is unacceptable
+    /// - When agents already include comprehensive internal validation
+    /// - Testing scenarios where you want to observe raw execution behavior
+    ///
+    /// **Default:** `true` (enabled for better reliability)
+    #[serde(default = "default_true")]
+    pub enable_validation: bool,
+}
+
+/// Helper function for serde default value of `true`.
+fn default_true() -> bool {
+    true
 }
 
 impl Default for OrchestratorConfig {
@@ -155,6 +179,7 @@ impl Default for OrchestratorConfig {
             min_step_interval: Duration::ZERO,
             enable_fast_path_intent_generation: false,
             max_total_loop_iterations: 50,
+            enable_validation: true,
         }
     }
 }
@@ -171,6 +196,7 @@ mod tests {
         assert_eq!(config.min_step_interval, Duration::ZERO);
         assert!(!config.enable_fast_path_intent_generation); // Default is false (quality over performance)
         assert_eq!(config.max_total_loop_iterations, 50);
+        assert!(config.enable_validation); // Default is true (enabled for reliability)
     }
 
     #[test]
@@ -198,6 +224,7 @@ mod tests {
             config1.max_total_loop_iterations,
             config2.max_total_loop_iterations
         );
+        assert_eq!(config1.enable_validation, config2.enable_validation);
     }
 
     #[test]
