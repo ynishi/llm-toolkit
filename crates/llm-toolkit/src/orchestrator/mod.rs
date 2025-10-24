@@ -231,17 +231,17 @@ impl Orchestrator {
     ///
     /// # Example
     ///
-    /// ```rust
-    /// use llm_toolkit::orchestrator::{Orchestrator, BlueprintWorkflow};
-    /// use llm_toolkit::agent::impls::{RetryAgent, gemini::GeminiAgent};
+    /// ```rust,no_run
+    /// use llm_toolkit::orchestrator::{BlueprintWorkflow, Orchestrator};
+    /// use llm_toolkit::agent::impls::{RetryAgent, ClaudeCodeAgent, ClaudeCodeJsonAgent};
     ///
-    /// let blueprint = BlueprintWorkflow::new("My workflow");
+    /// let blueprint = BlueprintWorkflow::new("My workflow".to_string());
     ///
     /// // Recommended: Wrap with RetryAgent for robustness
     /// let orchestrator = Orchestrator::with_internal_agents(
     ///     blueprint,
-    ///     Box::new(RetryAgent::new(GeminiAgent::new(), 3)),
-    ///     Box::new(RetryAgent::new(GeminiAgent::new(), 3)),
+    ///     Box::new(RetryAgent::new(ClaudeCodeAgent::new(), 3)),
+    ///     Box::new(RetryAgent::new(ClaudeCodeJsonAgent::new(), 3)),
     /// );
     /// ```
     #[cfg(feature = "agent")]
@@ -844,23 +844,35 @@ impl Orchestrator {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use llm_toolkit::orchestrator::Orchestrator;
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut orchestrator = Orchestrator::new(Default::default());
-    /// // Generate strategy without executing
-    /// let strategy = orchestrator.generate_strategy_only("Process documents").await?;
+    /// use llm_toolkit::orchestrator::{
+    ///     BlueprintWorkflow,
+    ///     Orchestrator,
+    ///     OrchestrationStatus,
+    ///     StrategyMap,
+    /// };
     ///
-    /// // Save to file
-    /// let json = serde_json::to_string_pretty(&strategy)?;
-    /// std::fs::write("my_workflow.json", json)?;
+    /// async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let blueprint = BlueprintWorkflow::new("Document workflow".to_string());
+    ///     let mut orchestrator = Orchestrator::new(blueprint);
     ///
-    /// // Later: Load and execute
-    /// let json = std::fs::read_to_string("my_workflow.json")?;
-    /// let strategy = serde_json::from_str(&json)?;
-    /// orchestrator.set_strategy_map(strategy);
-    /// orchestrator.execute("Process documents").await?;
-    /// # Ok(())
-    /// # }
+    ///     // Generate strategy without executing
+    ///     let strategy = orchestrator
+    ///         .generate_strategy_only("Process documents")
+    ///         .await?;
+    ///
+    ///     // Save to file
+    ///     let json = serde_json::to_string_pretty(&strategy)?;
+    ///     std::fs::write("my_workflow.json", json)?;
+    ///
+    ///     // Later: Load and execute
+    ///     let json = std::fs::read_to_string("my_workflow.json")?;
+    ///     let strategy: StrategyMap = serde_json::from_str(&json)?;
+    ///     orchestrator.set_strategy_map(strategy);
+    ///
+    ///     let result = orchestrator.execute("Process documents").await;
+    ///     assert!(matches!(result.status, OrchestrationStatus::Success));
+    ///     Ok(())
+    /// }
     /// ```
     #[cfg(feature = "agent")]
     pub async fn generate_strategy_only(

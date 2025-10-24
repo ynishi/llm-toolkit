@@ -62,6 +62,7 @@ preflight: test-examples-offline
 	cargo fmt --all
 	cargo clippy --all-targets --all-features -- -D warnings
 	cargo test --all-targets --all-features 
+	cargo test --doc --all-features
 
 # Publish all workspace members in the correct order with atomic dry-run -> publish sequences
 publish: preflight
