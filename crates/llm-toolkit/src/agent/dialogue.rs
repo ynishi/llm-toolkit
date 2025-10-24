@@ -10,6 +10,7 @@ use crate::agent::persona::{Persona, PersonaTeam, PersonaTeamGenerationRequest};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::task::JoinSet;
+use tracing::{error, info};
 
 /// Blueprint for creating a Dialogue.
 ///
@@ -145,10 +146,99 @@ impl Participant {
     }
 }
 
-enum SessionState {
-    Broadcast {
+/// Controls the order in which broadcast responses are yielded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BroadcastOrder {
+    /// Yields turns as soon as each participant finishes (default).
+    Completion,
+    /// Buffers responses and yields them in the original participant order.
+    ParticipantOrder,
+}
+
+struct BroadcastState {
+    pending: JoinSet<(usize, String, Result<String, AgentError>)>,
+    order: BroadcastOrder,
+    buffered: Vec<Option<Result<String, AgentError>>>,
+    next_emit: usize,
+}
+
+impl BroadcastState {
+    fn new(
         pending: JoinSet<(usize, String, Result<String, AgentError>)>,
-    },
+        order: BroadcastOrder,
+        participant_count: usize,
+    ) -> Self {
+        let buffered = match order {
+            BroadcastOrder::Completion => Vec::new(),
+            BroadcastOrder::ParticipantOrder => std::iter::repeat_with(|| None)
+                .take(participant_count)
+                .collect::<Vec<Option<Result<String, AgentError>>>>(),
+        };
+
+        Self {
+            pending,
+            order,
+            buffered,
+            next_emit: 0,
+        }
+    }
+
+    fn record_result(&mut self, idx: usize, result: Result<String, AgentError>) {
+        if matches!(self.order, BroadcastOrder::ParticipantOrder) && idx < self.buffered.len() {
+            self.buffered[idx] = Some(result);
+        }
+    }
+
+    fn try_emit(&mut self, dialogue: &mut Dialogue) -> Option<Result<DialogueTurn, AgentError>> {
+        if self.order != BroadcastOrder::ParticipantOrder {
+            return None;
+        }
+
+        let participant_total = dialogue.participants.len();
+
+        if self.next_emit >= participant_total {
+            return None;
+        }
+
+        let idx = self.next_emit;
+        let slot_ready = self
+            .buffered
+            .get(idx)
+            .and_then(|slot| slot.as_ref())
+            .is_some();
+
+        if !slot_ready {
+            return None;
+        }
+
+        let result = self.buffered[idx].take().expect("checked is_some");
+        self.next_emit += 1;
+
+        match result {
+            Ok(content) => {
+                let participant_name = dialogue.participants[idx].name().to_string();
+                let turn = DialogueTurn {
+                    participant_name: participant_name.clone(),
+                    content: content.clone(),
+                };
+                dialogue.history.push(turn.clone());
+                info!(
+                    target = "llm_toolkit::dialogue",
+                    mode = ?ExecutionModel::Broadcast,
+                    participant = %participant_name,
+                    participant_index = idx,
+                    total_participants = participant_total,
+                    event = "dialogue_turn_emitted"
+                );
+                Some(Ok(turn))
+            }
+            Err(err) => Some(Err(err)),
+        }
+    }
+}
+
+enum SessionState {
+    Broadcast(BroadcastState),
     Sequential {
         next_index: usize,
         current_input: String,
@@ -173,64 +263,155 @@ impl<'a> DialogueSession<'a> {
     ///
     /// Returns `None` when the session is complete.
     pub async fn next_turn(&mut self) -> Option<Result<DialogueTurn, AgentError>> {
-        match &mut self.state {
-            SessionState::Broadcast { pending } => match pending.join_next().await {
-                Some(Ok((_, name, result))) => {
-                    let participant_name = name;
-                    match result {
+        let participant_total = self.dialogue.participants.len();
+
+        loop {
+            match &mut self.state {
+                SessionState::Broadcast(state) => {
+                    if let Some(result) = state.try_emit(self.dialogue) {
+                        return Some(result);
+                    }
+
+                    match state.pending.join_next().await {
+                        Some(Ok((idx, name, result))) => {
+                            let participant_name = name;
+                            match state.order {
+                                BroadcastOrder::Completion => match result {
+                                    Ok(content) => {
+                                        let turn = DialogueTurn {
+                                            participant_name: participant_name.clone(),
+                                            content: content.clone(),
+                                        };
+                                        self.dialogue.history.push(turn.clone());
+                                        info!(
+                                            target = "llm_toolkit::dialogue",
+                                            mode = ?self.model,
+                                            participant = %participant_name,
+                                            participant_index = idx,
+                                            total_participants = participant_total,
+                                            event = "dialogue_turn_completed"
+                                        );
+                                        return Some(Ok(turn));
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            target = "llm_toolkit::dialogue",
+                                            mode = ?self.model,
+                                            participant = %participant_name,
+                                            participant_index = idx,
+                                            total_participants = participant_total,
+                                            error = %err,
+                                            event = "dialogue_turn_failed"
+                                        );
+                                        return Some(Err(err));
+                                    }
+                                },
+                                BroadcastOrder::ParticipantOrder => {
+                                    match &result {
+                                        Ok(_) => {
+                                            info!(
+                                                target = "llm_toolkit::dialogue",
+                                                mode = ?self.model,
+                                                participant = %participant_name,
+                                                participant_index = idx,
+                                                total_participants = participant_total,
+                                                event = "dialogue_turn_completed"
+                                            );
+                                        }
+                                        Err(err) => {
+                                            error!(
+                                                target = "llm_toolkit::dialogue",
+                                                mode = ?self.model,
+                                                participant = %participant_name,
+                                                participant_index = idx,
+                                                total_participants = participant_total,
+                                                error = %err,
+                                                event = "dialogue_turn_failed"
+                                            );
+                                        }
+                                    }
+                                    state.record_result(idx, result);
+                                    continue;
+                                }
+                            }
+                        }
+                        Some(Err(join_err)) => {
+                            error!(
+                                target = "llm_toolkit::dialogue",
+                                mode = ?self.model,
+                                error = %join_err,
+                                event = "dialogue_task_join_failed"
+                            );
+                            return Some(Err(AgentError::ExecutionFailed(format!(
+                                "Broadcast task failed: {}",
+                                join_err
+                            ))));
+                        }
+                        None => {
+                            if let Some(result) = state.try_emit(self.dialogue) {
+                                return Some(result);
+                            }
+                            self.state = SessionState::Completed;
+                            return None;
+                        }
+                    }
+                }
+                SessionState::Sequential {
+                    next_index,
+                    current_input,
+                } => {
+                    if *next_index >= self.dialogue.participants.len() {
+                        self.state = SessionState::Completed;
+                        return None;
+                    }
+
+                    let idx = *next_index;
+                    *next_index += 1;
+                    let step_number = idx + 1;
+
+                    let response_result = {
+                        let participant = &self.dialogue.participants[idx];
+                        let payload: Payload = current_input.clone().into();
+                        participant.agent.execute(payload).await
+                    };
+
+                    return match response_result {
                         Ok(content) => {
+                            *current_input = content.clone();
+                            let participant_name =
+                                self.dialogue.participants[idx].name().to_string();
                             let turn = DialogueTurn {
                                 participant_name: participant_name.clone(),
-                                content: content.clone(),
+                                content,
                             };
                             self.dialogue.history.push(turn.clone());
+                            info!(
+                                target = "llm_toolkit::dialogue",
+                                mode = ?self.model,
+                                participant = %participant_name,
+                                step_index = idx,
+                                step_number,
+                                total_steps = participant_total,
+                                event = "dialogue_turn_completed"
+                            );
                             Some(Ok(turn))
                         }
-                        Err(err) => Some(Err(err)),
-                    }
+                        Err(err) => {
+                            error!(
+                                target = "llm_toolkit::dialogue",
+                                mode = ?self.model,
+                                participant_index = idx,
+                                step_number,
+                                total_steps = participant_total,
+                                error = %err,
+                                event = "dialogue_turn_failed"
+                            );
+                            Some(Err(err))
+                        }
+                    };
                 }
-                Some(Err(join_err)) => Some(Err(AgentError::ExecutionFailed(format!(
-                    "Broadcast task failed: {}",
-                    join_err
-                )))),
-                None => {
-                    self.state = SessionState::Completed;
-                    None
-                }
-            },
-            SessionState::Sequential {
-                next_index,
-                current_input,
-            } => {
-                if *next_index >= self.dialogue.participants.len() {
-                    self.state = SessionState::Completed;
-                    return None;
-                }
-
-                let idx = *next_index;
-                *next_index += 1;
-
-                let response_result = {
-                    let participant = &self.dialogue.participants[idx];
-                    let payload: Payload = current_input.clone().into();
-                    participant.agent.execute(payload).await
-                };
-
-                match response_result {
-                    Ok(content) => {
-                        *current_input = content.clone();
-                        let participant_name = self.dialogue.participants[idx].name().to_string();
-                        let turn = DialogueTurn {
-                            participant_name,
-                            content,
-                        };
-                        self.dialogue.history.push(turn.clone());
-                        Some(Ok(turn))
-                    }
-                    Err(err) => Some(Err(err)),
-                }
+                SessionState::Completed => return None,
             }
-            SessionState::Completed => None,
         }
     }
 }
@@ -557,6 +738,15 @@ impl Dialogue {
 
     /// Begins a dialogue session that yields turns incrementally.
     pub fn partial_session(&mut self, initial_prompt: String) -> DialogueSession<'_> {
+        self.partial_session_with_order(initial_prompt, BroadcastOrder::Completion)
+    }
+
+    /// Begins a dialogue session with a specified broadcast ordering policy.
+    pub fn partial_session_with_order(
+        &mut self,
+        initial_prompt: String,
+        broadcast_order: BroadcastOrder,
+    ) -> DialogueSession<'_> {
         self.history.push(DialogueTurn {
             participant_name: "System".to_string(),
             content: initial_prompt.clone(),
@@ -580,7 +770,11 @@ impl Dialogue {
                     });
                 }
 
-                SessionState::Broadcast { pending }
+                SessionState::Broadcast(BroadcastState::new(
+                    pending,
+                    broadcast_order,
+                    self.participants.len(),
+                ))
             }
             ExecutionModel::Sequential => SessionState::Sequential {
                 next_index: 0,
@@ -637,7 +831,8 @@ impl Dialogue {
     /// ```
     pub async fn run(&mut self, initial_prompt: String) -> Result<Vec<DialogueTurn>, AgentError> {
         let model = self.strategy.execution_model();
-        let mut session = self.partial_session(initial_prompt);
+        let mut session =
+            self.partial_session_with_order(initial_prompt, BroadcastOrder::Completion);
         let mut turns = Vec::new();
 
         while let Some(result) = session.next_turn().await {
@@ -1002,6 +1197,44 @@ mod tests {
         let second = session.next_turn().await.unwrap().unwrap();
         assert_eq!(second.participant_name, "Slow");
         assert!(second.content.contains("Slow handled"));
+
+        assert!(session.next_turn().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_partial_session_broadcast_ordered_mode_respects_participant_order() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let slow = Persona {
+            name: "Slow".to_string(),
+            role: "Deliberate responder".to_string(),
+            background: "Prefers careful analysis".to_string(),
+            communication_style: "Measured".to_string(),
+        };
+
+        let fast = Persona {
+            name: "Fast".to_string(),
+            role: "Quick responder".to_string(),
+            background: "Snappy insights".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        dialogue
+            .add_participant(slow, DelayAgent::new("Slow", 50))
+            .add_participant(fast, DelayAgent::new("Fast", 10));
+
+        let mut session = dialogue
+            .partial_session_with_order("Hello".to_string(), BroadcastOrder::ParticipantOrder);
+
+        let first = session.next_turn().await.unwrap().unwrap();
+        assert_eq!(first.participant_name, "Slow");
+        assert!(first.content.contains("Slow handled"));
+
+        let second = session.next_turn().await.unwrap().unwrap();
+        assert_eq!(second.participant_name, "Fast");
+        assert!(second.content.contains("Fast handled"));
 
         assert!(session.next_turn().await.is_none());
     }

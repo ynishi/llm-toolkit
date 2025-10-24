@@ -1284,6 +1284,10 @@ while let Some(turn) = session.next_turn().await {
 - **Broadcast** sessions stream each agent’s reply as soon as it finishes (fast responders appear first).
 - **Sequential** sessions expose intermediate outputs (`turn.content`) before they’re fed into the next participant, so you can surface progress step-by-step.
 
+You can also rely on the built-in `tracing` instrumentation (`target = "llm_toolkit::dialogue"`) to monitor progress without polling the session manually. Attach a `tracing_subscriber` layer and watch for `dialogue_turn_completed` / `dialogue_turn_failed` events to drive dashboards or aggregate metrics.
+
+Need deterministic ordering instead of completion order? Create the session with `partial_session_with_order(prompt, BroadcastOrder::ParticipantOrder)` to buffer results until all earlier participants have responded.
+
 The existing `Dialogue::run` helper still collects everything for you (and, in sequential mode, keeps returning only the final turn) by internally driving a `partial_session` to completion.
 
 **Available Methods:**
