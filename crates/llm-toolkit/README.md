@@ -1268,6 +1268,24 @@ let responses = dialogue.run("The new API design is complete.".to_string()).awai
 // responses: Ok(vec!["[Critic] processed: 'The new API design is complete.'", "[Translator] processed: 'The new API design is complete.'"])
 ```
 
+###### Streaming Results with `partial_session`
+
+Interactive shells and UI frontends can consume responses incrementally:
+
+```rust
+let mut session = dialogue.partial_session("Draft release plan".to_string());
+
+while let Some(turn) = session.next_turn().await {
+    let turn = turn?; // handle AgentError per participant
+    println!("[{}] {}", turn.participant_name, turn.content);
+}
+```
+
+- **Broadcast** sessions stream each agent’s reply as soon as it finishes (fast responders appear first).
+- **Sequential** sessions expose intermediate outputs (`turn.content`) before they’re fed into the next participant, so you can surface progress step-by-step.
+
+The existing `Dialogue::run` helper still collects everything for you (and, in sequential mode, keeps returning only the final turn) by internally driving a `partial_session` to completion.
+
 **Available Methods:**
 
 The `Dialogue` component provides several methods for managing conversations:

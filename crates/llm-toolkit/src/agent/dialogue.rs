@@ -8,6 +8,8 @@ use super::{Agent, AgentError, Payload};
 use crate::ToPrompt;
 use crate::agent::persona::{Persona, PersonaTeam, PersonaTeamGenerationRequest};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::task::JoinSet;
 
 /// Blueprint for creating a Dialogue.
 ///
@@ -56,7 +58,7 @@ pub trait TurnTakingStrategy: Send + Sync {
     /// A vector of indices of the participants who should speak next.
     fn select_next_participants(
         &mut self,
-        participants: &[Box<dyn Agent<Output = String>>],
+        participants: &[Arc<dyn Agent<Output = String>>],
         history: &[DialogueTurn],
     ) -> Vec<usize>;
 
@@ -85,7 +87,7 @@ impl Default for Broadcast {
 impl TurnTakingStrategy for Broadcast {
     fn select_next_participants(
         &mut self,
-        participants: &[Box<dyn Agent<Output = String>>],
+        participants: &[Arc<dyn Agent<Output = String>>],
         _history: &[DialogueTurn],
     ) -> Vec<usize> {
         (0..participants.len()).collect()
@@ -117,7 +119,7 @@ impl Default for Sequential {
 impl TurnTakingStrategy for Sequential {
     fn select_next_participants(
         &mut self,
-        participants: &[Box<dyn Agent<Output = String>>],
+        participants: &[Arc<dyn Agent<Output = String>>],
         _history: &[DialogueTurn],
     ) -> Vec<usize> {
         (0..participants.len()).collect()
@@ -133,13 +135,103 @@ impl TurnTakingStrategy for Sequential {
 /// Wraps a persona and its associated agent implementation.
 struct Participant {
     persona: Persona,
-    agent: Box<dyn Agent<Output = String>>,
+    agent: Arc<dyn Agent<Output = String>>,
 }
 
 impl Participant {
     /// Returns the name of the participant from their persona.
     fn name(&self) -> &str {
         &self.persona.name
+    }
+}
+
+enum SessionState {
+    Broadcast {
+        pending: JoinSet<(usize, String, Result<String, AgentError>)>,
+    },
+    Sequential {
+        next_index: usize,
+        current_input: String,
+    },
+    Completed,
+}
+
+/// Represents an in-flight dialogue execution that can yield turns incrementally.
+pub struct DialogueSession<'a> {
+    dialogue: &'a mut Dialogue,
+    state: SessionState,
+    model: ExecutionModel,
+}
+
+impl<'a> DialogueSession<'a> {
+    /// Returns the execution model backing this session.
+    pub fn execution_model(&self) -> ExecutionModel {
+        self.model
+    }
+
+    /// Retrieves the next available dialogue turn.
+    ///
+    /// Returns `None` when the session is complete.
+    pub async fn next_turn(&mut self) -> Option<Result<DialogueTurn, AgentError>> {
+        match &mut self.state {
+            SessionState::Broadcast { pending } => match pending.join_next().await {
+                Some(Ok((_, name, result))) => {
+                    let participant_name = name;
+                    match result {
+                        Ok(content) => {
+                            let turn = DialogueTurn {
+                                participant_name: participant_name.clone(),
+                                content: content.clone(),
+                            };
+                            self.dialogue.history.push(turn.clone());
+                            Some(Ok(turn))
+                        }
+                        Err(err) => Some(Err(err)),
+                    }
+                }
+                Some(Err(join_err)) => Some(Err(AgentError::ExecutionFailed(format!(
+                    "Broadcast task failed: {}",
+                    join_err
+                )))),
+                None => {
+                    self.state = SessionState::Completed;
+                    None
+                }
+            },
+            SessionState::Sequential {
+                next_index,
+                current_input,
+            } => {
+                if *next_index >= self.dialogue.participants.len() {
+                    self.state = SessionState::Completed;
+                    return None;
+                }
+
+                let idx = *next_index;
+                *next_index += 1;
+
+                let response_result = {
+                    let participant = &self.dialogue.participants[idx];
+                    let payload: Payload = current_input.clone().into();
+                    participant.agent.execute(payload).await
+                };
+
+                match response_result {
+                    Ok(content) => {
+                        *current_input = content.clone();
+                        let participant_name = self.dialogue.participants[idx].name().to_string();
+                        let turn = DialogueTurn {
+                            participant_name,
+                            content,
+                        };
+                        self.dialogue.history.push(turn.clone());
+                        Some(Ok(turn))
+                    }
+                    Err(err) => Some(Err(err)),
+                }
+            }
+            SessionState::Completed => None,
+        }
     }
 }
 
@@ -294,7 +386,7 @@ impl Dialogue {
 
             dialogue.participants.push(Participant {
                 persona,
-                agent: Box::new(chat_agent),
+                agent: Arc::new(chat_agent),
             });
         }
 
@@ -353,7 +445,7 @@ impl Dialogue {
 
             dialogue.participants.push(Participant {
                 persona,
-                agent: Box::new(chat_agent),
+                agent: Arc::new(chat_agent),
             });
         }
 
@@ -401,7 +493,7 @@ impl Dialogue {
 
         self.participants.push(Participant {
             persona,
-            agent: Box::new(chat_agent),
+            agent: Arc::new(chat_agent),
         });
 
         self
@@ -463,6 +555,46 @@ impl Dialogue {
         Ok(())
     }
 
+    /// Begins a dialogue session that yields turns incrementally.
+    pub fn partial_session(&mut self, initial_prompt: String) -> DialogueSession<'_> {
+        self.history.push(DialogueTurn {
+            participant_name: "System".to_string(),
+            content: initial_prompt.clone(),
+        });
+
+        let model = self.strategy.execution_model();
+        let state = match model {
+            ExecutionModel::Broadcast => {
+                let history_text = self.format_history();
+                let payload: Payload = history_text.into();
+                let mut pending = JoinSet::new();
+
+                for (idx, participant) in self.participants.iter().enumerate() {
+                    let agent = Arc::clone(&participant.agent);
+                    let payload_clone = payload.clone();
+                    let name = participant.name().to_string();
+
+                    pending.spawn(async move {
+                        let result = agent.execute(payload_clone).await;
+                        (idx, name, result)
+                    });
+                }
+
+                SessionState::Broadcast { pending }
+            }
+            ExecutionModel::Sequential => SessionState::Sequential {
+                next_index: 0,
+                current_input: initial_prompt,
+            },
+        };
+
+        DialogueSession {
+            dialogue: self,
+            state,
+            model,
+        }
+    }
+
     /// Runs the dialogue with the configured execution model.
     ///
     /// The behavior depends on the execution model:
@@ -504,73 +636,18 @@ impl Dialogue {
     /// let final_turn = dialogue.run("Process this".to_string()).await?;
     /// ```
     pub async fn run(&mut self, initial_prompt: String) -> Result<Vec<DialogueTurn>, AgentError> {
-        // Add the initial prompt to the history
-        self.history.push(DialogueTurn {
-            participant_name: "System".to_string(),
-            content: initial_prompt.clone(),
-        });
+        let model = self.strategy.execution_model();
+        let mut session = self.partial_session(initial_prompt);
+        let mut turns = Vec::new();
 
-        match self.strategy.execution_model() {
-            ExecutionModel::Broadcast => {
-                // Broadcast mode: all participants respond in parallel to the same input
-                let history_text = self.format_history();
-                let payload: Payload = history_text.into();
+        while let Some(result) = session.next_turn().await {
+            let turn = result?;
+            turns.push(turn);
+        }
 
-                // Execute all participants in parallel
-                let mut tasks = Vec::new();
-                for participant in &self.participants {
-                    let payload_clone = payload.clone();
-                    tasks.push(participant.agent.execute(payload_clone));
-                }
-
-                // Wait for all responses
-                let responses = futures::future::join_all(tasks).await;
-
-                // Collect results and update history
-                let mut turns = Vec::new();
-                for (idx, response_result) in responses.into_iter().enumerate() {
-                    let response = response_result?;
-                    let participant_name = self.participants[idx].name().to_string();
-
-                    let turn = DialogueTurn {
-                        participant_name: participant_name.clone(),
-                        content: response,
-                    };
-
-                    self.history.push(turn.clone());
-                    turns.push(turn);
-                }
-
-                Ok(turns)
-            }
-            ExecutionModel::Sequential => {
-                // Sequential mode: output of one agent becomes input to the next
-                let mut current_input = initial_prompt;
-                let mut final_turn = None;
-
-                for participant in &self.participants {
-                    let participant_name = participant.name().to_string();
-                    let payload: Payload = current_input.clone().into();
-
-                    // Execute the agent with the current input
-                    let response = participant.agent.execute(payload).await?;
-
-                    // Record the turn in history
-                    let turn = DialogueTurn {
-                        participant_name,
-                        content: response.clone(),
-                    };
-
-                    self.history.push(turn.clone());
-                    final_turn = Some(turn);
-
-                    // Update the current input for the next agent
-                    current_input = response;
-                }
-
-                // Return only the final turn
-                Ok(final_turn.into_iter().collect())
-            }
+        match model {
+            ExecutionModel::Broadcast => Ok(turns),
+            ExecutionModel::Sequential => Ok(turns.into_iter().last().into_iter().collect()),
         }
     }
 
@@ -624,6 +701,7 @@ impl Dialogue {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use tokio::time::{Duration, sleep};
 
     // Mock agent for testing
     #[derive(Clone)]
@@ -810,6 +888,122 @@ mod tests {
 
         assert_eq!(dialogue.history()[3].participant_name, "Finalizer");
         assert_eq!(dialogue.history()[3].content, "Final output: all done");
+    }
+
+    #[tokio::test]
+    async fn test_partial_session_sequential_yields_intermediate_turns() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::sequential();
+
+        let persona1 = Persona {
+            name: "Step1".to_string(),
+            role: "Stage".to_string(),
+            background: "first".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Step2".to_string(),
+            role: "Stage".to_string(),
+            background: "second".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona1.clone(),
+                MockAgent::new("Step1", vec!["S1 output".to_string()]),
+            )
+            .add_participant(
+                persona2.clone(),
+                MockAgent::new("Step2", vec!["S2 output".to_string()]),
+            );
+
+        let mut session = dialogue.partial_session("Initial".to_string());
+        assert_eq!(session.execution_model(), ExecutionModel::Sequential);
+
+        let first = session.next_turn().await.unwrap().unwrap();
+        assert_eq!(first.participant_name, "Step1");
+        assert_eq!(first.content, "S1 output");
+
+        let second = session.next_turn().await.unwrap().unwrap();
+        assert_eq!(second.participant_name, "Step2");
+        assert_eq!(second.content, "S2 output");
+
+        assert!(session.next_turn().await.is_none());
+
+        assert_eq!(dialogue.history().len(), 3);
+        assert_eq!(dialogue.history()[0].participant_name, "System");
+        assert_eq!(dialogue.history()[1].participant_name, "Step1");
+        assert_eq!(dialogue.history()[2].participant_name, "Step2");
+    }
+
+    #[derive(Clone)]
+    struct DelayAgent {
+        name: String,
+        delay_ms: u64,
+    }
+
+    impl DelayAgent {
+        fn new(name: impl Into<String>, delay_ms: u64) -> Self {
+            Self {
+                name: name.into(),
+                delay_ms,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Agent for DelayAgent {
+        type Output = String;
+
+        fn expertise(&self) -> &str {
+            "Delayed agent"
+        }
+
+        async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
+            sleep(Duration::from_millis(self.delay_ms)).await;
+            Ok(format!("{} handled {}", self.name, intent.to_text()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_partial_session_broadcast_streams_responses() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let fast = Persona {
+            name: "Fast".to_string(),
+            role: "Fast responder".to_string(),
+            background: "Quick replies".to_string(),
+            communication_style: "Snappy".to_string(),
+        };
+
+        let slow = Persona {
+            name: "Slow".to_string(),
+            role: "Slow responder".to_string(),
+            background: "Takes time".to_string(),
+            communication_style: "Measured".to_string(),
+        };
+
+        dialogue
+            .add_participant(fast, DelayAgent::new("Fast", 10))
+            .add_participant(slow, DelayAgent::new("Slow", 50));
+
+        let mut session = dialogue.partial_session("Hello".to_string());
+        assert_eq!(session.execution_model(), ExecutionModel::Broadcast);
+
+        let first = session.next_turn().await.unwrap().unwrap();
+        assert_eq!(first.participant_name, "Fast");
+        assert!(first.content.contains("Fast handled"));
+
+        let second = session.next_turn().await.unwrap().unwrap();
+        assert_eq!(second.participant_name, "Slow");
+        assert!(second.content.contains("Slow handled"));
+
+        assert!(session.next_turn().await.is_none());
     }
 
     #[tokio::test]
