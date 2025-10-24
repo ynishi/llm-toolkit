@@ -1,3 +1,4 @@
+use super::dialogue::ExecutionModel;
 use super::{Agent, AgentError, Payload, PayloadContent};
 use crate::ToPrompt;
 use async_trait::async_trait;
@@ -54,9 +55,9 @@ pub struct PersonaTeam {
     /// List of personas in this team
     pub personas: Vec<Persona>,
 
-    /// Optional execution strategy hint (e.g., "sequential", "broadcast")
+    /// Optional execution strategy
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub execution_strategy: Option<String>,
+    pub execution_strategy: Option<ExecutionModel>,
 }
 
 /// Request for generating a PersonaTeam from a BluePrint description.
@@ -178,8 +179,8 @@ impl PersonaTeam {
         self
     }
 
-    /// Sets the execution strategy hint.
-    pub fn with_execution_strategy(mut self, strategy: String) -> Self {
+    /// Sets the execution strategy.
+    pub fn with_execution_strategy(mut self, strategy: ExecutionModel) -> Self {
         self.execution_strategy = Some(strategy);
         self
     }

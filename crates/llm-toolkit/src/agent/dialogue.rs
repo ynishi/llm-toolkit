@@ -27,8 +27,8 @@ pub struct DialogueBlueprint {
     /// Optional pre-defined participants
     pub participants: Option<Vec<Persona>>,
 
-    /// Optional execution strategy hint ("broadcast" or "sequential")
-    pub execution_strategy: Option<String>,
+    /// Optional execution strategy
+    pub execution_strategy: Option<ExecutionModel>,
 }
 
 /// Represents a single turn in the dialogue.
@@ -39,96 +39,13 @@ pub struct DialogueTurn {
 }
 
 /// Represents the execution model for dialogue strategies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExecutionModel {
     /// All participants respond in parallel to the same input.
     Broadcast,
     /// Participants execute sequentially, with output chained as input.
     Sequential,
-}
-
-/// A trait for defining how the next speaker(s) in a dialogue are chosen.
-pub trait TurnTakingStrategy: Send + Sync {
-    /// Selects the next participant(s) to speak.
-    ///
-    /// # Arguments
-    /// * `participants` - A slice of all participants in the dialogue.
-    /// * `history` - The history of the conversation so far.
-    ///
-    /// # Returns
-    /// A vector of indices of the participants who should speak next.
-    fn select_next_participants(
-        &mut self,
-        participants: &[Arc<dyn Agent<Output = String>>],
-        history: &[DialogueTurn],
-    ) -> Vec<usize>;
-
-    /// Returns the execution model for this strategy.
-    fn execution_model(&self) -> ExecutionModel;
-}
-
-/// A broadcast turn-taking strategy.
-///
-/// All participants speak in each turn, responding to the same input in parallel.
-pub struct Broadcast;
-
-impl Broadcast {
-    /// Creates a new broadcast strategy.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for Broadcast {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TurnTakingStrategy for Broadcast {
-    fn select_next_participants(
-        &mut self,
-        participants: &[Arc<dyn Agent<Output = String>>],
-        _history: &[DialogueTurn],
-    ) -> Vec<usize> {
-        (0..participants.len()).collect()
-    }
-
-    fn execution_model(&self) -> ExecutionModel {
-        ExecutionModel::Broadcast
-    }
-}
-
-/// A sequential turn-taking strategy.
-///
-/// Participants execute in order, with the output of one becoming the input to the next.
-pub struct Sequential;
-
-impl Sequential {
-    /// Creates a new sequential strategy.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for Sequential {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TurnTakingStrategy for Sequential {
-    fn select_next_participants(
-        &mut self,
-        participants: &[Arc<dyn Agent<Output = String>>],
-        _history: &[DialogueTurn],
-    ) -> Vec<usize> {
-        (0..participants.len()).collect()
-    }
-
-    fn execution_model(&self) -> ExecutionModel {
-        ExecutionModel::Sequential
-    }
 }
 
 /// Internal representation of a dialogue participant.
@@ -444,18 +361,18 @@ impl<'a> DialogueSession<'a> {
 pub struct Dialogue {
     participants: Vec<Participant>,
     history: Vec<DialogueTurn>,
-    strategy: Box<dyn TurnTakingStrategy>,
+    execution_model: ExecutionModel,
 }
 
 impl Dialogue {
-    /// Creates a new dialogue with the specified strategy.
+    /// Creates a new dialogue with the specified execution model.
     ///
     /// This is private - use `broadcast()` or `sequential()` instead.
-    fn new(strategy: impl TurnTakingStrategy + 'static) -> Self {
+    fn new(execution_model: ExecutionModel) -> Self {
         Self {
             participants: Vec::new(),
             history: Vec::new(),
-            strategy: Box::new(strategy),
+            execution_model,
         }
     }
 
@@ -473,7 +390,7 @@ impl Dialogue {
     ///     .add_participant(agent2);
     /// ```
     pub fn broadcast() -> Self {
-        Self::new(Broadcast::new())
+        Self::new(ExecutionModel::Broadcast)
     }
 
     /// Creates a new dialogue with sequential execution.
@@ -491,7 +408,7 @@ impl Dialogue {
     ///     .add_participant(persona3, formatter);
     /// ```
     pub fn sequential() -> Self {
-        Self::new(Sequential::new())
+        Self::new(ExecutionModel::Sequential)
     }
 
     /// Creates a Dialogue from a blueprint.
@@ -516,7 +433,7 @@ impl Dialogue {
     ///     agenda: "1on1 Feature Planning".to_string(),
     ///     context: "Product planning meeting for new 1on1 feature in HR SaaS".to_string(),
     ///     participants: None,  // Will be auto-generated
-    ///     execution_strategy: Some("broadcast".to_string()),
+    ///     execution_strategy: Some(ExecutionModel::Broadcast),
     /// };
     ///
     /// let mut dialogue = Dialogue::from_blueprint(
@@ -534,16 +451,15 @@ impl Dialogue {
         G: Agent<Output = PersonaTeam>,
         D: Agent<Output = String> + Clone + 'static,
     {
-        // Determine execution strategy from blueprint
-        let strategy: Box<dyn TurnTakingStrategy> = match blueprint.execution_strategy.as_deref() {
-            Some("sequential") => Box::new(Sequential::new()),
-            _ => Box::new(Broadcast::new()),
-        };
+        // Determine execution model from blueprint
+        let execution_model = blueprint
+            .execution_strategy
+            .unwrap_or(ExecutionModel::Broadcast);
 
         let mut dialogue = Self {
             participants: Vec::new(),
             history: Vec::new(),
-            strategy,
+            execution_model,
         };
 
         // Use provided participants or generate them
@@ -605,16 +521,13 @@ impl Dialogue {
     where
         T: Agent<Output = String> + Clone + 'static,
     {
-        // Determine execution strategy from team hint
-        let strategy: Box<dyn TurnTakingStrategy> = match team.execution_strategy.as_deref() {
-            Some("sequential") => Box::new(Sequential::new()),
-            _ => Box::new(Broadcast::new()),
-        };
+        // Determine execution model from team hint
+        let execution_model = team.execution_strategy.unwrap_or(ExecutionModel::Broadcast);
 
         let mut dialogue = Self {
             participants: Vec::new(),
             history: Vec::new(),
-            strategy,
+            execution_model,
         };
 
         // Build participants from personas
@@ -752,7 +665,7 @@ impl Dialogue {
             content: initial_prompt.clone(),
         });
 
-        let model = self.strategy.execution_model();
+        let model = self.execution_model;
         let state = match model {
             ExecutionModel::Broadcast => {
                 let history_text = self.format_history();
@@ -830,7 +743,7 @@ impl Dialogue {
     /// let final_turn = dialogue.run("Process this".to_string()).await?;
     /// ```
     pub async fn run(&mut self, initial_prompt: String) -> Result<Vec<DialogueTurn>, AgentError> {
-        let model = self.strategy.execution_model();
+        let model = self.execution_model;
         let mut session =
             self.partial_session_with_order(initial_prompt, BroadcastOrder::Completion);
         let mut turns = Vec::new();
@@ -1256,7 +1169,7 @@ mod tests {
             background: "UX specialist".to_string(),
             communication_style: "User-focused".to_string(),
         });
-        team.execution_strategy = Some("broadcast".to_string());
+        team.execution_strategy = Some(ExecutionModel::Broadcast);
 
         let llm = MockAgent::new("Mock", vec!["Response".to_string()]);
         let mut dialogue = Dialogue::from_persona_team(team, llm).unwrap();
@@ -1287,7 +1200,7 @@ mod tests {
             background: "Content creator".to_string(),
             communication_style: "Creative".to_string(),
         });
-        team.execution_strategy = Some("sequential".to_string());
+        team.execution_strategy = Some(ExecutionModel::Sequential);
 
         let llm = MockAgent::new("Mock", vec!["Step output".to_string()]);
         let mut dialogue = Dialogue::from_persona_team(team, llm).unwrap();
@@ -1452,7 +1365,7 @@ mod tests {
             agenda: "Feature Planning".to_string(),
             context: "Planning new feature".to_string(),
             participants: Some(vec![persona1, persona2]),
-            execution_strategy: Some("broadcast".to_string()),
+            execution_strategy: Some(ExecutionModel::Broadcast),
         };
 
         // Mock generator agent - won't be used since participants are provided

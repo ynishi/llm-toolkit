@@ -6,7 +6,7 @@
 //! 3. Dynamic participant management (adding/removing guests)
 //! 4. Understanding structured output (Vec<DialogueTurn>)
 
-use llm_toolkit::agent::dialogue::DialogueBlueprint;
+use llm_toolkit::agent::dialogue::{DialogueBlueprint, ExecutionModel};
 use llm_toolkit::agent::persona::Persona;
 
 #[tokio::main]
@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                   Focus on MVP scope, user workflows, and technical architecture."
             .to_string(),
         participants: Some(hr_saas_team), // Pre-defined team - no LLM generation
-        execution_strategy: Some("broadcast".to_string()),
+        execution_strategy: Some(ExecutionModel::Broadcast),
     };
 
     println!("Blueprint created with pre-defined team:");
@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         blueprint_with_team.participants.as_ref().unwrap().len()
     );
     println!(
-        "  Strategy: {}",
+        "  Strategy: {:?}",
         blueprint_with_team.execution_strategy.as_ref().unwrap()
     );
     println!();
@@ -152,7 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                   improvements, and ensure we meet SOC2 requirements."
             .to_string(),
         participants: None, // No pre-defined team - will be LLM-generated
-        execution_strategy: Some("broadcast".to_string()),
+        execution_strategy: Some(ExecutionModel::Broadcast),
     };
 
     println!("Blueprint created for LLM-generated team:");
