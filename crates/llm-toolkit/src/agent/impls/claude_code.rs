@@ -6,8 +6,10 @@
 use crate::agent::{Agent, AgentError, Payload};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::process::Command;
+use tracing::{debug, error, info, instrument, warn};
 
 /// Supported Claude models
 #[derive(Debug, Clone, Copy, Default)]
@@ -63,20 +65,30 @@ pub struct ClaudeCodeAgent {
     claude_path: Option<PathBuf>,
     /// Model to use for generation
     model: Option<ClaudeModel>,
-    /// Execution profile (note: Claude CLI doesn't support parameter tuning)
-    execution_profile: crate::agent::ExecutionProfile,
+    /// Working directory for command execution
+    working_dir: Option<PathBuf>,
+    /// Environment variables to set for command execution
+    env_vars: HashMap<String, String>,
+    /// Additional CLI arguments to pass to claude command
+    extra_args: Vec<String>,
 }
 
 impl ClaudeCodeAgent {
-    /// Creates a new ClaudeCodeAgent.
+    /// Creates a new ClaudeCodeAgent with default settings.
     ///
-    /// By default, this will search for `claude` in the system PATH
-    /// and use the default model.
+    /// By default:
+    /// - Searches for `claude` in the system PATH
+    /// - Uses default model (Sonnet 4.5)
+    /// - No working directory specified (uses current directory)
+    /// - No additional environment variables
+    /// - No extra CLI arguments
     pub fn new() -> Self {
         Self {
             claude_path: None,
             model: None,
-            execution_profile: crate::agent::ExecutionProfile::default(),
+            working_dir: None,
+            env_vars: HashMap::new(),
+            extra_args: Vec::new(),
         }
     }
 
@@ -85,7 +97,9 @@ impl ClaudeCodeAgent {
         Self {
             claude_path: Some(path),
             model: None,
-            execution_profile: crate::agent::ExecutionProfile::default(),
+            working_dir: None,
+            env_vars: HashMap::new(),
+            extra_args: Vec::new(),
         }
     }
 
@@ -108,12 +122,88 @@ impl ClaudeCodeAgent {
         self
     }
 
-    /// Sets the execution profile.
+    /// Sets the working directory where the claude command will be executed.
     ///
-    /// Note: Claude CLI doesn't currently support temperature/top_p parameters,
-    /// so this setting is only used for logging and documentation purposes.
-    pub fn with_execution_profile(mut self, profile: crate::agent::ExecutionProfile) -> Self {
-        self.execution_profile = profile;
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = ClaudeCodeAgent::new()
+    ///     .with_cwd("/path/to/project");
+    /// ```
+    pub fn with_cwd(mut self, path: impl Into<PathBuf>) -> Self {
+        self.working_dir = Some(path.into());
+        self
+    }
+
+    /// Alias for `with_cwd` using more explicit name.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = ClaudeCodeAgent::new()
+    ///     .with_directory("/path/to/project");
+    /// ```
+    pub fn with_directory(mut self, path: impl Into<PathBuf>) -> Self {
+        self.working_dir = Some(path.into());
+        self
+    }
+
+    /// Sets a single environment variable for the claude command.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = ClaudeCodeAgent::new()
+    ///     .with_env("CLAUDE_API_KEY", "my-key")
+    ///     .with_env("PATH", "/usr/local/bin:/usr/bin");
+    /// ```
+    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env_vars.insert(key.into(), value.into());
+        self
+    }
+
+    /// Sets multiple environment variables at once.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let mut env_map = HashMap::new();
+    /// env_map.insert("PATH".to_string(), "/custom/path".to_string());
+    /// env_map.insert("CLAUDE_API_KEY".to_string(), "key".to_string());
+    ///
+    /// let agent = ClaudeCodeAgent::new()
+    ///     .with_envs(env_map);
+    /// ```
+    pub fn with_envs(mut self, envs: HashMap<String, String>) -> Self {
+        self.env_vars.extend(envs);
+        self
+    }
+
+    /// Clears all environment variables.
+    pub fn clear_env(mut self) -> Self {
+        self.env_vars.clear();
+        self
+    }
+
+    /// Adds a single CLI argument to pass to the claude command.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = ClaudeCodeAgent::new()
+    ///     .with_arg("--experimental")
+    ///     .with_arg("--timeout")
+    ///     .with_arg("60");
+    /// ```
+    pub fn with_arg(mut self, arg: impl Into<String>) -> Self {
+        self.extra_args.push(arg.into());
+        self
+    }
+
+    /// Adds multiple CLI arguments at once.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = ClaudeCodeAgent::new()
+    ///     .with_args(vec!["--experimental", "--verbose"]);
+    /// ```
+    pub fn with_args(mut self, args: Vec<String>) -> Self {
+        self.extra_args.extend(args);
         self
     }
 
@@ -160,6 +250,46 @@ impl ClaudeCodeAgent {
             ))
         }
     }
+
+    /// Builds the command with all arguments.
+    fn build_command(&self, prompt: &str) -> Result<Command, AgentError> {
+        let cmd_name = self
+            .claude_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "claude".to_string());
+
+        let mut cmd = Command::new(cmd_name);
+
+        // Set working directory if specified
+        if let Some(dir) = &self.working_dir {
+            debug!(target: "llm_toolkit::agent::claude_code", "Setting working directory: {}", dir.display());
+            cmd.current_dir(dir);
+        }
+
+        // Apply environment variables
+        for (key, value) in &self.env_vars {
+            debug!(target: "llm_toolkit::agent::claude_code", "Setting environment variable: {}={}", key, value);
+            cmd.env(key, value);
+        }
+
+        // Add prompt argument
+        cmd.arg("-p").arg(prompt);
+
+        // Add model if specified
+        if let Some(model) = &self.model {
+            cmd.arg("--model").arg(model.as_str());
+            debug!(target: "llm_toolkit::agent::claude_code", "Using model: {}", model.as_str());
+        }
+
+        // Add extra CLI arguments
+        for arg in &self.extra_args {
+            debug!(target: "llm_toolkit::agent::claude_code", "Adding extra argument: {}", arg);
+            cmd.arg(arg);
+        }
+
+        Ok(cmd)
+    }
 }
 
 impl Default for ClaudeCodeAgent {
@@ -178,51 +308,42 @@ impl Agent for ClaudeCodeAgent {
          complex multi-step tasks autonomously."
     }
 
+    #[instrument(skip(self, intent), fields(
+        model = ?self.model,
+        working_dir = ?self.working_dir,
+        has_attachments = intent.has_attachments(),
+        prompt_length = intent.to_text().len()
+    ))]
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         let payload = intent;
-
-        let claude_cmd = self
-            .claude_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "claude".to_string());
 
         // Extract text content for now (images not yet supported by claude CLI -p)
         let text_intent = payload.to_text();
 
-        log::info!("🤖 ClaudeCodeAgent executing...");
-        log::debug!("Intent length: {} chars", text_intent.len());
-        log::debug!("Execution profile: {:?}", self.execution_profile);
-        log::trace!("Full intent: {}", text_intent);
-
-        if !matches!(
-            self.execution_profile,
-            crate::agent::ExecutionProfile::Balanced
-        ) {
-            log::warn!(
-                "ClaudeCodeAgent: Execution profile {:?} is set, but Claude CLI doesn't support \
-                 parameter tuning (temperature, top_p, etc.). Using default behavior.",
-                self.execution_profile
-            );
-        }
-
         if payload.has_attachments() {
-            log::warn!(
-                "ClaudeCodeAgent: Attachments in payload are not yet supported and will be ignored"
+            warn!(
+                target: "llm_toolkit::agent::claude_code",
+                "Attachments in payload are not yet supported and will be ignored"
             );
         }
 
-        let mut cmd = Command::new(&claude_cmd);
-        cmd.arg("-p").arg(&text_intent);
+        debug!(
+            target: "llm_toolkit::agent::claude_code",
+            "Building claude command with prompt length: {}", text_intent.len()
+        );
 
-        // Add model if specified
-        if let Some(model) = &self.model {
-            cmd.arg("--model").arg(model.as_str());
-            log::debug!("Using model: {}", model.as_str());
-        }
+        let mut cmd = self.build_command(&text_intent)?;
+
+        debug!(
+            target: "llm_toolkit::agent::claude_code",
+            "Executing claude command: {:?}", cmd
+        );
 
         let output = cmd.output().await.map_err(|e| {
-            log::error!("Failed to spawn claude process: {}", e);
+            error!(
+                target: "llm_toolkit::agent::claude_code",
+                "Failed to execute claude command: {}", e
+            );
             AgentError::ProcessError {
                 status_code: None,
                 message: format!(
@@ -235,25 +356,31 @@ impl Agent for ClaudeCodeAgent {
             }
         })?;
 
-        if !output.status.success() {
+        if output.status.success() {
+            let stdout = String::from_utf8(output.stdout).map_err(|e| {
+                error!(
+                    target: "llm_toolkit::agent::claude_code",
+                    "Failed to parse stdout as UTF-8: {}", e
+                );
+                AgentError::Other(format!("Failed to parse claude output as UTF-8: {}", e))
+            })?;
+
+            info!(
+                target: "llm_toolkit::agent::claude_code",
+                "Claude command completed successfully, response length: {}", stdout.len()
+            );
+            Ok(stdout)
+        } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            log::error!("Claude command failed: {}", stderr);
-            return Err(AgentError::ExecutionFailed(format!(
+            error!(
+                target: "llm_toolkit::agent::claude_code",
+                "Claude command failed with stderr: {}", stderr
+            );
+            Err(AgentError::ExecutionFailed(format!(
                 "Claude command failed with status {}: {}",
                 output.status, stderr
-            )));
+            )))
         }
-
-        let stdout = String::from_utf8(output.stdout).map_err(|e| {
-            log::error!("Failed to parse output: {}", e);
-            AgentError::Other(format!("Failed to parse claude output as UTF-8: {}", e))
-        })?;
-
-        log::info!("✅ ClaudeCodeAgent completed");
-        log::debug!("Output length: {} chars", stdout.len());
-        log::trace!("Full output: {}", stdout);
-
-        Ok(stdout)
     }
 
     fn name(&self) -> String {
@@ -331,9 +458,45 @@ where
         self
     }
 
-    /// Sets the execution profile.
-    pub fn with_execution_profile(mut self, profile: crate::agent::ExecutionProfile) -> Self {
-        self.inner = self.inner.with_execution_profile(profile);
+    /// Sets the working directory where the claude command will be executed.
+    pub fn with_cwd(mut self, path: impl Into<PathBuf>) -> Self {
+        self.inner = self.inner.with_cwd(path);
+        self
+    }
+
+    /// Alias for `with_cwd` using more explicit name.
+    pub fn with_directory(mut self, path: impl Into<PathBuf>) -> Self {
+        self.inner = self.inner.with_directory(path);
+        self
+    }
+
+    /// Sets a single environment variable for the claude command.
+    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.inner = self.inner.with_env(key, value);
+        self
+    }
+
+    /// Sets multiple environment variables at once.
+    pub fn with_envs(mut self, envs: HashMap<String, String>) -> Self {
+        self.inner = self.inner.with_envs(envs);
+        self
+    }
+
+    /// Clears all environment variables.
+    pub fn clear_env(mut self) -> Self {
+        self.inner = self.inner.clear_env();
+        self
+    }
+
+    /// Adds a single CLI argument to pass to the claude command.
+    pub fn with_arg(mut self, arg: impl Into<String>) -> Self {
+        self.inner = self.inner.with_arg(arg);
+        self
+    }
+
+    /// Adds multiple CLI arguments at once.
+    pub fn with_args(mut self, args: Vec<String>) -> Self {
+        self.inner = self.inner.with_args(args);
         self
     }
 }
@@ -436,53 +599,96 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_code_agent_with_execution_profile() {
-        let agent =
-            ClaudeCodeAgent::new().with_execution_profile(crate::agent::ExecutionProfile::Creative);
-        assert!(matches!(
-            agent.execution_profile,
-            crate::agent::ExecutionProfile::Creative
-        ));
+    fn test_claude_code_agent_with_cwd() {
+        let agent = ClaudeCodeAgent::new().with_cwd("/path/to/project");
+
+        assert!(agent.working_dir.is_some());
+        assert_eq!(
+            agent.working_dir.unwrap(),
+            PathBuf::from("/path/to/project")
+        );
     }
 
     #[test]
-    fn test_claude_code_agent_default_profile() {
-        let agent = ClaudeCodeAgent::new();
-        assert!(matches!(
-            agent.execution_profile,
-            crate::agent::ExecutionProfile::Balanced
-        ));
+    fn test_claude_code_agent_with_directory() {
+        let agent = ClaudeCodeAgent::new().with_directory("/path/to/project");
+
+        assert!(agent.working_dir.is_some());
+        assert_eq!(
+            agent.working_dir.unwrap(),
+            PathBuf::from("/path/to/project")
+        );
+    }
+
+    #[test]
+    fn test_claude_code_agent_with_env() {
+        let agent = ClaudeCodeAgent::new()
+            .with_env("CLAUDE_API_KEY", "my-key")
+            .with_env("PATH", "/usr/local/bin");
+
+        assert_eq!(agent.env_vars.len(), 2);
+        assert_eq!(agent.env_vars.get("CLAUDE_API_KEY"), Some(&"my-key".to_string()));
+        assert_eq!(agent.env_vars.get("PATH"), Some(&"/usr/local/bin".to_string()));
+    }
+
+    #[test]
+    fn test_claude_code_agent_with_envs() {
+        let mut env_map = HashMap::new();
+        env_map.insert("KEY1".to_string(), "value1".to_string());
+        env_map.insert("KEY2".to_string(), "value2".to_string());
+
+        let agent = ClaudeCodeAgent::new().with_envs(env_map);
+
+        assert_eq!(agent.env_vars.len(), 2);
+        assert_eq!(agent.env_vars.get("KEY1"), Some(&"value1".to_string()));
+        assert_eq!(agent.env_vars.get("KEY2"), Some(&"value2".to_string()));
+    }
+
+    #[test]
+    fn test_claude_code_agent_clear_env() {
+        let agent = ClaudeCodeAgent::new()
+            .with_env("KEY1", "value1")
+            .with_env("KEY2", "value2")
+            .clear_env();
+
+        assert!(agent.env_vars.is_empty());
+    }
+
+    #[test]
+    fn test_claude_code_agent_with_arg() {
+        let agent = ClaudeCodeAgent::new()
+            .with_arg("--experimental")
+            .with_arg("--timeout")
+            .with_arg("60");
+
+        assert_eq!(agent.extra_args.len(), 3);
+        assert_eq!(agent.extra_args[0], "--experimental");
+        assert_eq!(agent.extra_args[1], "--timeout");
+        assert_eq!(agent.extra_args[2], "60");
+    }
+
+    #[test]
+    fn test_claude_code_agent_with_args() {
+        let agent = ClaudeCodeAgent::new()
+            .with_args(vec!["--experimental".to_string(), "--verbose".to_string()]);
+
+        assert_eq!(agent.extra_args.len(), 2);
+        assert_eq!(agent.extra_args[0], "--experimental");
+        assert_eq!(agent.extra_args[1], "--verbose");
     }
 
     #[test]
     fn test_claude_code_agent_builder_pattern() {
         let agent = ClaudeCodeAgent::new()
             .with_model(ClaudeModel::Opus4)
-            .with_execution_profile(crate::agent::ExecutionProfile::Deterministic);
+            .with_cwd("/project")
+            .with_env("PATH", "/custom/path")
+            .with_arg("--experimental");
 
         assert!(matches!(agent.model, Some(ClaudeModel::Opus4)));
-        assert!(matches!(
-            agent.execution_profile,
-            crate::agent::ExecutionProfile::Deterministic
-        ));
-    }
-
-    #[test]
-    fn test_claude_code_json_agent_with_execution_profile() {
-        use serde::{Deserialize, Serialize};
-
-        #[derive(Serialize, Deserialize)]
-        struct TestOutput {
-            value: String,
-        }
-
-        let agent = ClaudeCodeJsonAgent::<TestOutput>::new()
-            .with_execution_profile(crate::agent::ExecutionProfile::Creative);
-
-        // Verify the inner agent has the profile set
-        assert!(matches!(
-            agent.inner.execution_profile,
-            crate::agent::ExecutionProfile::Creative
-        ));
+        assert_eq!(agent.working_dir, Some(PathBuf::from("/project")));
+        assert_eq!(agent.env_vars.get("PATH"), Some(&"/custom/path".to_string()));
+        assert_eq!(agent.extra_args.len(), 1);
+        assert_eq!(agent.extra_args[0], "--experimental");
     }
 }
