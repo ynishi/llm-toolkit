@@ -1411,10 +1411,10 @@ let result = agent.execute("Simple text intent".to_string().into()).await?;
 
 **CLI Agents Attachment Support:**
 
-Both `GeminiAgent` and `ClaudeCodeAgent` support attachments by automatically writing them to temporary files and passing the file paths to the CLI tools:
+All CLI agents (`GeminiAgent`, `ClaudeCodeAgent`, and `CodexAgent`) support attachments by automatically writing them to temporary files and passing the file paths to the CLI tools:
 
 ```rust
-use llm_toolkit::agent::impls::{GeminiAgent, ClaudeCodeAgent};
+use llm_toolkit::agent::impls::{GeminiAgent, ClaudeCodeAgent, CodexAgent};
 use llm_toolkit::agent::{Agent, Payload};
 use llm_toolkit::attachment::Attachment;
 
@@ -1431,6 +1431,14 @@ let payload = Payload::text("Review these files")
     .with_attachment(Attachment::local("tests.rs"));
 let result = claude.execute(payload).await?;
 
+// CodexAgent with image attachments and sandbox
+let codex = CodexAgent::new()
+    .with_sandbox("workspace-write")
+    .with_approval_policy("on-failure");
+let payload = Payload::text("Fix the bug shown in this screenshot")
+    .with_attachment(Attachment::local("error.png"));
+let result = codex.execute(payload).await?;
+
 // Custom attachment directory (useful for debugging)
 let gemini = GeminiAgent::new()
     .with_attachment_dir("/tmp/my-attachments")
@@ -1441,6 +1449,12 @@ let image_data = std::fs::read("screenshot.png")?;
 let payload = Payload::text("What's in this screenshot?")
     .with_attachment(Attachment::in_memory(image_data));
 let result = claude.execute(payload).await?;
+
+// CodexAgent full-auto mode with web search
+let codex = CodexAgent::new()
+    .full_auto()  // on-failure approval + workspace-write sandbox
+    .with_search(true);
+let result = codex.execute("Research the latest Rust async patterns".to_string().into()).await?;
 ```
 
 **How it works:**
