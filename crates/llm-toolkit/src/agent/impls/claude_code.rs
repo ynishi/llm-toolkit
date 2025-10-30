@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::process::Command;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument};
+
+use super::cli_attachment::{format_prompt_with_attachments, process_attachments, TempAttachmentDir};
 
 /// Supported Claude models
 #[derive(Debug, Clone, Copy, Default)]
@@ -71,6 +73,10 @@ pub struct ClaudeCodeAgent {
     env_vars: HashMap<String, String>,
     /// Additional CLI arguments to pass to claude command
     extra_args: Vec<String>,
+    /// Directory for storing temporary attachment files
+    attachment_dir: Option<PathBuf>,
+    /// Whether to keep attachment files after execution (for debugging)
+    keep_attachments: bool,
 }
 
 impl ClaudeCodeAgent {
@@ -89,6 +95,8 @@ impl ClaudeCodeAgent {
             working_dir: None,
             env_vars: HashMap::new(),
             extra_args: Vec::new(),
+            attachment_dir: None,
+            keep_attachments: false,
         }
     }
 
@@ -100,6 +108,8 @@ impl ClaudeCodeAgent {
             working_dir: None,
             env_vars: HashMap::new(),
             extra_args: Vec::new(),
+            attachment_dir: None,
+            keep_attachments: false,
         }
     }
 
@@ -204,6 +214,35 @@ impl ClaudeCodeAgent {
     /// ```
     pub fn with_args(mut self, args: Vec<String>) -> Self {
         self.extra_args.extend(args);
+        self
+    }
+
+    /// Sets the directory where attachment files will be written.
+    ///
+    /// If not specified, falls back to `working_dir` or system temp directory.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = ClaudeCodeAgent::new()
+    ///     .with_attachment_dir("/tmp/my-attachments");
+    /// ```
+    pub fn with_attachment_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.attachment_dir = Some(path.into());
+        self
+    }
+
+    /// Sets whether to keep temporary attachment files after execution.
+    ///
+    /// By default, temp files are deleted after each execution.
+    /// Set to `true` to keep files for debugging purposes.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = ClaudeCodeAgent::new()
+    ///     .with_keep_attachments(true); // Don't delete temp files
+    /// ```
+    pub fn with_keep_attachments(mut self, keep: bool) -> Self {
+        self.keep_attachments = keep;
         self
     }
 
@@ -316,23 +355,51 @@ impl Agent for ClaudeCodeAgent {
     ))]
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         let payload = intent;
-
-        // Extract text content for now (images not yet supported by claude CLI -p)
         let text_intent = payload.to_text();
 
-        if payload.has_attachments() {
-            warn!(
+        // Prepare the final prompt (with attachments if present)
+        let (final_prompt, _temp_dir) = if payload.has_attachments() {
+            debug!(
                 target: "llm_toolkit::agent::claude_code",
-                "Attachments in payload are not yet supported and will be ignored"
+                "Processing {} attachments", payload.attachments().len()
             );
-        }
+
+            // Determine base directory for attachments
+            let base_dir = self
+                .attachment_dir
+                .as_ref()
+                .or(self.working_dir.as_ref())
+                .cloned()
+                .unwrap_or_else(|| std::env::temp_dir());
+
+            // Create temp directory (will auto-cleanup on drop unless keep_attachments is true)
+            let temp_dir = TempAttachmentDir::new(&base_dir, self.keep_attachments).map_err(|e| {
+                AgentError::Other(format!("Failed to create temp attachment directory: {}", e))
+            })?;
+
+            // Process attachments
+            let attachments = payload.attachments();
+            let attachment_paths = process_attachments(&attachments, temp_dir.path()).await?;
+
+            debug!(
+                target: "llm_toolkit::agent::claude_code",
+                "Processed {} attachments to temp files", attachment_paths.len()
+            );
+
+            // Format prompt with attachment paths
+            let prompt = format_prompt_with_attachments(&text_intent, &attachment_paths);
+
+            (prompt, Some(temp_dir))
+        } else {
+            (text_intent.clone(), None)
+        };
 
         debug!(
             target: "llm_toolkit::agent::claude_code",
-            "Building claude command with prompt length: {}", text_intent.len()
+            "Building claude command with prompt length: {}", final_prompt.len()
         );
 
-        let mut cmd = self.build_command(&text_intent)?;
+        let mut cmd = self.build_command(&final_prompt)?;
 
         debug!(
             target: "llm_toolkit::agent::claude_code",
@@ -497,6 +564,18 @@ where
     /// Adds multiple CLI arguments at once.
     pub fn with_args(mut self, args: Vec<String>) -> Self {
         self.inner = self.inner.with_args(args);
+        self
+    }
+
+    /// Sets the directory where attachment files will be written.
+    pub fn with_attachment_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.inner = self.inner.with_attachment_dir(path);
+        self
+    }
+
+    /// Sets whether to keep temporary attachment files after execution.
+    pub fn with_keep_attachments(mut self, keep: bool) -> Self {
+        self.inner = self.inner.with_keep_attachments(keep);
         self
     }
 }
