@@ -5,8 +5,10 @@
 
 use crate::agent::{Agent, AgentError, Payload};
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::process::Command;
+use tracing::{debug, error, info, instrument, warn};
 
 /// Supported Gemini models
 #[derive(Debug, Clone, Copy, Default)]
@@ -61,12 +63,12 @@ pub struct GeminiAgent {
     gemini_path: Option<PathBuf>,
     /// Model to use for generation
     model: GeminiModel,
-    /// Optional system prompt
-    system_prompt: Option<String>,
-    /// Skip loading GEMINI.md memory file
-    skip_memory: bool,
-    /// Execution profile for controlling behavior
-    execution_profile: crate::agent::ExecutionProfile,
+    /// Working directory for command execution
+    working_dir: Option<PathBuf>,
+    /// Environment variables to set for command execution
+    env_vars: HashMap<String, String>,
+    /// Additional CLI arguments to pass to gemini command
+    extra_args: Vec<String>,
 }
 
 impl GeminiAgent {
@@ -75,14 +77,16 @@ impl GeminiAgent {
     /// By default:
     /// - Searches for `gemini` in the system PATH
     /// - Uses Gemini 2.5 Flash model
-    /// - Skips memory loading (stateless)
+    /// - No working directory specified (uses current directory)
+    /// - No additional environment variables
+    /// - No extra CLI arguments
     pub fn new() -> Self {
         Self {
             gemini_path: None,
             model: GeminiModel::default(),
-            system_prompt: None,
-            skip_memory: true,
-            execution_profile: crate::agent::ExecutionProfile::default(),
+            working_dir: None,
+            env_vars: HashMap::new(),
+            extra_args: Vec::new(),
         }
     }
 
@@ -91,9 +95,9 @@ impl GeminiAgent {
         Self {
             gemini_path: Some(path),
             model: GeminiModel::default(),
-            system_prompt: None,
-            skip_memory: true,
-            execution_profile: crate::agent::ExecutionProfile::default(),
+            working_dir: None,
+            env_vars: HashMap::new(),
+            extra_args: Vec::new(),
         }
     }
 
@@ -115,28 +119,88 @@ impl GeminiAgent {
         self
     }
 
-    /// Sets a system prompt for the agent.
-    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.system_prompt = Some(prompt.into());
+    /// Sets the working directory where the gemini command will be executed.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = GeminiAgent::new()
+    ///     .with_cwd("/path/to/project");
+    /// ```
+    pub fn with_cwd(mut self, path: impl Into<PathBuf>) -> Self {
+        self.working_dir = Some(path.into());
         self
     }
 
-    /// Controls whether to skip loading GEMINI.md memory file.
+    /// Alias for `with_cwd` using more explicit name.
     ///
-    /// Default is `true` (skip memory for stateless execution).
-    pub fn with_skip_memory(mut self, skip: bool) -> Self {
-        self.skip_memory = skip;
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = GeminiAgent::new()
+    ///     .with_directory("/path/to/project");
+    /// ```
+    pub fn with_directory(mut self, path: impl Into<PathBuf>) -> Self {
+        self.working_dir = Some(path.into());
         self
     }
 
-    /// Sets the execution profile.
+    /// Sets a single environment variable for the gemini command.
     ///
-    /// The profile will be converted to Gemini-specific parameters:
-    /// - Creative: temperature=0.9, top_p=0.95
-    /// - Balanced: temperature=0.7, top_p=0.9 (default)
-    /// - Deterministic: temperature=0.1, top_p=0.8
-    pub fn with_execution_profile(mut self, profile: crate::agent::ExecutionProfile) -> Self {
-        self.execution_profile = profile;
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = GeminiAgent::new()
+    ///     .with_env("GEMINI_API_KEY", "my-key")
+    ///     .with_env("PATH", "/usr/local/bin:/usr/bin");
+    /// ```
+    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env_vars.insert(key.into(), value.into());
+        self
+    }
+
+    /// Sets multiple environment variables at once.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let mut env_map = HashMap::new();
+    /// env_map.insert("PATH".to_string(), "/custom/path".to_string());
+    /// env_map.insert("GEMINI_API_KEY".to_string(), "key".to_string());
+    ///
+    /// let agent = GeminiAgent::new()
+    ///     .with_envs(env_map);
+    /// ```
+    pub fn with_envs(mut self, envs: HashMap<String, String>) -> Self {
+        self.env_vars.extend(envs);
+        self
+    }
+
+    /// Clears all environment variables.
+    pub fn clear_env(mut self) -> Self {
+        self.env_vars.clear();
+        self
+    }
+
+    /// Adds a single CLI argument to pass to the gemini command.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = GeminiAgent::new()
+    ///     .with_arg("--experimental")
+    ///     .with_arg("--timeout")
+    ///     .with_arg("60");
+    /// ```
+    pub fn with_arg(mut self, arg: impl Into<String>) -> Self {
+        self.extra_args.push(arg.into());
+        self
+    }
+
+    /// Adds multiple CLI arguments at once.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let agent = GeminiAgent::new()
+    ///     .with_args(vec!["--experimental", "--verbose"]);
+    /// ```
+    pub fn with_args(mut self, args: Vec<String>) -> Self {
+        self.extra_args.extend(args);
         self
     }
 
@@ -193,48 +257,29 @@ impl GeminiAgent {
 
         let mut cmd = Command::new(cmd_name);
 
-        // Add model
+        // Set working directory if specified
+        if let Some(dir) = &self.working_dir {
+            debug!("Setting working directory: {}", dir.display());
+            cmd.current_dir(dir);
+        }
+
+        // Apply environment variables
+        for (key, value) in &self.env_vars {
+            debug!("Setting environment variable: {}={}", key, value);
+            cmd.env(key, value);
+        }
+
+        // Add model argument
         cmd.arg("--model").arg(self.model.as_str());
 
-        // Add execution profile parameters
-        let (temperature, top_p) = match self.execution_profile {
-            crate::agent::ExecutionProfile::Creative => (0.9, 0.95),
-            crate::agent::ExecutionProfile::Balanced => (0.7, 0.9),
-            crate::agent::ExecutionProfile::Deterministic => (0.1, 0.8),
-        };
-        cmd.arg("--temperature")
-            .arg(temperature.to_string())
-            .arg("--top-p")
-            .arg(top_p.to_string());
-
-        log::debug!(
-            "GeminiAgent: Using execution profile {:?} (temperature={}, top_p={})",
-            self.execution_profile,
-            temperature,
-            top_p
-        );
-
-        // Add skip-memory flag if enabled
-        if self.skip_memory {
-            cmd.arg("--skip-memory");
+        // Add extra CLI arguments
+        for arg in &self.extra_args {
+            debug!("Adding extra argument: {}", arg);
+            cmd.arg(arg);
         }
 
-        // Add system prompt if provided
-        if let Some(sys_prompt) = &self.system_prompt {
-            // Write system prompt to temp file
-            let temp_dir = std::env::temp_dir();
-            let temp_file =
-                temp_dir.join(format!("gemini_system_prompt_{}.md", std::process::id()));
-
-            std::fs::write(&temp_file, sys_prompt).map_err(|e| {
-                AgentError::ExecutionFailed(format!("Failed to write system prompt file: {}", e))
-            })?;
-
-            cmd.arg("--system-prompt-file").arg(&temp_file);
-        }
-
-        // Add the prompt
-        cmd.arg("--prompt").arg(prompt);
+        // Add the prompt as positional argument
+        cmd.arg(prompt);
 
         Ok(cmd)
     }
@@ -254,6 +299,12 @@ impl Agent for GeminiAgent {
         "General-purpose AI assistant powered by Google Gemini, capable of coding, analysis, and research tasks"
     }
 
+    #[instrument(skip(self, intent), fields(
+        model = ?self.model,
+        working_dir = ?self.working_dir,
+        has_attachments = intent.has_attachments(),
+        prompt_length = intent.to_text().len()
+    ))]
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         let payload = intent;
 
@@ -261,27 +312,56 @@ impl Agent for GeminiAgent {
         let text_intent = payload.to_text();
 
         if payload.has_attachments() {
-            log::warn!(
-                "GeminiAgent: Attachments in payload are not yet supported and will be ignored"
+            warn!(
+                target = "llm_toolkit::agent::gemini",
+                "Attachments in payload are not yet supported and will be ignored"
             );
         }
 
+        debug!(
+            target = "llm_toolkit::agent::gemini",
+            "Building gemini command with prompt length: {}", text_intent.len()
+        );
+
         let mut cmd = self.build_command(&text_intent)?;
 
+        debug!(
+            target = "llm_toolkit::agent::gemini",
+            "Executing gemini command: {:?}", cmd
+        );
+
         let output = cmd.output().await.map_err(|e| {
+            error!(
+                target = "llm_toolkit::agent::gemini",
+                "Failed to execute gemini command: {}", e
+            );
             AgentError::ExecutionFailed(format!("Failed to execute gemini command: {}", e))
         })?;
 
         if output.status.success() {
             let response =
-                String::from_utf8(output.stdout).map_err(|e| AgentError::ParseError {
-                    message: format!("Failed to parse gemini stdout: {}", e),
-                    reason: crate::agent::error::ParseErrorReason::UnexpectedEof,
+                String::from_utf8(output.stdout).map_err(|e| {
+                    error!(
+                        target = "llm_toolkit::agent::gemini",
+                        "Failed to parse stdout as UTF-8: {}", e
+                    );
+                    AgentError::ParseError {
+                        message: format!("Failed to parse gemini stdout: {}", e),
+                        reason: crate::agent::error::ParseErrorReason::UnexpectedEof,
+                    }
                 })?;
 
+            info!(
+                target = "llm_toolkit::agent::gemini",
+                "Gemini command completed successfully, response length: {}", response.len()
+            );
             Ok(response.trim().to_string())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            error!(
+                target = "llm_toolkit::agent::gemini",
+                "Gemini command failed with stderr: {}", stderr
+            );
             Err(AgentError::ExecutionFailed(format!(
                 "Gemini command failed: {}",
                 stderr
@@ -306,7 +386,9 @@ mod tests {
     fn test_gemini_agent_creation() {
         let agent = GeminiAgent::new();
         assert_eq!(agent.name(), "GeminiAgent");
-        assert!(agent.skip_memory);
+        assert!(agent.working_dir.is_none());
+        assert!(agent.env_vars.is_empty());
+        assert!(agent.extra_args.is_empty());
     }
 
     #[test]
@@ -324,70 +406,96 @@ mod tests {
     }
 
     #[test]
-    fn test_gemini_agent_with_system_prompt() {
-        let agent = GeminiAgent::new().with_system_prompt("You are a helpful assistant");
+    fn test_gemini_agent_with_cwd() {
+        let agent = GeminiAgent::new().with_cwd("/path/to/project");
 
-        assert!(agent.system_prompt.is_some());
+        assert!(agent.working_dir.is_some());
+        assert_eq!(
+            agent.working_dir.unwrap(),
+            PathBuf::from("/path/to/project")
+        );
     }
 
     #[test]
-    fn test_gemini_agent_with_execution_profile() {
-        let agent =
-            GeminiAgent::new().with_execution_profile(crate::agent::ExecutionProfile::Creative);
+    fn test_gemini_agent_with_directory() {
+        let agent = GeminiAgent::new().with_directory("/path/to/project");
 
-        assert!(matches!(
-            agent.execution_profile,
-            crate::agent::ExecutionProfile::Creative
-        ));
+        assert!(agent.working_dir.is_some());
+        assert_eq!(
+            agent.working_dir.unwrap(),
+            PathBuf::from("/path/to/project")
+        );
     }
 
     #[test]
-    fn test_gemini_agent_default_profile() {
-        let agent = GeminiAgent::new();
-        assert!(matches!(
-            agent.execution_profile,
-            crate::agent::ExecutionProfile::Balanced
-        ));
+    fn test_gemini_agent_with_env() {
+        let agent = GeminiAgent::new()
+            .with_env("GEMINI_API_KEY", "my-key")
+            .with_env("PATH", "/usr/local/bin");
+
+        assert_eq!(agent.env_vars.len(), 2);
+        assert_eq!(agent.env_vars.get("GEMINI_API_KEY"), Some(&"my-key".to_string()));
+        assert_eq!(agent.env_vars.get("PATH"), Some(&"/usr/local/bin".to_string()));
     }
 
     #[test]
-    fn test_gemini_agent_execution_profile_parameters() {
-        // Test that different profiles result in different parameter conversions
-        let creative =
-            GeminiAgent::new().with_execution_profile(crate::agent::ExecutionProfile::Creative);
-        let balanced =
-            GeminiAgent::new().with_execution_profile(crate::agent::ExecutionProfile::Balanced);
-        let deterministic = GeminiAgent::new()
-            .with_execution_profile(crate::agent::ExecutionProfile::Deterministic);
+    fn test_gemini_agent_with_envs() {
+        let mut env_map = HashMap::new();
+        env_map.insert("KEY1".to_string(), "value1".to_string());
+        env_map.insert("KEY2".to_string(), "value2".to_string());
 
-        // Build commands and verify parameters are set correctly
-        // (We can't easily test the actual command without mocking, but we can verify the profile is stored)
-        assert!(matches!(
-            creative.execution_profile,
-            crate::agent::ExecutionProfile::Creative
-        ));
-        assert!(matches!(
-            balanced.execution_profile,
-            crate::agent::ExecutionProfile::Balanced
-        ));
-        assert!(matches!(
-            deterministic.execution_profile,
-            crate::agent::ExecutionProfile::Deterministic
-        ));
+        let agent = GeminiAgent::new().with_envs(env_map);
+
+        assert_eq!(agent.env_vars.len(), 2);
+        assert_eq!(agent.env_vars.get("KEY1"), Some(&"value1".to_string()));
+        assert_eq!(agent.env_vars.get("KEY2"), Some(&"value2".to_string()));
     }
 
     #[test]
-    fn test_gemini_agent_builder_pattern_with_profile() {
+    fn test_gemini_agent_clear_env() {
+        let agent = GeminiAgent::new()
+            .with_env("KEY1", "value1")
+            .with_env("KEY2", "value2")
+            .clear_env();
+
+        assert!(agent.env_vars.is_empty());
+    }
+
+    #[test]
+    fn test_gemini_agent_with_arg() {
+        let agent = GeminiAgent::new()
+            .with_arg("--experimental")
+            .with_arg("--timeout")
+            .with_arg("60");
+
+        assert_eq!(agent.extra_args.len(), 3);
+        assert_eq!(agent.extra_args[0], "--experimental");
+        assert_eq!(agent.extra_args[1], "--timeout");
+        assert_eq!(agent.extra_args[2], "60");
+    }
+
+    #[test]
+    fn test_gemini_agent_with_args() {
+        let agent = GeminiAgent::new()
+            .with_args(vec!["--experimental".to_string(), "--verbose".to_string()]);
+
+        assert_eq!(agent.extra_args.len(), 2);
+        assert_eq!(agent.extra_args[0], "--experimental");
+        assert_eq!(agent.extra_args[1], "--verbose");
+    }
+
+    #[test]
+    fn test_gemini_agent_builder_pattern_comprehensive() {
         let agent = GeminiAgent::new()
             .with_model(GeminiModel::Pro)
-            .with_execution_profile(crate::agent::ExecutionProfile::Deterministic)
-            .with_system_prompt("Test prompt");
+            .with_cwd("/project")
+            .with_env("PATH", "/custom/path")
+            .with_arg("--experimental");
 
         assert!(matches!(agent.model, GeminiModel::Pro));
-        assert!(matches!(
-            agent.execution_profile,
-            crate::agent::ExecutionProfile::Deterministic
-        ));
-        assert!(agent.system_prompt.is_some());
+        assert_eq!(agent.working_dir, Some(PathBuf::from("/project")));
+        assert_eq!(agent.env_vars.get("PATH"), Some(&"/custom/path".to_string()));
+        assert_eq!(agent.extra_args.len(), 1);
+        assert_eq!(agent.extra_args[0], "--experimental");
     }
 }
