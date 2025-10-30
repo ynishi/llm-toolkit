@@ -1,5 +1,6 @@
 //! Built-in agent implementations.
 
+mod cli_attachment;
 pub mod claude_code;
 pub mod gemini;
 pub mod inner_validator;
