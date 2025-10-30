@@ -151,7 +151,7 @@ pub async fn process_attachments(
     for (index, attachment) in attachments.iter().enumerate() {
         match **attachment {
             Attachment::InMemory { ref bytes, .. } => {
-                let filename = generate_temp_filename(*attachment, index);
+                let filename = generate_temp_filename(attachment, index);
                 let path = temp_dir.join(&filename);
 
                 debug!(
@@ -166,7 +166,7 @@ pub async fn process_attachments(
                 paths.push(path);
             }
             Attachment::Local(ref source) => {
-                let filename = generate_temp_filename(*attachment, index);
+                let filename = generate_temp_filename(attachment, index);
                 let dest = temp_dir.join(&filename);
 
                 debug!(
@@ -354,10 +354,11 @@ mod tests {
         assert!(dir.path().is_dir());
 
         // Path should contain "llm-toolkit-attachments"
-        assert!(dir
-            .path()
-            .to_string_lossy()
-            .contains("llm-toolkit-attachments"));
+        assert!(
+            dir.path()
+                .to_string_lossy()
+                .contains("llm-toolkit-attachments")
+        );
 
         let path = dir.path().to_path_buf();
         drop(dir);
@@ -390,7 +391,7 @@ mod tests {
         let temp = std::env::temp_dir();
         let dir = TempAttachmentDir::new(&temp, false).unwrap();
 
-        let attachments = vec![
+        let attachments = [
             Attachment::in_memory(b"test data 1".to_vec()),
             Attachment::in_memory(b"test data 2".to_vec()),
         ];

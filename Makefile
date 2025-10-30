@@ -18,6 +18,8 @@ EXAMPLES := \
 	orchestrator_fast_path_e2e \
 	orchestrator_get_typed_output \
 	check_claude \
+	check_agent_availability \
+	codex_agent_basic \
 	conversational_agent_builder \
 	agent_derive \
 	agent_auto_json_test \
@@ -36,7 +38,8 @@ EXAMPLES := \
 	persona_macro_test
 
 # 外部API依存なしのExample（E2Eテストとして実行可能）
-OFFLINE_EXAMPLES := $(filter-out orchestrator_streaming persona_dialogue persona_macro_test,$(EXAMPLES))
+# Note: check_agent_availability と codex_agent_basic は外部CLIチェック用なので除外
+OFFLINE_EXAMPLES := $(filter-out orchestrator_streaming persona_dialogue persona_macro_test check_agent_availability codex_agent_basic,$(EXAMPLES))
 
 # 全Exampleを実行（外部API依存含む）
 test-examples:

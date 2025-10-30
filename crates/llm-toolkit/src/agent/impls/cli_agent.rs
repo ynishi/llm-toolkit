@@ -9,13 +9,15 @@ use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tracing::debug;
 
-use super::cli_attachment::{format_prompt_with_attachments, process_attachments, TempAttachmentDir};
+use super::cli_attachment::{
+    TempAttachmentDir, format_prompt_with_attachments, process_attachments,
+};
 
 /// Common configuration for CLI-based agents.
 ///
 /// This struct encapsulates shared settings that are common across
 /// all CLI-based agents (e.g., GeminiAgent, ClaudeCodeAgent).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CliAgentConfig {
     /// Execution profile controlling agent behavior
     pub execution_profile: ExecutionProfile,
@@ -29,19 +31,6 @@ pub struct CliAgentConfig {
     pub attachment_dir: Option<PathBuf>,
     /// Whether to keep attachment files after execution (for debugging)
     pub keep_attachments: bool,
-}
-
-impl Default for CliAgentConfig {
-    fn default() -> Self {
-        Self {
-            execution_profile: ExecutionProfile::default(),
-            working_dir: None,
-            env_vars: HashMap::new(),
-            extra_args: Vec::new(),
-            attachment_dir: None,
-            keep_attachments: false,
-        }
-    }
 }
 
 impl CliAgentConfig {
@@ -166,12 +155,13 @@ impl CliAgentConfig {
                 .as_ref()
                 .or(self.working_dir.as_ref())
                 .cloned()
-                .unwrap_or_else(|| std::env::temp_dir());
+                .unwrap_or_else(std::env::temp_dir);
 
             // Create temp directory (will auto-cleanup on drop unless keep_attachments is true)
-            let temp_dir = TempAttachmentDir::new(&base_dir, self.keep_attachments).map_err(|e| {
-                AgentError::Other(format!("Failed to create temp attachment directory: {}", e))
-            })?;
+            let temp_dir =
+                TempAttachmentDir::new(&base_dir, self.keep_attachments).map_err(|e| {
+                    AgentError::Other(format!("Failed to create temp attachment directory: {}", e))
+                })?;
 
             // Process attachments
             let attachments = payload.attachments();
@@ -230,7 +220,10 @@ mod tests {
     #[test]
     fn test_cli_agent_config_default() {
         let config = CliAgentConfig::default();
-        assert!(matches!(config.execution_profile, ExecutionProfile::Balanced));
+        assert!(matches!(
+            config.execution_profile,
+            ExecutionProfile::Balanced
+        ));
         assert!(config.working_dir.is_none());
         assert!(config.env_vars.is_empty());
         assert!(config.extra_args.is_empty());
@@ -248,11 +241,20 @@ mod tests {
             .with_attachment_dir("/tmp/attachments")
             .with_keep_attachments(true);
 
-        assert!(matches!(config.execution_profile, ExecutionProfile::Creative));
+        assert!(matches!(
+            config.execution_profile,
+            ExecutionProfile::Creative
+        ));
         assert_eq!(config.working_dir, Some(PathBuf::from("/project")));
-        assert_eq!(config.env_vars.get("PATH"), Some(&"/custom/path".to_string()));
+        assert_eq!(
+            config.env_vars.get("PATH"),
+            Some(&"/custom/path".to_string())
+        );
         assert_eq!(config.extra_args, vec!["--experimental"]);
-        assert_eq!(config.attachment_dir, Some(PathBuf::from("/tmp/attachments")));
+        assert_eq!(
+            config.attachment_dir,
+            Some(PathBuf::from("/tmp/attachments"))
+        );
         assert!(config.keep_attachments);
     }
 
@@ -281,8 +283,8 @@ mod tests {
 
     #[test]
     fn test_cli_agent_config_with_args() {
-        let config = CliAgentConfig::new()
-            .with_args(vec!["--flag1".to_string(), "--flag2".to_string()]);
+        let config =
+            CliAgentConfig::new().with_args(vec!["--flag1".to_string(), "--flag2".to_string()]);
 
         assert_eq!(config.extra_args.len(), 2);
         assert_eq!(config.extra_args[0], "--flag1");

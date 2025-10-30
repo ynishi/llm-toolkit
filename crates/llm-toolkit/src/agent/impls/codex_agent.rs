@@ -134,6 +134,20 @@ impl CodexAgent {
         self
     }
 
+    /// Sets the execution profile.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::ExecutionProfile;
+    ///
+    /// let agent = CodexAgent::new()
+    ///     .with_execution_profile(ExecutionProfile::Creative);
+    /// ```
+    pub fn with_execution_profile(mut self, profile: crate::agent::ExecutionProfile) -> Self {
+        self.config = self.config.with_execution_profile(profile);
+        self
+    }
+
     /// Sets the working directory where the codex command will be executed.
     ///
     /// # Example
@@ -429,7 +443,7 @@ impl Agent for CodexAgent {
         if payload.has_attachments() {
             for attachment in payload.attachments() {
                 if let Some(path) = attachment.file_name() {
-                    cmd.arg("-i").arg(path);
+                    cmd.arg("-i").arg(&path);
                     debug!(
                         target: "llm_toolkit::agent::codex",
                         "Adding image attachment: {}", path

@@ -112,6 +112,20 @@ impl GeminiAgent {
         self
     }
 
+    /// Sets the execution profile.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::ExecutionProfile;
+    ///
+    /// let agent = GeminiAgent::new()
+    ///     .with_execution_profile(ExecutionProfile::Creative);
+    /// ```
+    pub fn with_execution_profile(mut self, profile: crate::agent::ExecutionProfile) -> Self {
+        self.config = self.config.with_execution_profile(profile);
+        self
+    }
+
     /// Sets the working directory where the gemini command will be executed.
     ///
     /// # Example
@@ -270,7 +284,6 @@ impl GeminiAgent {
             ))
         }
     }
-
 }
 
 impl Default for GeminiAgent {
@@ -349,7 +362,8 @@ impl Agent for GeminiAgent {
 
         debug!(
             target = "llm_toolkit::agent::gemini",
-            "Building gemini command with prompt length: {}", final_prompt.len()
+            "Building gemini command with prompt length: {}",
+            final_prompt.len()
         );
 
         let mut cmd = self.build_command(&final_prompt)?;
@@ -368,21 +382,21 @@ impl Agent for GeminiAgent {
         })?;
 
         if output.status.success() {
-            let response =
-                String::from_utf8(output.stdout).map_err(|e| {
-                    error!(
-                        target = "llm_toolkit::agent::gemini",
-                        "Failed to parse stdout as UTF-8: {}", e
-                    );
-                    AgentError::ParseError {
-                        message: format!("Failed to parse gemini stdout: {}", e),
-                        reason: crate::agent::error::ParseErrorReason::UnexpectedEof,
-                    }
-                })?;
+            let response = String::from_utf8(output.stdout).map_err(|e| {
+                error!(
+                    target = "llm_toolkit::agent::gemini",
+                    "Failed to parse stdout as UTF-8: {}", e
+                );
+                AgentError::ParseError {
+                    message: format!("Failed to parse gemini stdout: {}", e),
+                    reason: crate::agent::error::ParseErrorReason::UnexpectedEof,
+                }
+            })?;
 
             info!(
                 target = "llm_toolkit::agent::gemini",
-                "Gemini command completed successfully, response length: {}", response.len()
+                "Gemini command completed successfully, response length: {}",
+                response.len()
             );
             Ok(response.trim().to_string())
         } else {
@@ -409,15 +423,17 @@ impl Agent for GeminiAgent {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     #[test]
     fn test_gemini_agent_creation() {
         let agent = GeminiAgent::new();
         assert_eq!(agent.name(), "GeminiAgent");
-        assert!(agent.working_dir.is_none());
-        assert!(agent.env_vars.is_empty());
-        assert!(agent.extra_args.is_empty());
+        assert!(agent.config.working_dir.is_none());
+        assert!(agent.config.env_vars.is_empty());
+        assert!(agent.config.extra_args.is_empty());
     }
 
     #[test]
@@ -438,9 +454,9 @@ mod tests {
     fn test_gemini_agent_with_cwd() {
         let agent = GeminiAgent::new().with_cwd("/path/to/project");
 
-        assert!(agent.working_dir.is_some());
+        assert!(agent.config.working_dir.is_some());
         assert_eq!(
-            agent.working_dir.unwrap(),
+            agent.config.working_dir.unwrap(),
             PathBuf::from("/path/to/project")
         );
     }
@@ -449,9 +465,9 @@ mod tests {
     fn test_gemini_agent_with_directory() {
         let agent = GeminiAgent::new().with_directory("/path/to/project");
 
-        assert!(agent.working_dir.is_some());
+        assert!(agent.config.working_dir.is_some());
         assert_eq!(
-            agent.working_dir.unwrap(),
+            agent.config.working_dir.unwrap(),
             PathBuf::from("/path/to/project")
         );
     }
@@ -462,9 +478,15 @@ mod tests {
             .with_env("GEMINI_API_KEY", "my-key")
             .with_env("PATH", "/usr/local/bin");
 
-        assert_eq!(agent.env_vars.len(), 2);
-        assert_eq!(agent.env_vars.get("GEMINI_API_KEY"), Some(&"my-key".to_string()));
-        assert_eq!(agent.env_vars.get("PATH"), Some(&"/usr/local/bin".to_string()));
+        assert_eq!(agent.config.env_vars.len(), 2);
+        assert_eq!(
+            agent.config.env_vars.get("GEMINI_API_KEY"),
+            Some(&"my-key".to_string())
+        );
+        assert_eq!(
+            agent.config.env_vars.get("PATH"),
+            Some(&"/usr/local/bin".to_string())
+        );
     }
 
     #[test]
@@ -475,9 +497,15 @@ mod tests {
 
         let agent = GeminiAgent::new().with_envs(env_map);
 
-        assert_eq!(agent.env_vars.len(), 2);
-        assert_eq!(agent.env_vars.get("KEY1"), Some(&"value1".to_string()));
-        assert_eq!(agent.env_vars.get("KEY2"), Some(&"value2".to_string()));
+        assert_eq!(agent.config.env_vars.len(), 2);
+        assert_eq!(
+            agent.config.env_vars.get("KEY1"),
+            Some(&"value1".to_string())
+        );
+        assert_eq!(
+            agent.config.env_vars.get("KEY2"),
+            Some(&"value2".to_string())
+        );
     }
 
     #[test]
@@ -487,7 +515,7 @@ mod tests {
             .with_env("KEY2", "value2")
             .clear_env();
 
-        assert!(agent.env_vars.is_empty());
+        assert!(agent.config.env_vars.is_empty());
     }
 
     #[test]
@@ -497,10 +525,10 @@ mod tests {
             .with_arg("--timeout")
             .with_arg("60");
 
-        assert_eq!(agent.extra_args.len(), 3);
-        assert_eq!(agent.extra_args[0], "--experimental");
-        assert_eq!(agent.extra_args[1], "--timeout");
-        assert_eq!(agent.extra_args[2], "60");
+        assert_eq!(agent.config.extra_args.len(), 3);
+        assert_eq!(agent.config.extra_args[0], "--experimental");
+        assert_eq!(agent.config.extra_args[1], "--timeout");
+        assert_eq!(agent.config.extra_args[2], "60");
     }
 
     #[test]
@@ -508,9 +536,9 @@ mod tests {
         let agent = GeminiAgent::new()
             .with_args(vec!["--experimental".to_string(), "--verbose".to_string()]);
 
-        assert_eq!(agent.extra_args.len(), 2);
-        assert_eq!(agent.extra_args[0], "--experimental");
-        assert_eq!(agent.extra_args[1], "--verbose");
+        assert_eq!(agent.config.extra_args.len(), 2);
+        assert_eq!(agent.config.extra_args[0], "--experimental");
+        assert_eq!(agent.config.extra_args[1], "--verbose");
     }
 
     #[test]
@@ -522,9 +550,12 @@ mod tests {
             .with_arg("--experimental");
 
         assert!(matches!(agent.model, GeminiModel::Pro));
-        assert_eq!(agent.working_dir, Some(PathBuf::from("/project")));
-        assert_eq!(agent.env_vars.get("PATH"), Some(&"/custom/path".to_string()));
-        assert_eq!(agent.extra_args.len(), 1);
-        assert_eq!(agent.extra_args[0], "--experimental");
+        assert_eq!(agent.config.working_dir, Some(PathBuf::from("/project")));
+        assert_eq!(
+            agent.config.env_vars.get("PATH"),
+            Some(&"/custom/path".to_string())
+        );
+        assert_eq!(agent.config.extra_args.len(), 1);
+        assert_eq!(agent.config.extra_args[0], "--experimental");
     }
 }

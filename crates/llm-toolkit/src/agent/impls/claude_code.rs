@@ -6,6 +6,7 @@
 use crate::agent::{Agent, AgentError, Payload};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tracing::{debug, error, info, instrument};
@@ -112,6 +113,20 @@ impl ClaudeCodeAgent {
             "opus" | "opus-4" | "claude-opus-4" => ClaudeModel::Opus4,
             _ => ClaudeModel::Sonnet45, // Default fallback
         });
+        self
+    }
+
+    /// Sets the execution profile.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::ExecutionProfile;
+    ///
+    /// let agent = ClaudeCodeAgent::new()
+    ///     .with_execution_profile(ExecutionProfile::Creative);
+    /// ```
+    pub fn with_execution_profile(mut self, profile: crate::agent::ExecutionProfile) -> Self {
+        self.config = self.config.with_execution_profile(profile);
         self
     }
 
@@ -274,7 +289,6 @@ impl ClaudeCodeAgent {
             ))
         }
     }
-
 }
 
 impl Default for ClaudeCodeAgent {
@@ -646,9 +660,9 @@ mod tests {
     fn test_claude_code_agent_with_cwd() {
         let agent = ClaudeCodeAgent::new().with_cwd("/path/to/project");
 
-        assert!(agent.working_dir.is_some());
+        assert!(agent.config.working_dir.is_some());
         assert_eq!(
-            agent.working_dir.unwrap(),
+            agent.config.working_dir.unwrap(),
             PathBuf::from("/path/to/project")
         );
     }
@@ -657,9 +671,9 @@ mod tests {
     fn test_claude_code_agent_with_directory() {
         let agent = ClaudeCodeAgent::new().with_directory("/path/to/project");
 
-        assert!(agent.working_dir.is_some());
+        assert!(agent.config.working_dir.is_some());
         assert_eq!(
-            agent.working_dir.unwrap(),
+            agent.config.working_dir.unwrap(),
             PathBuf::from("/path/to/project")
         );
     }
@@ -670,9 +684,15 @@ mod tests {
             .with_env("CLAUDE_API_KEY", "my-key")
             .with_env("PATH", "/usr/local/bin");
 
-        assert_eq!(agent.env_vars.len(), 2);
-        assert_eq!(agent.env_vars.get("CLAUDE_API_KEY"), Some(&"my-key".to_string()));
-        assert_eq!(agent.env_vars.get("PATH"), Some(&"/usr/local/bin".to_string()));
+        assert_eq!(agent.config.env_vars.len(), 2);
+        assert_eq!(
+            agent.config.env_vars.get("CLAUDE_API_KEY"),
+            Some(&"my-key".to_string())
+        );
+        assert_eq!(
+            agent.config.env_vars.get("PATH"),
+            Some(&"/usr/local/bin".to_string())
+        );
     }
 
     #[test]
@@ -683,9 +703,15 @@ mod tests {
 
         let agent = ClaudeCodeAgent::new().with_envs(env_map);
 
-        assert_eq!(agent.env_vars.len(), 2);
-        assert_eq!(agent.env_vars.get("KEY1"), Some(&"value1".to_string()));
-        assert_eq!(agent.env_vars.get("KEY2"), Some(&"value2".to_string()));
+        assert_eq!(agent.config.env_vars.len(), 2);
+        assert_eq!(
+            agent.config.env_vars.get("KEY1"),
+            Some(&"value1".to_string())
+        );
+        assert_eq!(
+            agent.config.env_vars.get("KEY2"),
+            Some(&"value2".to_string())
+        );
     }
 
     #[test]
@@ -695,7 +721,7 @@ mod tests {
             .with_env("KEY2", "value2")
             .clear_env();
 
-        assert!(agent.env_vars.is_empty());
+        assert!(agent.config.env_vars.is_empty());
     }
 
     #[test]
@@ -705,10 +731,10 @@ mod tests {
             .with_arg("--timeout")
             .with_arg("60");
 
-        assert_eq!(agent.extra_args.len(), 3);
-        assert_eq!(agent.extra_args[0], "--experimental");
-        assert_eq!(agent.extra_args[1], "--timeout");
-        assert_eq!(agent.extra_args[2], "60");
+        assert_eq!(agent.config.extra_args.len(), 3);
+        assert_eq!(agent.config.extra_args[0], "--experimental");
+        assert_eq!(agent.config.extra_args[1], "--timeout");
+        assert_eq!(agent.config.extra_args[2], "60");
     }
 
     #[test]
@@ -716,9 +742,9 @@ mod tests {
         let agent = ClaudeCodeAgent::new()
             .with_args(vec!["--experimental".to_string(), "--verbose".to_string()]);
 
-        assert_eq!(agent.extra_args.len(), 2);
-        assert_eq!(agent.extra_args[0], "--experimental");
-        assert_eq!(agent.extra_args[1], "--verbose");
+        assert_eq!(agent.config.extra_args.len(), 2);
+        assert_eq!(agent.config.extra_args[0], "--experimental");
+        assert_eq!(agent.config.extra_args[1], "--verbose");
     }
 
     #[test]
@@ -730,9 +756,12 @@ mod tests {
             .with_arg("--experimental");
 
         assert!(matches!(agent.model, Some(ClaudeModel::Opus4)));
-        assert_eq!(agent.working_dir, Some(PathBuf::from("/project")));
-        assert_eq!(agent.env_vars.get("PATH"), Some(&"/custom/path".to_string()));
-        assert_eq!(agent.extra_args.len(), 1);
-        assert_eq!(agent.extra_args[0], "--experimental");
+        assert_eq!(agent.config.working_dir, Some(PathBuf::from("/project")));
+        assert_eq!(
+            agent.config.env_vars.get("PATH"),
+            Some(&"/custom/path".to_string())
+        );
+        assert_eq!(agent.config.extra_args.len(), 1);
+        assert_eq!(agent.config.extra_args[0], "--experimental");
     }
 }

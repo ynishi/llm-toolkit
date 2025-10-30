@@ -57,10 +57,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("6. Builder pattern with multiple configurations:");
     let _gemini_custom = GeminiAgent::new()
         .with_model_str("pro")
-        .with_execution_profile(ExecutionProfile::Creative)
-        .with_system_prompt("You are a creative assistant");
+        .with_execution_profile(ExecutionProfile::Creative);
 
-    println!("   GeminiAgent configured with Pro model + Creative profile + custom system prompt");
+    println!("   GeminiAgent configured with Pro model + Creative profile");
 
     println!("\n=== Demo Complete ===");
     println!("\nKey Points:");
