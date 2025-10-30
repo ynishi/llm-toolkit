@@ -6,12 +6,11 @@
 use crate::agent::{Agent, AgentError, Payload};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tracing::{debug, error, info, instrument};
 
-use super::cli_attachment::{format_prompt_with_attachments, process_attachments, TempAttachmentDir};
+use super::cli_agent::{CliAgent, CliAgentConfig};
 
 /// Supported Claude models
 #[derive(Debug, Clone, Copy, Default)]
@@ -67,16 +66,8 @@ pub struct ClaudeCodeAgent {
     claude_path: Option<PathBuf>,
     /// Model to use for generation
     model: Option<ClaudeModel>,
-    /// Working directory for command execution
-    working_dir: Option<PathBuf>,
-    /// Environment variables to set for command execution
-    env_vars: HashMap<String, String>,
-    /// Additional CLI arguments to pass to claude command
-    extra_args: Vec<String>,
-    /// Directory for storing temporary attachment files
-    attachment_dir: Option<PathBuf>,
-    /// Whether to keep attachment files after execution (for debugging)
-    keep_attachments: bool,
+    /// Common CLI agent configuration
+    config: CliAgentConfig,
 }
 
 impl ClaudeCodeAgent {
@@ -92,11 +83,7 @@ impl ClaudeCodeAgent {
         Self {
             claude_path: None,
             model: None,
-            working_dir: None,
-            env_vars: HashMap::new(),
-            extra_args: Vec::new(),
-            attachment_dir: None,
-            keep_attachments: false,
+            config: CliAgentConfig::new(),
         }
     }
 
@@ -105,11 +92,7 @@ impl ClaudeCodeAgent {
         Self {
             claude_path: Some(path),
             model: None,
-            working_dir: None,
-            env_vars: HashMap::new(),
-            extra_args: Vec::new(),
-            attachment_dir: None,
-            keep_attachments: false,
+            config: CliAgentConfig::new(),
         }
     }
 
@@ -140,7 +123,7 @@ impl ClaudeCodeAgent {
     ///     .with_cwd("/path/to/project");
     /// ```
     pub fn with_cwd(mut self, path: impl Into<PathBuf>) -> Self {
-        self.working_dir = Some(path.into());
+        self.config = self.config.with_cwd(path);
         self
     }
 
@@ -152,7 +135,7 @@ impl ClaudeCodeAgent {
     ///     .with_directory("/path/to/project");
     /// ```
     pub fn with_directory(mut self, path: impl Into<PathBuf>) -> Self {
-        self.working_dir = Some(path.into());
+        self.config = self.config.with_directory(path);
         self
     }
 
@@ -165,7 +148,7 @@ impl ClaudeCodeAgent {
     ///     .with_env("PATH", "/usr/local/bin:/usr/bin");
     /// ```
     pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.env_vars.insert(key.into(), value.into());
+        self.config = self.config.with_env(key, value);
         self
     }
 
@@ -173,6 +156,8 @@ impl ClaudeCodeAgent {
     ///
     /// # Example
     /// ```rust,ignore
+    /// use std::collections::HashMap;
+    ///
     /// let mut env_map = HashMap::new();
     /// env_map.insert("PATH".to_string(), "/custom/path".to_string());
     /// env_map.insert("CLAUDE_API_KEY".to_string(), "key".to_string());
@@ -180,14 +165,14 @@ impl ClaudeCodeAgent {
     /// let agent = ClaudeCodeAgent::new()
     ///     .with_envs(env_map);
     /// ```
-    pub fn with_envs(mut self, envs: HashMap<String, String>) -> Self {
-        self.env_vars.extend(envs);
+    pub fn with_envs(mut self, envs: std::collections::HashMap<String, String>) -> Self {
+        self.config = self.config.with_envs(envs);
         self
     }
 
     /// Clears all environment variables.
     pub fn clear_env(mut self) -> Self {
-        self.env_vars.clear();
+        self.config = self.config.clear_env();
         self
     }
 
@@ -201,7 +186,7 @@ impl ClaudeCodeAgent {
     ///     .with_arg("60");
     /// ```
     pub fn with_arg(mut self, arg: impl Into<String>) -> Self {
-        self.extra_args.push(arg.into());
+        self.config = self.config.with_arg(arg);
         self
     }
 
@@ -210,10 +195,10 @@ impl ClaudeCodeAgent {
     /// # Example
     /// ```rust,ignore
     /// let agent = ClaudeCodeAgent::new()
-    ///     .with_args(vec!["--experimental", "--verbose"]);
+    ///     .with_args(vec!["--experimental".to_string(), "--verbose".to_string()]);
     /// ```
     pub fn with_args(mut self, args: Vec<String>) -> Self {
-        self.extra_args.extend(args);
+        self.config = self.config.with_args(args);
         self
     }
 
@@ -227,7 +212,7 @@ impl ClaudeCodeAgent {
     ///     .with_attachment_dir("/tmp/my-attachments");
     /// ```
     pub fn with_attachment_dir(mut self, path: impl Into<PathBuf>) -> Self {
-        self.attachment_dir = Some(path.into());
+        self.config = self.config.with_attachment_dir(path);
         self
     }
 
@@ -242,7 +227,7 @@ impl ClaudeCodeAgent {
     ///     .with_keep_attachments(true); // Don't delete temp files
     /// ```
     pub fn with_keep_attachments(mut self, keep: bool) -> Self {
-        self.keep_attachments = keep;
+        self.config = self.config.with_keep_attachments(keep);
         self
     }
 
@@ -290,7 +275,31 @@ impl ClaudeCodeAgent {
         }
     }
 
-    /// Builds the command with all arguments.
+}
+
+impl Default for ClaudeCodeAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CliAgent for ClaudeCodeAgent {
+    fn config(&self) -> &CliAgentConfig {
+        &self.config
+    }
+
+    fn config_mut(&mut self) -> &mut CliAgentConfig {
+        &mut self.config
+    }
+
+    fn cli_path(&self) -> Option<&Path> {
+        self.claude_path.as_deref()
+    }
+
+    fn cli_command_name(&self) -> &str {
+        "claude"
+    }
+
     fn build_command(&self, prompt: &str) -> Result<Command, AgentError> {
         let cmd_name = self
             .claude_path
@@ -300,17 +309,8 @@ impl ClaudeCodeAgent {
 
         let mut cmd = Command::new(cmd_name);
 
-        // Set working directory if specified
-        if let Some(dir) = &self.working_dir {
-            debug!(target: "llm_toolkit::agent::claude_code", "Setting working directory: {}", dir.display());
-            cmd.current_dir(dir);
-        }
-
-        // Apply environment variables
-        for (key, value) in &self.env_vars {
-            debug!(target: "llm_toolkit::agent::claude_code", "Setting environment variable: {}={}", key, value);
-            cmd.env(key, value);
-        }
+        // Apply common configuration (working dir, env vars)
+        self.config.apply_to_command(&mut cmd);
 
         // Add prompt argument
         cmd.arg("-p").arg(prompt);
@@ -318,22 +318,22 @@ impl ClaudeCodeAgent {
         // Add model if specified
         if let Some(model) = &self.model {
             cmd.arg("--model").arg(model.as_str());
-            debug!(target: "llm_toolkit::agent::claude_code", "Using model: {}", model.as_str());
+            debug!(
+                target: "llm_toolkit::agent::claude_code",
+                "Using model: {}", model.as_str()
+            );
         }
 
-        // Add extra CLI arguments
-        for arg in &self.extra_args {
-            debug!(target: "llm_toolkit::agent::claude_code", "Adding extra argument: {}", arg);
+        // Add extra CLI arguments from config
+        for arg in &self.config.extra_args {
+            debug!(
+                target: "llm_toolkit::agent::claude_code",
+                "Adding extra argument: {}", arg
+            );
             cmd.arg(arg);
         }
 
         Ok(cmd)
-    }
-}
-
-impl Default for ClaudeCodeAgent {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -349,50 +349,15 @@ impl Agent for ClaudeCodeAgent {
 
     #[instrument(skip(self, intent), fields(
         model = ?self.model,
-        working_dir = ?self.working_dir,
+        working_dir = ?self.config.working_dir,
         has_attachments = intent.has_attachments(),
         prompt_length = intent.to_text().len()
     ))]
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         let payload = intent;
-        let text_intent = payload.to_text();
 
-        // Prepare the final prompt (with attachments if present)
-        let (final_prompt, _temp_dir) = if payload.has_attachments() {
-            debug!(
-                target: "llm_toolkit::agent::claude_code",
-                "Processing {} attachments", payload.attachments().len()
-            );
-
-            // Determine base directory for attachments
-            let base_dir = self
-                .attachment_dir
-                .as_ref()
-                .or(self.working_dir.as_ref())
-                .cloned()
-                .unwrap_or_else(|| std::env::temp_dir());
-
-            // Create temp directory (will auto-cleanup on drop unless keep_attachments is true)
-            let temp_dir = TempAttachmentDir::new(&base_dir, self.keep_attachments).map_err(|e| {
-                AgentError::Other(format!("Failed to create temp attachment directory: {}", e))
-            })?;
-
-            // Process attachments
-            let attachments = payload.attachments();
-            let attachment_paths = process_attachments(&attachments, temp_dir.path()).await?;
-
-            debug!(
-                target: "llm_toolkit::agent::claude_code",
-                "Processed {} attachments to temp files", attachment_paths.len()
-            );
-
-            // Format prompt with attachment paths
-            let prompt = format_prompt_with_attachments(&text_intent, &attachment_paths);
-
-            (prompt, Some(temp_dir))
-        } else {
-            (text_intent.clone(), None)
-        };
+        // Process attachments using shared config method
+        let (final_prompt, _temp_dir) = self.config.process_payload_attachments(&payload).await?;
 
         debug!(
             target: "llm_toolkit::agent::claude_code",

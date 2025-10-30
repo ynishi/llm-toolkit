@@ -1409,7 +1409,47 @@ All existing code using `String` continues to work thanks to automatic conversio
 let result = agent.execute("Simple text intent".to_string().into()).await?;
 ```
 
-**Note:** While the `Payload` type supports images, not all agent backends currently process them. `ClaudeCodeAgent` and `GeminiAgent` will log a warning if images are included but not yet supported by the CLI integration.
+**CLI Agents Attachment Support:**
+
+Both `GeminiAgent` and `ClaudeCodeAgent` support attachments by automatically writing them to temporary files and passing the file paths to the CLI tools:
+
+```rust
+use llm_toolkit::agent::impls::{GeminiAgent, ClaudeCodeAgent};
+use llm_toolkit::agent::{Agent, Payload};
+use llm_toolkit::attachment::Attachment;
+
+// GeminiAgent with attachments
+let gemini = GeminiAgent::new();
+let payload = Payload::text("Analyze this diagram")
+    .with_attachment(Attachment::local("architecture.png"));
+let result = gemini.execute(payload).await?;
+
+// ClaudeCodeAgent with multiple attachments
+let claude = ClaudeCodeAgent::new();
+let payload = Payload::text("Review these files")
+    .with_attachment(Attachment::local("code.rs"))
+    .with_attachment(Attachment::local("tests.rs"));
+let result = claude.execute(payload).await?;
+
+// Custom attachment directory (useful for debugging)
+let gemini = GeminiAgent::new()
+    .with_attachment_dir("/tmp/my-attachments")
+    .with_keep_attachments(true);  // Don't auto-delete temp files
+
+// In-memory attachments are also supported
+let image_data = std::fs::read("screenshot.png")?;
+let payload = Payload::text("What's in this screenshot?")
+    .with_attachment(Attachment::in_memory(image_data));
+let result = claude.execute(payload).await?;
+```
+
+**How it works:**
+- Attachments are written to a temporary directory (either system temp or a custom dir via `with_attachment_dir()`)
+- Each session gets a unique subdirectory to prevent conflicts
+- File paths are appended to the prompt text before sending to the CLI tool
+- Temporary files are automatically cleaned up after execution (unless `with_keep_attachments(true)` is set)
+- Local files are copied to temp dir; in-memory data is written to temp files
+- Remote URLs are logged with a warning and skipped (not yet supported)
 
 #### Defining Agents: Two Approaches
 
