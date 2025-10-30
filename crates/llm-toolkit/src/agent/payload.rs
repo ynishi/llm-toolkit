@@ -149,6 +149,34 @@ impl Payload {
         }
     }
 
+    /// Merges another payload's contents into this one.
+    ///
+    /// This appends all content items from the other payload to the end of this payload's
+    /// contents. This is useful for combining context from multiple sources.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::attachment::Attachment;
+    ///
+    /// let context = Payload::text("Previous conversation context");
+    /// let new_input = Payload::text("New question")
+    ///     .with_attachment(Attachment::local("image.png"));
+    ///
+    /// let combined = context.merge(new_input);
+    /// // Contains: "Previous conversation context", "New question", and the attachment
+    /// ```
+    pub fn merge(self, other: Payload) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.extend(other.contents().iter().cloned());
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
+    }
+
     /// Returns all text contents concatenated with newlines.
     ///
     /// This is useful for agents that only support text input.
@@ -419,5 +447,43 @@ mod tests {
 
         assert_eq!(payload.contents().len(), 3);
         assert_eq!(payload.attachments().len(), 2);
+    }
+
+    #[test]
+    fn test_payload_merge() {
+        use crate::attachment::Attachment;
+
+        let payload1 = Payload::text("First text").with_attachment(Attachment::local("/file1.txt"));
+        let payload2 =
+            Payload::text("Second text").with_attachment(Attachment::local("/file2.txt"));
+
+        let merged = payload1.merge(payload2);
+
+        assert_eq!(merged.contents().len(), 4);
+        assert_eq!(merged.attachments().len(), 2);
+        assert_eq!(merged.to_text(), "First text\nSecond text");
+    }
+
+    #[test]
+    fn test_payload_merge_text_only() {
+        let payload1 = Payload::text("Hello");
+        let payload2 = Payload::text("World");
+
+        let merged = payload1.merge(payload2);
+
+        assert_eq!(merged.contents().len(), 2);
+        assert_eq!(merged.to_text(), "Hello\nWorld");
+        assert!(!merged.has_attachments());
+    }
+
+    #[test]
+    fn test_payload_merge_empty() {
+        let payload1 = Payload::text("Content");
+        let payload2 = Payload::new();
+
+        let merged = payload1.merge(payload2);
+
+        assert_eq!(merged.contents().len(), 1);
+        assert_eq!(merged.to_text(), "Content");
     }
 }

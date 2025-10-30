@@ -2,6 +2,48 @@
 //!
 //! This module provides abstractions for managing turn-based dialogues between
 //! multiple agents, with configurable turn-taking strategies.
+//!
+//! # Multimodal Input Support
+//!
+//! All dialogue methods accept `impl Into<Payload>`, allowing both text and
+//! multimodal input (text + attachments) while maintaining backward compatibility.
+//!
+//! ## Examples
+//!
+//! ### Text-only input (backward compatible)
+//!
+//! ```rust,ignore
+//! let mut dialogue = Dialogue::broadcast()
+//!     .add_participant(persona, agent);
+//!
+//! // String literal
+//! let turns = dialogue.run("Discuss AI ethics").await?;
+//!
+//! // String variable
+//! let prompt = "Analyze this".to_string();
+//! let turns = dialogue.run(prompt).await?;
+//! ```
+//!
+//! ### Multimodal input with attachments
+//!
+//! ```rust,ignore
+//! use llm_toolkit::attachment::Attachment;
+//! use llm_toolkit::agent::Payload;
+//!
+//! let mut dialogue = Dialogue::broadcast()
+//!     .add_participant(persona, agent);
+//!
+//! // Single attachment
+//! let payload = Payload::text("What's in this image?")
+//!     .with_attachment(Attachment::local("image.png"));
+//! let turns = dialogue.run(payload).await?;
+//!
+//! // Multiple attachments
+//! let payload = Payload::text("Analyze these files")
+//!     .with_attachment(Attachment::local("data.csv"))
+//!     .with_attachment(Attachment::local("metadata.json"));
+//! let turns = dialogue.run(payload).await?;
+//! ```
 
 use super::chat::Chat;
 use super::{Agent, AgentError, Payload};
@@ -650,31 +692,79 @@ impl Dialogue {
     }
 
     /// Begins a dialogue session that yields turns incrementally.
-    pub fn partial_session(&mut self, initial_prompt: String) -> DialogueSession<'_> {
+    ///
+    /// This method accepts any type that can be converted into a `Payload`, including:
+    /// - `String` or `&str` for text-only input
+    /// - `Payload` for multimodal input with attachments
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Text-only input (backward compatible)
+    /// let mut session = dialogue.partial_session("Hello");
+    ///
+    /// // Multimodal input with attachment
+    /// let payload = Payload::text("What's in this image?")
+    ///     .with_attachment(Attachment::local("image.png"));
+    /// let mut session = dialogue.partial_session(payload);
+    /// ```
+    pub fn partial_session(&mut self, initial_prompt: impl Into<Payload>) -> DialogueSession<'_> {
         self.partial_session_with_order(initial_prompt, BroadcastOrder::Completion)
     }
 
     /// Begins a dialogue session with a specified broadcast ordering policy.
+    ///
+    /// This method accepts any type that can be converted into a `Payload`, including:
+    /// - `String` or `&str` for text-only input
+    /// - `Payload` for multimodal input with attachments
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // With text and custom order
+    /// let mut session = dialogue.partial_session_with_order(
+    ///     "Hello",
+    ///     BroadcastOrder::ParticipantOrder
+    /// );
+    ///
+    /// // With multimodal payload and custom order
+    /// let payload = Payload::text("Analyze this")
+    ///     .with_attachment(Attachment::local("data.csv"));
+    /// let mut session = dialogue.partial_session_with_order(
+    ///     payload,
+    ///     BroadcastOrder::ParticipantOrder
+    /// );
+    /// ```
     pub fn partial_session_with_order(
         &mut self,
-        initial_prompt: String,
+        initial_prompt: impl Into<Payload>,
         broadcast_order: BroadcastOrder,
     ) -> DialogueSession<'_> {
+        // Convert to Payload first
+        let payload: Payload = initial_prompt.into();
+
+        // Store text representation in history
         self.history.push(DialogueTurn {
             participant_name: "System".to_string(),
-            content: initial_prompt.clone(),
+            content: payload.to_text(),
         });
 
         let model = self.execution_model;
         let state = match model {
             ExecutionModel::Broadcast => {
+                // Combine history context with new payload
                 let history_text = self.format_history();
-                let payload: Payload = history_text.into();
+                let combined_payload = if history_text.is_empty() {
+                    payload
+                } else {
+                    Payload::text(history_text).merge(payload)
+                };
+
                 let mut pending = JoinSet::new();
 
                 for (idx, participant) in self.participants.iter().enumerate() {
                     let agent = Arc::clone(&participant.agent);
-                    let payload_clone = payload.clone();
+                    let payload_clone = combined_payload.clone();
                     let name = participant.name().to_string();
 
                     pending.spawn(async move {
@@ -691,7 +781,7 @@ impl Dialogue {
             }
             ExecutionModel::Sequential => SessionState::Sequential {
                 next_index: 0,
-                current_input: initial_prompt,
+                current_input: payload.to_text(),
             },
         };
 
@@ -709,6 +799,10 @@ impl Dialogue {
     ///   Returns a vector of dialogue turns from all participants.
     /// - **Sequential**: Participants execute in order, with each agent's output becoming the
     ///   next agent's input. Returns a vector containing only the final agent's turn.
+    ///
+    /// This method accepts any type that can be converted into a `Payload`, including:
+    /// - `String` or `&str` for text-only input
+    /// - `Payload` for multimodal input with attachments
     ///
     /// # Arguments
     ///
@@ -730,19 +824,24 @@ impl Dialogue {
     /// ```rust,ignore
     /// use llm_toolkit::agent::dialogue::Dialogue;
     ///
-    /// // Broadcast mode
+    /// // Broadcast mode with text
     /// let mut dialogue = Dialogue::broadcast()
     ///     .add_participant(persona1, agent1)
     ///     .add_participant(persona2, agent2);
-    /// let all_turns = dialogue.run("Discuss AI ethics".to_string()).await?;
+    /// let all_turns = dialogue.run("Discuss AI ethics").await?;
     ///
-    /// // Sequential mode
+    /// // Sequential mode with multimodal input
     /// let mut dialogue = Dialogue::sequential()
     ///     .add_participant(persona1, summarizer)
     ///     .add_participant(persona2, translator);
-    /// let final_turn = dialogue.run("Process this".to_string()).await?;
+    /// let payload = Payload::text("Process this image")
+    ///     .with_attachment(Attachment::local("image.png"));
+    /// let final_turn = dialogue.run(payload).await?;
     /// ```
-    pub async fn run(&mut self, initial_prompt: String) -> Result<Vec<DialogueTurn>, AgentError> {
+    pub async fn run(
+        &mut self,
+        initial_prompt: impl Into<Payload>,
+    ) -> Result<Vec<DialogueTurn>, AgentError> {
         let model = self.execution_model;
         let mut session =
             self.partial_session_with_order(initial_prompt, BroadcastOrder::Completion);
@@ -1539,5 +1638,153 @@ mod tests {
         assert_eq!(participants_after_removal.len(), 2);
         assert_eq!(participants_after_removal[0].name, "Alice");
         assert_eq!(participants_after_removal[1].name, "Charlie");
+    }
+
+    #[tokio::test]
+    async fn test_partial_session_with_multimodal_payload() {
+        use crate::agent::persona::Persona;
+        use crate::attachment::Attachment;
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona = Persona {
+            name: "Analyst".to_string(),
+            role: "Image Analyst".to_string(),
+            background: "Expert in image analysis".to_string(),
+            communication_style: "Technical and precise".to_string(),
+        };
+
+        dialogue.add_participant(
+            persona,
+            MockAgent::new("Analyst", vec!["Image analysis complete".to_string()]),
+        );
+
+        // Create multimodal payload
+        let payload = Payload::text("Analyze this image")
+            .with_attachment(Attachment::local("/test/image.png"));
+
+        let mut session = dialogue.partial_session(payload);
+
+        let turn = session.next_turn().await.unwrap().unwrap();
+        assert_eq!(turn.participant_name, "Analyst");
+        assert_eq!(turn.content, "Image analysis complete");
+
+        // Verify history contains text representation
+        assert_eq!(dialogue.history().len(), 2);
+        assert_eq!(dialogue.history()[0].participant_name, "System");
+        assert_eq!(dialogue.history()[0].content, "Analyze this image");
+    }
+
+    #[tokio::test]
+    async fn test_run_with_string_literal_backward_compatibility() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona = Persona {
+            name: "Agent".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        dialogue.add_participant(
+            persona,
+            MockAgent::new("Agent", vec!["Response".to_string()]),
+        );
+
+        // Test backward compatibility: should accept string literal
+        let turns = dialogue.run("Hello").await.unwrap();
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].content, "Response");
+    }
+
+    #[tokio::test]
+    async fn test_run_with_multimodal_payload() {
+        use crate::agent::persona::Persona;
+        use crate::attachment::Attachment;
+
+        let mut dialogue = Dialogue::sequential();
+
+        let persona1 = Persona {
+            name: "Analyzer".to_string(),
+            role: "Data Analyzer".to_string(),
+            background: "Analyzes data".to_string(),
+            communication_style: "Analytical".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Summarizer".to_string(),
+            role: "Summarizer".to_string(),
+            background: "Summarizes results".to_string(),
+            communication_style: "Concise".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona1,
+                MockAgent::new("Analyzer", vec!["Data analyzed".to_string()]),
+            )
+            .add_participant(
+                persona2,
+                MockAgent::new("Summarizer", vec!["Summary complete".to_string()]),
+            );
+
+        // Create multimodal payload
+        let payload = Payload::text("Process this data")
+            .with_attachment(Attachment::local("/test/data.csv"))
+            .with_attachment(Attachment::local("/test/metadata.json"));
+
+        let turns = dialogue.run(payload).await.unwrap();
+
+        // Sequential returns only final turn
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].participant_name, "Summarizer");
+        assert_eq!(turns[0].content, "Summary complete");
+
+        // Verify history has both turns
+        assert_eq!(dialogue.history().len(), 3); // System + 2 participants
+    }
+
+    #[tokio::test]
+    async fn test_partial_session_with_ordered_broadcast_and_payload() {
+        use crate::agent::persona::Persona;
+        use crate::attachment::Attachment;
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona1 = Persona {
+            name: "First".to_string(),
+            role: "First Responder".to_string(),
+            background: "Quick analysis".to_string(),
+            communication_style: "Fast".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Second".to_string(),
+            role: "Second Responder".to_string(),
+            background: "Detailed analysis".to_string(),
+            communication_style: "Thorough".to_string(),
+        };
+
+        dialogue
+            .add_participant(persona1, DelayAgent::new("First", 50))
+            .add_participant(persona2, DelayAgent::new("Second", 10));
+
+        // Create payload with attachment
+        let payload = Payload::text("Analyze").with_attachment(Attachment::local("/test/file.txt"));
+
+        let mut session =
+            dialogue.partial_session_with_order(payload, BroadcastOrder::ParticipantOrder);
+
+        // Should yield in participant order, not completion order
+        let first = session.next_turn().await.unwrap().unwrap();
+        assert_eq!(first.participant_name, "First");
+
+        let second = session.next_turn().await.unwrap().unwrap();
+        assert_eq!(second.participant_name, "Second");
+
+        assert!(session.next_turn().await.is_none());
     }
 }

@@ -35,7 +35,7 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **Agent API** | Define reusable AI agents with expertise and structured outputs. | `Agent` trait, `#[derive(Agent)]` macro | Implemented |
 | **Auto-JSON Enforcement** | Automatically add JSON schema instructions to agent prompts for better LLM compliance. | `#[derive(Agent)]` with `ToPrompt::prompt_schema()` integration | Implemented |
 | **Built-in Retry** | Intelligent retry with 3-priority delay system: server retry_after (Priority 1), 429 exponential backoff (Priority 2), linear backoff (Priority 3). Includes RetryAgent decorator and Full Jitter. | `max_retries` attribute, `RetryAgent`, `retry_after` field | Implemented |
-| **Multi-Modal Payload** | Pass text and images to agents through a unified `Payload` interface with backward compatibility. | `Payload`, `PayloadContent` types | Implemented |
+| **Multi-Modal Payload** | Pass text and images to agents and dialogues through a unified `Payload` interface with backward compatibility. | `Payload`, `PayloadContent` types, `impl Into<Payload>` | Implemented |
 | **Multi-Agent Orchestration** | Coordinate multiple agents to execute complex workflows with adaptive error recovery. | `Orchestrator`, `BlueprintWorkflow`, `StrategyMap` | Implemented |
 | **Execution Profiles** | Declaratively configure agent behavior (Creative/Balanced/Deterministic) via semantic profiles. | `ExecutionProfile` enum, `profile` attribute, `.with_execution_profile()` | Implemented (v0.13.0) |
 | **Template File Validation** | Compile-time validation of template file paths with helpful error messages. | `template_file` attribute validation | Implemented (v0.13.0) |
@@ -1253,7 +1253,7 @@ let translator = Chat::new(MockLLMAgent { agent_type: "Translator".to_string() }
 
 let mut dialogue = Dialogue::sequential();
 dialogue.add_participant(summarizer).add_participant(translator);
-let final_result = dialogue.run("A long article text...".to_string()).await?;
+let final_result = dialogue.run("A long article text...").await?;
 // final_result: Ok(vec!["[Translator] processed: '[Summarizer] processed: 'A long article text...'"])
 
 // --- Pattern 2: Broadcast ---
@@ -1264,7 +1264,7 @@ let translator_b = Chat::new(MockLLMAgent { agent_type: "Translator".to_string()
 
 let mut dialogue = Dialogue::broadcast();
 dialogue.add_participant(critic).add_participant(translator_b);
-let responses = dialogue.run("The new API design is complete.".to_string()).await?;
+let responses = dialogue.run("The new API design is complete.").await?;
 // responses: Ok(vec!["[Critic] processed: 'The new API design is complete.'", "[Translator] processed: 'The new API design is complete.'"])
 ```
 
@@ -1273,7 +1273,7 @@ let responses = dialogue.run("The new API design is complete.".to_string()).awai
 Interactive shells and UI frontends can consume responses incrementally:
 
 ```rust
-let mut session = dialogue.partial_session("Draft release plan".to_string());
+let mut session = dialogue.partial_session("Draft release plan");
 
 while let Some(turn) = session.next_turn().await {
     let turn = turn?; // handle AgentError per participant
@@ -1309,7 +1309,7 @@ for persona in personas {
 
 // Dynamically manage participants
 dialogue.add_participant(expert_persona, expert_agent);
-dialogue.run("Get expert opinion".to_string()).await?;
+dialogue.run("Get expert opinion").await?;
 dialogue.remove_participant("Expert")?;
 
 // Access conversation history
@@ -1317,6 +1317,40 @@ for turn in dialogue.history() {
     println!("[{}]: {}", turn.participant_name, turn.content);
 }
 ```
+
+**Multimodal Input Support:**
+
+The `Dialogue` API accepts `impl Into<Payload>`, enabling both text-only and multimodal input (text + attachments) with complete backward compatibility.
+
+```rust
+use llm_toolkit::agent::Payload;
+use llm_toolkit::attachment::Attachment;
+
+// Text-only input (backward compatible)
+dialogue.run("Discuss AI ethics").await?;
+dialogue.partial_session("Brainstorm ideas");
+
+// Multimodal input with single attachment
+let payload = Payload::text("What's in this image?")
+    .with_attachment(Attachment::local("screenshot.png"));
+dialogue.run(payload).await?;
+
+// Multiple attachments
+let payload = Payload::text("Analyze these files")
+    .with_attachment(Attachment::local("data.csv"))
+    .with_attachment(Attachment::local("metadata.json"));
+dialogue.partial_session(payload);
+```
+
+All dialogue methods (`run`, `partial_session`, `partial_session_with_order`) accept any type implementing `Into<Payload>`, including:
+- `String` or `&str` for text-only input
+- `Payload` for multimodal input with attachments
+
+This design enables:
+- ✅ **100% Backward Compatibility**: Existing code works without changes
+- ✅ **Extensibility**: New `Payload` features automatically work
+- ✅ **Type Safety**: Compiler-enforced correct usage
+- ✅ **Zero Method Proliferation**: No `_with_payload` variants needed
 
 ## Agent API and Multi-Agent Orchestration
 
