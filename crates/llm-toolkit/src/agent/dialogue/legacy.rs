@@ -45,10 +45,10 @@
 //! let turns = dialogue.run(payload).await?;
 //! ```
 
-use super::chat::Chat;
-use super::{Agent, AgentError, Payload};
 use crate::ToPrompt;
+use crate::agent::chat::Chat;
 use crate::agent::persona::{Persona, PersonaTeam, PersonaTeamGenerationRequest};
+use crate::agent::{Agent, AgentError, Payload};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -2064,5 +2064,259 @@ mod tests {
 
         assert_eq!(deserialized.participant_name, "TestAgent");
         assert_eq!(deserialized.content, "Test content");
+    }
+
+    /// Test multi-turn broadcast to verify that each agent sees all messages from previous turns.
+    ///
+    /// Expected behavior:
+    /// - Turn 1: U->A, U->B (both see only User's message)
+    /// - Turn 2: U->A, U->B (both see: [System]: U1, [A]: response1, [B]: response1, [System]: U2)
+    ///
+    /// This ensures proper dialogue history is maintained across multiple broadcast rounds.
+    #[tokio::test]
+    async fn test_multi_turn_broadcast_history_visibility() {
+        use crate::agent::persona::Persona;
+
+        // Create a mock agent that echoes what it receives to verify history visibility
+        #[derive(Clone)]
+        struct EchoAgent {
+            name: String,
+        }
+
+        #[async_trait]
+        impl Agent for EchoAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Echo agent"
+            }
+
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                // Echo back the input to verify what history was received
+                Ok(format!("{} received: {}", self.name, payload.to_text()))
+            }
+        }
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona_a = Persona {
+            name: "AgentA".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent A".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona_b = Persona {
+            name: "AgentB".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent B".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona_a,
+                EchoAgent {
+                    name: "AgentA".to_string(),
+                },
+            )
+            .add_participant(
+                persona_b,
+                EchoAgent {
+                    name: "AgentB".to_string(),
+                },
+            );
+
+        // Turn 1: Initial broadcast
+        let turns1 = dialogue.run("First message").await.unwrap();
+        assert_eq!(turns1.len(), 2);
+
+        // Verify Turn 1 responses - agents should only see the first message
+        assert!(turns1[0].content.contains("First message"));
+        assert!(turns1[1].content.contains("First message"));
+
+        // History should have: [System]: First message, [AgentA]: response, [AgentB]: response
+        assert_eq!(dialogue.history().len(), 3);
+        assert_eq!(dialogue.history()[0].participant_name, "System");
+        assert_eq!(dialogue.history()[0].content, "First message");
+
+        // Turn 2: Second broadcast - agents should see all previous messages
+        let turns2 = dialogue.run("Second message").await.unwrap();
+        assert_eq!(turns2.len(), 2);
+
+        // Verify Turn 2 responses - agents should see the ENTIRE history:
+        // [System]: First message
+        // [AgentA]: <their response>
+        // [AgentB]: <their response>
+        // [System]: Second message
+        for turn in &turns2 {
+            // Each agent should receive the formatted history containing all previous turns
+            assert!(
+                turn.content.contains("[System]: First message"),
+                "Agent {} should see first system message in history. Got: {}",
+                turn.participant_name,
+                turn.content
+            );
+            assert!(
+                turn.content.contains("[AgentA]"),
+                "Agent {} should see AgentA's previous response in history. Got: {}",
+                turn.participant_name,
+                turn.content
+            );
+            assert!(
+                turn.content.contains("[AgentB]"),
+                "Agent {} should see AgentB's previous response in history. Got: {}",
+                turn.participant_name,
+                turn.content
+            );
+            assert!(
+                turn.content.contains("Second message"),
+                "Agent {} should see the new system message. Got: {}",
+                turn.participant_name,
+                turn.content
+            );
+        }
+
+        // Total history should be:
+        // Turn 1: System + AgentA + AgentB = 3
+        // Turn 2: System + AgentA + AgentB = 3
+        // Total = 6
+        assert_eq!(dialogue.history().len(), 6);
+
+        // Verify the complete history structure
+        assert_eq!(dialogue.history()[0].participant_name, "System");
+        assert_eq!(dialogue.history()[0].content, "First message");
+        assert_eq!(dialogue.history()[1].participant_name, "AgentA");
+        assert_eq!(dialogue.history()[2].participant_name, "AgentB");
+        assert_eq!(dialogue.history()[3].participant_name, "System");
+        assert_eq!(dialogue.history()[3].content, "Second message");
+        assert_eq!(dialogue.history()[4].participant_name, "AgentA");
+        assert_eq!(dialogue.history()[5].participant_name, "AgentB");
+    }
+
+    /// Test to verify potential double history issue with HistoryAwareAgent.
+    ///
+    /// This test demonstrates that when using Chat agents with history enabled,
+    /// the history might be duplicated or formatted inconsistently.
+    #[tokio::test]
+    async fn test_dialogue_history_format_with_chat_agents() {
+        use crate::agent::chat::Chat;
+        use crate::agent::persona::Persona;
+
+        // Create an echo agent that shows exactly what it receives
+        #[derive(Clone)]
+        struct VerboseEchoAgent {
+            name: String,
+        }
+
+        #[async_trait]
+        impl Agent for VerboseEchoAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Verbose echo agent"
+            }
+
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                // Return the EXACT input to see what the agent receives
+                let input = payload.to_text();
+                Ok(format!(
+                    "[{}] Received {} chars: {}",
+                    self.name,
+                    input.len(),
+                    if input.len() > 200 {
+                        format!("{}...", &input[..200])
+                    } else {
+                        input.clone()
+                    }
+                ))
+            }
+        }
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona_a = Persona {
+            name: "AgentA".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent A".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona_b = Persona {
+            name: "AgentB".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent B".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        // Create Chat agents WITH history (as Dialogue does)
+        let chat_a = Chat::new(VerboseEchoAgent {
+            name: "AgentA".to_string(),
+        })
+        .with_persona(persona_a.clone())
+        .with_history(true) // This is what Dialogue does
+        .build();
+
+        let chat_b = Chat::new(VerboseEchoAgent {
+            name: "AgentB".to_string(),
+        })
+        .with_persona(persona_b.clone())
+        .with_history(true)
+        .build();
+
+        dialogue.participants.push(Participant {
+            persona: persona_a,
+            agent: Arc::new(chat_a),
+        });
+
+        dialogue.participants.push(Participant {
+            persona: persona_b,
+            agent: Arc::new(chat_b),
+        });
+
+        // Turn 1
+        let turns1 = dialogue.run("First message").await.unwrap();
+        println!("\n=== Turn 1 ===");
+        for turn in &turns1 {
+            println!("[{}]: {}", turn.participant_name, turn.content);
+        }
+
+        // Turn 2 - This is where we'll see the double history issue
+        let turns2 = dialogue.run("Second message").await.unwrap();
+        println!("\n=== Turn 2 ===");
+        for turn in &turns2 {
+            println!("[{}]: {}", turn.participant_name, turn.content);
+
+            // Check if the response contains "Previous Conversation" (from HistoryAwareAgent)
+            // AND also contains the formatted dialogue history
+            if turn.content.contains("Previous Conversation") {
+                println!(
+                    "⚠️  Agent {} has HistoryAwareAgent's history prefix!",
+                    turn.participant_name
+                );
+            }
+
+            // Count occurrences of "First message" to detect duplication
+            let first_msg_count = turn.content.matches("First message").count();
+            if first_msg_count > 1 {
+                println!(
+                    "⚠️  'First message' appears {} times in {}'s input!",
+                    first_msg_count, turn.participant_name
+                );
+            }
+        }
+
+        // The issue: Turn 2 responses will show that agents receive:
+        // 1. Dialogue's formatted history: [System]: First message, [AgentA]: ..., [AgentB]: ...
+        // 2. HistoryAwareAgent's own history: "# Previous Conversation\nUser: ...\nAssistant: ..."
+        // This creates redundancy and format inconsistency
     }
 }
