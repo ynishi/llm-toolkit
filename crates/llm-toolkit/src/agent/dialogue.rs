@@ -74,7 +74,7 @@ pub struct DialogueBlueprint {
 }
 
 /// Represents a single turn in the dialogue.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DialogueTurn {
     pub participant_name: String,
     pub content: String,
@@ -451,6 +451,48 @@ impl Dialogue {
     /// ```
     pub fn sequential() -> Self {
         Self::new(ExecutionModel::Sequential)
+    }
+
+    /// Sets initial conversation history for session resumption.
+    ///
+    /// This method allows you to inject a saved conversation history into a new
+    /// dialogue instance, enabling session restoration and continuation of
+    /// previous discussions.
+    ///
+    /// Following the Orchestrator Step pattern, this creates a new dialogue
+    /// instance with pre-populated history rather than mutating existing state.
+    ///
+    /// # Arguments
+    ///
+    /// * `history` - A vector of `DialogueTurn` representing the conversation history
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::Dialogue;
+    ///
+    /// // Session 1: Initial conversation
+    /// let mut dialogue = Dialogue::broadcast()
+    ///     .add_participant(persona1, agent1)
+    ///     .add_participant(persona2, agent2);
+    /// let turns = dialogue.run("Discuss project architecture").await?;
+    /// dialogue.save_history("session_123.json")?;
+    ///
+    /// // --- Process restart or session end ---
+    ///
+    /// // Session 2: Resume conversation
+    /// let saved_history = Dialogue::load_history("session_123.json")?;
+    /// let mut dialogue = Dialogue::broadcast()
+    ///     .with_history(saved_history)  // ← Inject saved history
+    ///     .add_participant(persona1, agent1)
+    ///     .add_participant(persona2, agent2);
+    ///
+    /// // Continue from where we left off
+    /// let more_turns = dialogue.run("Continue from last discussion").await?;
+    /// ```
+    pub fn with_history(mut self, history: Vec<DialogueTurn>) -> Self {
+        self.history = history;
+        self
     }
 
     /// Creates a Dialogue from a blueprint.
@@ -901,6 +943,83 @@ impl Dialogue {
     /// Returns the number of participants in the dialogue.
     pub fn participant_count(&self) -> usize {
         self.participants.len()
+    }
+
+    /// Saves conversation history to a JSON file.
+    ///
+    /// This is useful for session persistence, allowing you to save the dialogue
+    /// state and resume it later.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The file path where the history will be saved
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or an `AgentError` if serialization or file
+    /// writing fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::Dialogue;
+    ///
+    /// let mut dialogue = Dialogue::broadcast()
+    ///     .add_participant(persona1, agent1);
+    ///
+    /// let turns = dialogue.run("Discuss architecture").await?;
+    ///
+    /// // Save history for later resumption
+    /// dialogue.save_history("session_123.json")?;
+    /// ```
+    pub fn save_history(&self, path: impl AsRef<std::path::Path>) -> Result<(), AgentError> {
+        let json = serde_json::to_string_pretty(&self.history).map_err(|e| {
+            AgentError::ExecutionFailed(format!("Failed to serialize history: {}", e))
+        })?;
+        std::fs::write(path, json).map_err(|e| {
+            AgentError::ExecutionFailed(format!("Failed to write history file: {}", e))
+        })?;
+        Ok(())
+    }
+
+    /// Loads conversation history from a JSON file.
+    ///
+    /// Use this to restore a saved conversation history, typically in combination
+    /// with `with_history()` to resume a dialogue session.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The file path to load the history from
+    ///
+    /// # Returns
+    ///
+    /// Returns a vector of `DialogueTurn` on success, or an `AgentError` if
+    /// file reading or deserialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::Dialogue;
+    ///
+    /// // Load saved history
+    /// let history = Dialogue::load_history("session_123.json")?;
+    ///
+    /// // Resume dialogue with loaded history
+    /// let mut dialogue = Dialogue::broadcast()
+    ///     .with_history(history)
+    ///     .add_participant(persona1, agent1);
+    ///
+    /// let turns = dialogue.run("Continue discussion").await?;
+    /// ```
+    pub fn load_history(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<Vec<DialogueTurn>, AgentError> {
+        let json = std::fs::read_to_string(path).map_err(|e| {
+            AgentError::ExecutionFailed(format!("Failed to read history file: {}", e))
+        })?;
+        serde_json::from_str(&json).map_err(|e| {
+            AgentError::ExecutionFailed(format!("Failed to deserialize history: {}", e))
+        })
     }
 }
 
@@ -1786,5 +1905,164 @@ mod tests {
         assert_eq!(second.participant_name, "Second");
 
         assert!(session.next_turn().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_with_history_injection() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona = Persona {
+            name: "Agent1".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        dialogue.add_participant(
+            persona.clone(),
+            MockAgent::new("Agent1", vec!["Response 1".to_string()]),
+        );
+
+        let turns = dialogue.run("Initial prompt".to_string()).await.unwrap();
+        assert_eq!(turns.len(), 1);
+
+        // Get the history
+        let history = dialogue.history().to_vec();
+        assert_eq!(history.len(), 2); // System + Agent1
+
+        // Create a new dialogue with injected history
+        let mut dialogue2 = Dialogue::broadcast().with_history(history);
+        dialogue2.add_participant(
+            persona,
+            MockAgent::new("Agent1", vec!["Response 2".to_string()]),
+        );
+
+        // Verify the injected history is present
+        assert_eq!(dialogue2.history().len(), 2);
+        assert_eq!(dialogue2.history()[0].participant_name, "System");
+        assert_eq!(dialogue2.history()[1].participant_name, "Agent1");
+        assert_eq!(dialogue2.history()[1].content, "Response 1");
+
+        // Run new dialogue - should add to existing history
+        let new_turns = dialogue2.run("Continue".to_string()).await.unwrap();
+        assert_eq!(new_turns.len(), 1);
+
+        // Total history should now be 4: old (System + Agent1) + new (System + Agent1)
+        assert_eq!(dialogue2.history().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_save_and_load_history() {
+        use crate::agent::persona::Persona;
+        use tempfile::NamedTempFile;
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona = Persona {
+            name: "Agent1".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        dialogue.add_participant(
+            persona,
+            MockAgent::new("Agent1", vec!["Test response".to_string()]),
+        );
+
+        let turns = dialogue.run("Test prompt".to_string()).await.unwrap();
+        assert_eq!(turns.len(), 1);
+
+        // Save history to temp file
+        let temp_file = NamedTempFile::new().unwrap();
+        dialogue.save_history(temp_file.path()).unwrap();
+
+        // Load history
+        let loaded_history = Dialogue::load_history(temp_file.path()).unwrap();
+
+        // Verify loaded history matches original
+        assert_eq!(loaded_history.len(), dialogue.history().len());
+        assert_eq!(loaded_history[0].participant_name, "System");
+        assert_eq!(loaded_history[0].content, "Test prompt");
+        assert_eq!(loaded_history[1].participant_name, "Agent1");
+        assert_eq!(loaded_history[1].content, "Test response");
+    }
+
+    #[tokio::test]
+    async fn test_session_resumption_workflow() {
+        use crate::agent::persona::Persona;
+        use tempfile::NamedTempFile;
+
+        // Session 1: Initial conversation
+        let mut session1 = Dialogue::broadcast();
+
+        let persona = Persona {
+            name: "Agent1".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        session1.add_participant(
+            persona.clone(),
+            MockAgent::new("Agent1", vec!["First response".to_string()]),
+        );
+
+        let turns1 = session1.run("First prompt".to_string()).await.unwrap();
+        assert_eq!(turns1.len(), 1);
+        assert_eq!(turns1[0].content, "First response");
+
+        // Save session
+        let temp_file = NamedTempFile::new().unwrap();
+        session1.save_history(temp_file.path()).unwrap();
+
+        // --- Simulate process restart or session end ---
+
+        // Session 2: Resume conversation
+        let loaded_history = Dialogue::load_history(temp_file.path()).unwrap();
+
+        let mut session2 = Dialogue::broadcast().with_history(loaded_history);
+        session2.add_participant(
+            persona,
+            MockAgent::new("Agent1", vec!["Second response".to_string()]),
+        );
+
+        // Verify history is restored
+        assert_eq!(session2.history().len(), 2); // System + Agent1 from session1
+
+        // Continue conversation
+        let turns2 = session2.run("Second prompt".to_string()).await.unwrap();
+        assert_eq!(turns2.len(), 1);
+        assert_eq!(turns2[0].content, "Second response");
+
+        // Verify complete history
+        assert_eq!(session2.history().len(), 4);
+        // Session 1 turns
+        assert_eq!(session2.history()[0].participant_name, "System");
+        assert_eq!(session2.history()[0].content, "First prompt");
+        assert_eq!(session2.history()[1].participant_name, "Agent1");
+        assert_eq!(session2.history()[1].content, "First response");
+        // Session 2 turns
+        assert_eq!(session2.history()[2].participant_name, "System");
+        assert_eq!(session2.history()[2].content, "Second prompt");
+        assert_eq!(session2.history()[3].participant_name, "Agent1");
+        assert_eq!(session2.history()[3].content, "Second response");
+    }
+
+    #[tokio::test]
+    async fn test_dialogue_turn_serialization() {
+        // Test that DialogueTurn can be serialized and deserialized
+        let turn = DialogueTurn {
+            participant_name: "TestAgent".to_string(),
+            content: "Test content".to_string(),
+        };
+
+        let json = serde_json::to_string(&turn).unwrap();
+        let deserialized: DialogueTurn = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.participant_name, "TestAgent");
+        assert_eq!(deserialized.content, "Test content");
     }
 }

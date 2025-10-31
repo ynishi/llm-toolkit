@@ -1318,6 +1318,51 @@ for turn in dialogue.history() {
 }
 ```
 
+**Session Resumption and History Injection:**
+
+The `Dialogue` component supports saving and resuming conversations, enabling persistent multi-turn dialogues across process restarts or session boundaries.
+
+```rust
+use llm_toolkit::agent::dialogue::Dialogue;
+
+// Session 1: Initial conversation
+let mut dialogue = Dialogue::broadcast()
+    .add_participant(persona1, agent1)
+    .add_participant(persona2, agent2);
+
+let turns = dialogue.run("Discuss project architecture").await?;
+
+// Save the conversation history
+dialogue.save_history("session_123.json")?;
+
+// --- Process restart or session end ---
+
+// Session 2: Resume conversation from saved history
+let saved_history = Dialogue::load_history("session_123.json")?;
+
+let mut dialogue = Dialogue::broadcast()
+    .with_history(saved_history)  // Inject saved history
+    .add_participant(persona1, agent1)
+    .add_participant(persona2, agent2);
+
+// Continue from where we left off with full context
+let more_turns = dialogue.run("Continue from last discussion").await?;
+```
+
+Key methods for session management:
+
+-   **`with_history(history: Vec<DialogueTurn>)`**: Builder method to inject conversation history into a new dialogue instance. Following the Orchestrator Step pattern, this creates a fresh instance with pre-populated history rather than mutating existing state.
+-   **`save_history(path)`**: Persists the current conversation history to a JSON file.
+-   **`load_history(path)`**: Loads conversation history from a JSON file.
+
+Use cases:
+- ✅ **Persistent Conversations**: Maintain dialogue context across application restarts
+- ✅ **Session Management**: Save and restore user conversation sessions
+- ✅ **Conversation Archival**: Store dialogue history for later analysis
+- ✅ **Stateful Chatbots**: Implement chatbots with long-term memory
+
+See `examples/dialogue_session_resumption.rs` for a complete demonstration.
+
 **Multimodal Input Support:**
 
 The `Dialogue` API accepts `impl Into<Payload>`, enabling both text-only and multimodal input (text + attachments) with complete backward compatibility.
