@@ -54,6 +54,11 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{error, info};
 
+// Import new domain model
+use super::message::{DialogueMessage, MessageId, Speaker};
+use super::store::MessageStore;
+use super::turn_input::{AdaptiveContextFormatter, ContextFormatter, ContextMessage, TurnInput};
+
 /// Blueprint for creating a Dialogue.
 ///
 /// Provides a high-level description of the dialogue setup, including
@@ -180,7 +185,7 @@ impl BroadcastState {
                     participant_name: participant_name.clone(),
                     content: content.clone(),
                 };
-                dialogue.history.push(turn.clone());
+                dialogue.legacy_history.push(turn.clone());
                 info!(
                     target = "llm_toolkit::dialogue",
                     mode = ?ExecutionModel::Broadcast,
@@ -241,7 +246,7 @@ impl<'a> DialogueSession<'a> {
                                             participant_name: participant_name.clone(),
                                             content: content.clone(),
                                         };
-                                        self.dialogue.history.push(turn.clone());
+                                        self.dialogue.legacy_history.push(turn.clone());
                                         info!(
                                             target = "llm_toolkit::dialogue",
                                             mode = ?self.model,
@@ -343,7 +348,7 @@ impl<'a> DialogueSession<'a> {
                                 participant_name: participant_name.clone(),
                                 content,
                             };
-                            self.dialogue.history.push(turn.clone());
+                            self.dialogue.legacy_history.push(turn.clone());
                             info!(
                                 target = "llm_toolkit::dialogue",
                                 mode = ?self.model,
@@ -380,6 +385,13 @@ impl<'a> DialogueSession<'a> {
 /// The dialogue maintains a list of participants and a conversation history,
 /// using a turn-taking strategy to determine execution behavior.
 ///
+/// # Architecture (New)
+///
+/// - **MessageStore**: Central repository for all dialogue messages
+/// - **Context Distribution**: Agents receive context from other participants
+/// - **History Management**: Each agent manages own history via HistoryAwareAgent
+/// - **Adaptive Formatting**: Automatic format selection based on content length
+///
 /// # Examples
 ///
 /// ```rust,ignore
@@ -402,8 +414,18 @@ impl<'a> DialogueSession<'a> {
 /// ```
 pub struct Dialogue {
     participants: Vec<Participant>,
-    history: Vec<DialogueTurn>,
+
+    /// Message store (replaces Vec<DialogueTurn>)
+    message_store: MessageStore,
+
+    /// Legacy history for Sequential mode (temporary)
+    /// TODO: Migrate Sequential mode to use MessageStore
+    legacy_history: Vec<DialogueTurn>,
+
     execution_model: ExecutionModel,
+
+    /// Context formatter strategy
+    context_formatter: Box<dyn ContextFormatter>,
 }
 
 impl Dialogue {
@@ -413,8 +435,10 @@ impl Dialogue {
     fn new(execution_model: ExecutionModel) -> Self {
         Self {
             participants: Vec::new(),
-            history: Vec::new(),
+            message_store: MessageStore::new(),
+            legacy_history: Vec::new(),
             execution_model,
+            context_formatter: Box::new(AdaptiveContextFormatter::default()),
         }
     }
 
@@ -491,7 +515,35 @@ impl Dialogue {
     /// let more_turns = dialogue.run("Continue from last discussion").await?;
     /// ```
     pub fn with_history(mut self, history: Vec<DialogueTurn>) -> Self {
-        self.history = history;
+        // Convert DialogueTurn to DialogueMessage and populate MessageStore
+        // Assume each DialogueTurn is from turn 1, in order
+        let mut turn_counter = 1;
+
+        for dialogue_turn in history {
+            let speaker = if dialogue_turn.participant_name == "System" {
+                Speaker::System
+            } else {
+                // We don't have role information in DialogueTurn, use generic
+                Speaker::participant(dialogue_turn.participant_name.clone(), "Participant")
+            };
+
+            let message = DialogueMessage {
+                id: MessageId::new(),
+                turn: turn_counter,
+                speaker,
+                content: dialogue_turn.content,
+                timestamp: super::message::current_unix_timestamp(),
+                metadata: Default::default(),
+            };
+
+            self.message_store.push(message);
+
+            // Increment turn when we see a System message
+            if dialogue_turn.participant_name == "System" {
+                turn_counter += 1;
+            }
+        }
+
         self
     }
 
@@ -542,8 +594,10 @@ impl Dialogue {
 
         let mut dialogue = Self {
             participants: Vec::new(),
-            history: Vec::new(),
+            message_store: MessageStore::new(),
+            legacy_history: Vec::new(),
             execution_model,
+            context_formatter: Box::new(AdaptiveContextFormatter::default()),
         };
 
         // Use provided participants or generate them
@@ -610,8 +664,10 @@ impl Dialogue {
 
         let mut dialogue = Self {
             participants: Vec::new(),
-            history: Vec::new(),
+            message_store: MessageStore::new(),
+            legacy_history: Vec::new(),
             execution_model,
+            context_formatter: Box::new(AdaptiveContextFormatter::default()),
         };
 
         // Build participants from personas
@@ -785,8 +841,8 @@ impl Dialogue {
         // Convert to Payload first
         let payload: Payload = initial_prompt.into();
 
-        // Store text representation in history
-        self.history.push(DialogueTurn {
+        // Store text representation in legacy_history (for Sequential mode)
+        self.legacy_history.push(DialogueTurn {
             participant_name: "System".to_string(),
             content: payload.to_text(),
         });
@@ -884,28 +940,128 @@ impl Dialogue {
         &mut self,
         initial_prompt: impl Into<Payload>,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
-        let model = self.execution_model;
-        let mut session =
-            self.partial_session_with_order(initial_prompt, BroadcastOrder::Completion);
-        let mut turns = Vec::new();
+        // Use new implementation for Broadcast, keep old for Sequential
+        match self.execution_model {
+            ExecutionModel::Broadcast => self.run_broadcast_new(initial_prompt).await,
+            ExecutionModel::Sequential => {
+                // Keep existing implementation via partial_session
+                let mut session =
+                    self.partial_session_with_order(initial_prompt, BroadcastOrder::Completion);
+                let mut turns = Vec::new();
 
-        while let Some(result) = session.next_turn().await {
-            let turn = result?;
-            turns.push(turn);
+                while let Some(result) = session.next_turn().await {
+                    let turn = result?;
+                    turns.push(turn);
+                }
+
+                Ok(turns.into_iter().last().into_iter().collect())
+            }
+        }
+    }
+
+    /// New broadcast implementation using MessageStore and TurnInput.
+    async fn run_broadcast_new(
+        &mut self,
+        initial_prompt: impl Into<Payload>,
+    ) -> Result<Vec<DialogueTurn>, AgentError> {
+        let payload: Payload = initial_prompt.into();
+        let prompt_text = payload.to_text();
+        let current_turn = self.message_store.current_turn() + 1;
+
+        // 1. Store system message
+        let system_message = DialogueMessage::new(
+            current_turn,
+            Speaker::System,
+            prompt_text.clone(),
+        );
+        self.message_store.push(system_message);
+
+        // 2. Get context from previous turn (other agents' responses)
+        let context = if current_turn > 1 {
+            self.message_store
+                .messages_for_turn(current_turn - 1)
+                .into_iter()
+                .filter_map(|msg| {
+                    if let Speaker::Participant { name, role } = &msg.speaker {
+                        Some(ContextMessage::new(
+                            name.clone(),
+                            role.clone(),
+                            msg.content.clone(),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // 3. Create TurnInput with context
+        let turn_input = TurnInput::with_context(prompt_text, context);
+        let formatted_input = turn_input.to_prompt_with_formatter(&*self.context_formatter);
+
+        // 4. Broadcast to all agents
+        let mut pending = JoinSet::new();
+
+        for (idx, participant) in self.participants.iter().enumerate() {
+            let agent = Arc::clone(&participant.agent);
+            let name = participant.name().to_string();
+            let input_payload = Payload::text(formatted_input.clone());
+
+            // Copy attachments from original payload if any
+            let final_payload = if payload.has_attachments() {
+                let mut p = input_payload;
+                for attachment in payload.attachments() {
+                    p = p.with_attachment(attachment.clone());
+                }
+                p
+            } else {
+                input_payload
+            };
+
+            pending.spawn(async move {
+                let result = agent.execute(final_payload).await;
+                (idx, name, result)
+            });
         }
 
-        match model {
-            ExecutionModel::Broadcast => Ok(turns),
-            ExecutionModel::Sequential => Ok(turns.into_iter().last().into_iter().collect()),
+        // 5. Collect responses and create message entities
+        let mut dialogue_turns = Vec::new();
+
+        while let Some(Ok((idx, name, result))) = pending.join_next().await {
+            match result {
+                Ok(content) => {
+                    // Store response message
+                    let response_message = DialogueMessage::new(
+                        current_turn,
+                        Speaker::participant(
+                            name.clone(),
+                            self.participants[idx].persona.role.clone(),
+                        ),
+                        content.clone(),
+                    );
+                    self.message_store.push(response_message);
+
+                    // Create DialogueTurn for backward compatibility
+                    dialogue_turns.push(DialogueTurn {
+                        participant_name: name,
+                        content,
+                    });
+                }
+                Err(err) => return Err(err),
+            }
         }
+
+        Ok(dialogue_turns)
     }
 
     /// Formats the conversation history as a single string.
     ///
     /// This creates a formatted transcript of the dialogue that can be used
-    /// as input for the next agent.
+    /// as input for the next agent (Sequential mode only).
     fn format_history(&self) -> String {
-        self.history
+        self.legacy_history
             .iter()
             .map(|turn| format!("[{}]: {}", turn.participant_name, turn.content))
             .collect::<Vec<_>>()
@@ -913,8 +1069,25 @@ impl Dialogue {
     }
 
     /// Returns a reference to the conversation history.
-    pub fn history(&self) -> &[DialogueTurn] {
-        &self.history
+    ///
+    /// # Note
+    ///
+    /// This creates DialogueTurns on-the-fly from the MessageStore for backward compatibility.
+    /// For new code, consider using `message_store()` directly.
+    pub fn history(&self) -> Vec<DialogueTurn> {
+        self.message_store
+            .all_messages()
+            .into_iter()
+            .map(|msg| DialogueTurn {
+                participant_name: msg.speaker_name().to_string(),
+                content: msg.content.clone(),
+            })
+            .collect()
+    }
+
+    /// Returns a reference to the message store (new API).
+    pub fn message_store(&self) -> &MessageStore {
+        &self.message_store
     }
 
     /// Returns references to the personas of all participants.
@@ -973,7 +1146,8 @@ impl Dialogue {
     /// dialogue.save_history("session_123.json")?;
     /// ```
     pub fn save_history(&self, path: impl AsRef<std::path::Path>) -> Result<(), AgentError> {
-        let json = serde_json::to_string_pretty(&self.history).map_err(|e| {
+        let history_to_save = self.history(); // Use the method to get DialogueTurns
+        let json = serde_json::to_string_pretty(&history_to_save).map_err(|e| {
             AgentError::ExecutionFailed(format!("Failed to serialize history: {}", e))
         })?;
         std::fs::write(path, json).map_err(|e| {
