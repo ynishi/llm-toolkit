@@ -154,6 +154,11 @@ where
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         // Lock history and build context
         let history = self.dialogue_history.lock().await;
+        #[cfg(test)]
+        eprintln!(
+            "[HistoryAwareAgent] History size at start: {}",
+            history.len()
+        );
         let history_prompt = if history.is_empty() {
             String::new()
         } else {
@@ -164,10 +169,20 @@ where
                 .join("\n");
             format!("# Previous Conversation\n{}\n\n", formatted_history)
         };
+        #[cfg(test)]
+        eprintln!("[HistoryAwareAgent] history_prompt: '{}'", history_prompt);
         drop(history);
 
         // Extract current messages from intent
         let current_messages = intent.to_messages();
+
+        #[cfg(test)]
+        eprintln!(
+            "[HistoryAwareAgent] current_messages count: {}",
+            current_messages.len()
+        );
+        #[cfg(test)]
+        eprintln!("[HistoryAwareAgent] to_text(): '{}'", intent.to_text());
 
         // Get text for backward compatibility with agents that don't support messages
         // If no text is available, format messages as text
@@ -208,18 +223,32 @@ where
 
         // Add current messages to history
         let mut history = self.dialogue_history.lock().await;
+        #[cfg(test)]
+        eprintln!(
+            "[HistoryAwareAgent] Adding {} messages to history",
+            current_messages.len()
+        );
         for (speaker, content) in current_messages {
+            #[cfg(test)]
+            eprintln!(
+                "[HistoryAwareAgent] Adding to history: [{}: {}]",
+                speaker.name(),
+                content
+            );
             history.push(HistoryEntry::new(speaker, content));
         }
+        #[cfg(test)]
+        eprintln!(
+            "[HistoryAwareAgent] History size after adding: {}",
+            history.len()
+        );
 
         // Add assistant response to history with proper attribution
         let response_entry = match (&self.self_name, &self.self_role) {
-            (Some(name), Some(role)) => {
-                HistoryEntry::new(
-                    Speaker::agent(name.clone(), role.clone()),
-                    format_response_for_history(&response),
-                )
-            }
+            (Some(name), Some(role)) => HistoryEntry::new(
+                Speaker::agent(name.clone(), role.clone()),
+                format_response_for_history(&response),
+            ),
             _ => {
                 // Fallback to System if no identity is set
                 HistoryEntry::system(format_response_for_history(&response))
@@ -296,7 +325,10 @@ mod tests {
         let history_agent = HistoryAwareAgent::new(base_agent.clone());
 
         // First call - use from_messages instead of text
-        let payload1 = Payload::from_messages(vec![(Speaker::user("User", "User"), "What is Rust?".to_string())]);
+        let payload1 = Payload::from_messages(vec![(
+            Speaker::user("User", "User"),
+            "What is Rust?".to_string(),
+        )]);
         let response1 = history_agent.execute(payload1).await.unwrap();
         assert_eq!(response1, "Response 1");
 
@@ -312,7 +344,10 @@ mod tests {
             self_role: None,
         };
 
-        let payload2 = Payload::from_messages(vec![(Speaker::user("User", "User"), "Tell me more".to_string())]);
+        let payload2 = Payload::from_messages(vec![(
+            Speaker::user("User", "User"),
+            "Tell me more".to_string(),
+        )]);
         let response2 = history_agent2.execute(payload2).await.unwrap();
         assert_eq!(response2, "Response 2");
 
@@ -356,7 +391,8 @@ mod tests {
         let base_agent = RecordingAgent::new(String::from("First response"));
         let history_agent = HistoryAwareAgent::new(base_agent.clone());
 
-        let payload = Payload::from_messages(vec![(Speaker::user("User", "User"), "Hello".to_string())]);
+        let payload =
+            Payload::from_messages(vec![(Speaker::user("User", "User"), "Hello".to_string())]);
         let _ = history_agent.execute(payload).await.unwrap();
 
         // First call should not have history prefix

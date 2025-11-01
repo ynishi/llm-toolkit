@@ -2129,7 +2129,66 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                         }
                     }
                 } else {
-                    // No mode syntax, use direct template rendering with render_prompt
+                    // No mode syntax, but we still need custom context building to handle
+                    // nested ToPrompt types properly (call to_prompt() instead of JSON serialization)
+
+                    // Build context fields for all struct fields
+                    let mut simple_context_fields = Vec::new();
+                    for field in fields.iter() {
+                        let field_name = field.ident.as_ref().unwrap();
+                        let field_name_str = field_name.to_string();
+
+                        // Check if field type is primitive
+                        let is_primitive = match &field.ty {
+                            syn::Type::Path(type_path) => {
+                                if let Some(segment) = type_path.path.segments.last() {
+                                    let type_name = segment.ident.to_string();
+                                    matches!(
+                                        type_name.as_str(),
+                                        "String"
+                                            | "str"
+                                            | "i8"
+                                            | "i16"
+                                            | "i32"
+                                            | "i64"
+                                            | "i128"
+                                            | "isize"
+                                            | "u8"
+                                            | "u16"
+                                            | "u32"
+                                            | "u64"
+                                            | "u128"
+                                            | "usize"
+                                            | "f32"
+                                            | "f64"
+                                            | "bool"
+                                            | "char"
+                                    )
+                                } else {
+                                    false
+                                }
+                            }
+                            _ => false,
+                        };
+
+                        if is_primitive {
+                            simple_context_fields.push(quote! {
+                                context.insert(
+                                    #field_name_str.to_string(),
+                                    minijinja::Value::from_serialize(&self.#field_name)
+                                );
+                            });
+                        } else {
+                            // For non-primitive types, use to_prompt()
+                            simple_context_fields.push(quote! {
+                                context.insert(
+                                    #field_name_str.to_string(),
+                                    minijinja::Value::from(self.#field_name.to_prompt())
+                                );
+                            });
+                        }
+                    }
+
                     quote! {
                         impl #impl_generics #crate_path::prompt::ToPrompt for #name #ty_generics #where_clause {
                             fn to_prompt_parts(&self) -> Vec<#crate_path::prompt::PromptPart> {
@@ -2138,10 +2197,23 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                 // Add image parts first
                                 #(#image_field_parts)*
 
-                                // Add the rendered template as text
-                                let text = #crate_path::prompt::render_prompt(#template, self).unwrap_or_else(|e| {
-                                    format!("Failed to render prompt: {}", e)
-                                });
+                                // Build custom context and render template
+                                let text = {
+                                    let mut env = minijinja::Environment::new();
+                                    env.add_template("prompt", #template).unwrap_or_else(|e| {
+                                        panic!("Failed to parse template: {}", e)
+                                    });
+
+                                    let tmpl = env.get_template("prompt").unwrap();
+
+                                    let mut context = std::collections::HashMap::new();
+                                    #(#simple_context_fields)*
+
+                                    tmpl.render(context).unwrap_or_else(|e| {
+                                        format!("Failed to render prompt: {}", e)
+                                    })
+                                };
+
                                 if !text.is_empty() {
                                     parts.push(#crate_path::prompt::PromptPart::Text(text));
                                 }
@@ -2150,7 +2222,18 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             }
 
                             fn to_prompt(&self) -> String {
-                                #crate_path::prompt::render_prompt(#template, self).unwrap_or_else(|e| {
+                                // Same logic for to_prompt
+                                let mut env = minijinja::Environment::new();
+                                env.add_template("prompt", #template).unwrap_or_else(|e| {
+                                    panic!("Failed to parse template: {}", e)
+                                });
+
+                                let tmpl = env.get_template("prompt").unwrap();
+
+                                let mut context = std::collections::HashMap::new();
+                                #(#simple_context_fields)*
+
+                                tmpl.render(context).unwrap_or_else(|e| {
                                     format!("Failed to render prompt: {}", e)
                                 })
                             }

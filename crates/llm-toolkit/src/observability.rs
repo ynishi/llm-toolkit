@@ -1,4 +1,3 @@
-
 //! # Observability
 //!
 //! Provides a simple, configurable interface for initializing and managing observability
@@ -8,7 +7,7 @@
 //! the execution of their LLM workflows with minimal setup.
 
 use tracing::Level;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 /// Configuration for initializing the observability system.
 #[derive(Debug, Clone)]

@@ -865,8 +865,17 @@ impl Dialogue {
                 participants_info.clone(),
                 name.clone(),
             );
+
+            // Create payload with Messages (for structured dialogue history)
+            let messages = turn_input.to_messages();
+            let mut input_payload = Payload::from_messages(messages);
+
+            // Add formatted text for agents that use to_text()
             let formatted_input = turn_input.to_prompt_with_formatter(&*self.context_formatter);
-            let input_payload = Payload::text(formatted_input);
+            input_payload = input_payload.with_text(formatted_input);
+
+            // Add Participants metadata
+            input_payload = input_payload.with_participants(participants_info.clone());
 
             // Copy attachments from original payload if any
             let final_payload = if payload.has_attachments() {
@@ -953,11 +962,9 @@ impl Dialogue {
             let name = participant.name().to_string();
 
             // Create payload with Message (for history tracking) + Text (for to_text())
-            let mut input_payload = Payload::from_messages(vec![(
-                Speaker::System,
-                current_input.clone(),
-            )])
-            .with_text(current_input.clone());
+            let mut input_payload =
+                Payload::from_messages(vec![(Speaker::System, current_input.clone())])
+                    .with_text(current_input.clone());
 
             // Add Participants metadata
             input_payload = input_payload.with_participants(participants_info.clone());
@@ -2401,15 +2408,28 @@ mod tests {
             async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
                 // Return the EXACT input to see what the agent receives
                 let input = payload.to_text();
+
+                // For testing: include key sections even if truncated
+                let preview = if input.len() > 500 {
+                    // Try to include "Recent History" section if it exists
+                    if let Some(start) = input.find("# Recent History") {
+                        let end = start + 500.min(input.len() - start);
+                        format!("...{}...", &input[start..end])
+                    } else if let Some(start) = input.find("# Participants") {
+                        let end = start + 500.min(input.len() - start);
+                        format!("...{}...", &input[start..end])
+                    } else {
+                        format!("{}...", &input[..500])
+                    }
+                } else {
+                    input.clone()
+                };
+
                 Ok(format!(
                     "[{}] Received {} chars: {}",
                     self.name,
                     input.len(),
-                    if input.len() > 200 {
-                        format!("{}...", &input[..200])
-                    } else {
-                        input.clone()
-                    }
+                    preview
                 ))
             }
         }
@@ -2767,10 +2787,10 @@ mod tests {
         );
 
         let mut session1 = dialogue_partial.partial_session("Turn 1");
-        while let Some(_) = session1.next_turn().await {}
+        while (session1.next_turn().await).is_some() {}
 
         let mut session2 = dialogue_partial.partial_session("Turn 2");
-        while let Some(_) = session2.next_turn().await {}
+        while (session2.next_turn().await).is_some() {}
 
         let history_partial = dialogue_partial.history();
 

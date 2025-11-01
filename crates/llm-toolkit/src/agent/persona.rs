@@ -225,10 +225,7 @@ fn format_participants_with_relation(
         .iter()
         .map(|p| {
             if p.name == self_name {
-                format!(
-                    "- **{} (YOU)** - {}: {}",
-                    p.name, p.role, p.description
-                )
+                format!("- **{} (YOU)** - {}: {}", p.name, p.role, p.description)
             } else {
                 format!("- **{}** - {}: {}", p.name, p.role, p.description)
             }
@@ -249,7 +246,7 @@ fn format_messages(messages: &[(super::dialogue::Speaker, String)]) -> String {
 }
 
 /// Structured prompt for PersonaAgent that combines persona information,
-/// participants context, and current messages.
+/// participants context, and current content (text or messages).
 ///
 /// This structure allows PersonaAgent to build prompts in a type-safe way
 /// and defer the actual text formatting until needed.
@@ -258,17 +255,16 @@ fn format_messages(messages: &[(super::dialogue::Speaker, String)]) -> String {
 
 # Participants
 {{participants}}
-{% endif %}{% if current_messages %}
+{% endif %}{% if current_content %}
 
-# Current Messages
-{{current_messages}}
+{{current_content}}
 {% endif %}"#)]
 struct PersonaAgentPrompt {
-    persona: String,
+    persona: Persona,
     #[serde(skip_serializing_if = "String::is_empty")]
     participants: String,
     #[serde(skip_serializing_if = "String::is_empty")]
-    current_messages: String,
+    current_content: String,
 }
 
 pub struct PersonaAgent<T: Agent> {
@@ -315,19 +311,25 @@ where
             String::new()
         };
 
-        // 2. Extract and format messages
+        // 2. Extract and format messages or use provided text
+        // If intent has Text (e.g., from HistoryAwareAgent with history), use it
+        // Otherwise, format Messages
         let messages = intent.to_messages();
-        let current_messages_text = if messages.is_empty() {
-            String::new()
+        let current_content = if !intent.to_text().is_empty() {
+            // Use the provided text (may include history from HistoryAwareAgent)
+            intent.to_text()
+        } else if !messages.is_empty() {
+            // Format messages if no text provided
+            format!("# Current Messages\n{}", format_messages(&messages))
         } else {
-            format_messages(&messages)
+            String::new()
         };
 
         // 3. Build structured prompt
         let prompt_struct = PersonaAgentPrompt {
-            persona: self.persona.to_prompt(),
+            persona: self.persona.clone(),
             participants: participants_text,
-            current_messages: current_messages_text,
+            current_content,
         };
 
         // 4. Convert to text
@@ -445,6 +447,117 @@ mod tests {
         assert!(call_text.contains("Persona Profile"));
         assert!(call_text.contains("TestBot"));
         assert!(call_text.contains("Test Assistant"));
+    }
+
+    #[test]
+    fn persona_to_prompt_template_expansion() {
+        use crate::ToPrompt;
+
+        let persona = Persona {
+            name: "Alice".to_string(),
+            role: "Engineer".to_string(),
+            background: "Senior software engineer with 10 years of experience".to_string(),
+            communication_style: "Direct and clear".to_string(),
+        };
+
+        let prompt = persona.to_prompt();
+
+        // Verify template variables are expanded (not left as {{ name }})
+        assert!(
+            !prompt.contains("{{ name }}"),
+            "Template variables should be expanded, not left as placeholders"
+        );
+        assert!(
+            !prompt.contains("{{ role }}"),
+            "Template variables should be expanded, not left as placeholders"
+        );
+        assert!(
+            !prompt.contains("{{ background }}"),
+            "Template variables should be expanded, not left as placeholders"
+        );
+        assert!(
+            !prompt.contains("{{ communication_style }}"),
+            "Template variables should be expanded, not left as placeholders"
+        );
+
+        // Verify actual values are present
+        assert!(prompt.contains("Alice"), "Name should be in prompt");
+        assert!(prompt.contains("Engineer"), "Role should be in prompt");
+        assert!(
+            prompt.contains("Senior software engineer"),
+            "Background should be in prompt"
+        );
+        assert!(
+            prompt.contains("Direct and clear"),
+            "Communication style should be in prompt"
+        );
+
+        // Verify structure
+        assert!(prompt.contains("# Persona Profile"), "Should have header");
+        assert!(prompt.contains("**Name**:"), "Should have Name label");
+        assert!(prompt.contains("**Role**:"), "Should have Role label");
+        assert!(
+            prompt.contains("## Background"),
+            "Should have Background section"
+        );
+        assert!(
+            prompt.contains("## Communication Style"),
+            "Should have Communication Style section"
+        );
+
+        println!("Generated prompt:\n{}", prompt);
+    }
+
+    #[test]
+    fn persona_agent_prompt_nested_template_expansion() {
+        use crate::ToPrompt;
+
+        let persona = Persona {
+            name: "Alice".to_string(),
+            role: "Engineer".to_string(),
+            background: "Senior software engineer".to_string(),
+            communication_style: "Direct and clear".to_string(),
+        };
+
+        let prompt_struct = PersonaAgentPrompt {
+            persona: persona.clone(),
+            participants: "- Bob (Developer)\n- Charlie (Designer)".to_string(),
+            current_content: "Please review the code".to_string(),
+        };
+
+        let prompt = prompt_struct.to_prompt();
+        println!(
+            "=== Generated PersonaAgentPrompt ===\n{}\n=== End ===",
+            prompt
+        );
+
+        // The issue: when we use {{persona}} in template, it gets JSON serialized
+        // instead of using Persona's own ToPrompt template
+
+        // Check if it's JSON serialized (the problem we're trying to fix)
+        let is_json_serialized = prompt.contains(r#""name""#) || prompt.contains(r#""role""#);
+
+        if is_json_serialized {
+            println!(
+                "ISSUE CONFIRMED: Persona is being JSON serialized instead of using its ToPrompt template"
+            );
+            println!("Expected: Persona's formatted template with markdown");
+            println!("Actual: JSON representation of Persona struct");
+        }
+
+        // What we want: Persona's template should be expanded
+        assert!(
+            prompt.contains("# Persona Profile"),
+            "Should contain Persona's template header (not JSON)"
+        );
+        assert!(
+            prompt.contains("**Name**: Alice"),
+            "Should use Persona's template format (not JSON)"
+        );
+        assert!(
+            !is_json_serialized,
+            "Persona should use its ToPrompt template, not JSON serialization"
+        );
     }
 
     #[test]
@@ -657,8 +770,7 @@ mod tests {
         let base_agent = RecordingAgent::new("Good idea".to_string());
         let persona_agent = PersonaAgent::new(base_agent.clone(), persona);
 
-        let payload = Payload::from_messages(messages.clone())
-            .with_participants(participants);
+        let payload = Payload::from_messages(messages.clone()).with_participants(participants);
 
         let result = persona_agent.execute(payload).await.unwrap();
         assert_eq!(result, "Good idea");
