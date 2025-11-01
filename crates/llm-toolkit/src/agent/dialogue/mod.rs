@@ -103,13 +103,12 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 
 // Re-export key types
-pub use message::{DialogueMessage, MessageId, MessageMetadata, Speaker};
+pub use message::{
+    DialogueMessage, MessageId, MessageMetadata, Speaker, format_messages_to_prompt,
+};
 pub use session::DialogueSession;
 pub use store::MessageStore;
-pub use turn_input::{
-    AdaptiveContextFormatter, ContextFormatter, ContextMessage, MultipartContextFormatter,
-    ParticipantInfo, SimpleContextFormatter, TurnInput,
-};
+pub use turn_input::{ContextMessage, ParticipantInfo, TurnInput};
 
 // Internal modules (not re-exported)
 use state::{BroadcastState, SessionState};
@@ -216,9 +215,6 @@ pub struct Dialogue {
     pub(super) message_store: MessageStore,
 
     pub(super) execution_model: ExecutionModel,
-
-    /// Context formatter strategy
-    pub(super) context_formatter: Box<dyn ContextFormatter>,
 }
 
 impl Dialogue {
@@ -230,7 +226,6 @@ impl Dialogue {
             participants: Vec::new(),
             message_store: MessageStore::new(),
             execution_model,
-            context_formatter: Box::new(AdaptiveContextFormatter::default()),
         }
     }
 
@@ -381,7 +376,6 @@ impl Dialogue {
             participants: Vec::new(),
             message_store: MessageStore::new(),
             execution_model,
-            context_formatter: Box::new(AdaptiveContextFormatter::default()),
         };
 
         // Use provided participants or generate them
@@ -450,7 +444,6 @@ impl Dialogue {
             participants: Vec::new(),
             message_store: MessageStore::new(),
             execution_model,
-            context_formatter: Box::new(AdaptiveContextFormatter::default()),
         };
 
         // Build participants from personas

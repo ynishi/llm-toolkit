@@ -197,6 +197,91 @@ pub struct MessageMetadata {
     pub custom: HashMap<String, serde_json::Value>,
 }
 
+/// Formats a list of messages as a prompt string.
+///
+/// Uses adaptive formatting based on total content length:
+/// - **Simple format** (< 1000 chars): Markdown-style with `#` headers
+/// - **Multipart format** (≥ 1000 chars): Explicit delimiters (`===`, `───`)
+///
+/// # Arguments
+///
+/// * `messages` - List of (Speaker, content) tuples
+///
+/// # Example
+///
+/// ```ignore
+/// use llm_toolkit::agent::dialogue::{Speaker, format_messages_to_prompt};
+///
+/// let messages = vec![
+///     (Speaker::System, "Task: Discuss architecture".to_string()),
+///     (Speaker::agent("Alice", "Engineer"), "I suggest microservices".to_string()),
+/// ];
+///
+/// let prompt = format_messages_to_prompt(&messages);
+/// ```
+pub fn format_messages_to_prompt(messages: &[(Speaker, String)]) -> String {
+    const MULTIPART_THRESHOLD: usize = 1000;
+
+    // Calculate total content length
+    let total_chars: usize = messages.iter().map(|(_, content)| content.len()).sum();
+
+    if total_chars >= MULTIPART_THRESHOLD {
+        format_messages_multipart(messages)
+    } else {
+        format_messages_simple(messages)
+    }
+}
+
+/// Simple markdown format for messages.
+fn format_messages_simple(messages: &[(Speaker, String)]) -> String {
+    if messages.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::from("# Messages\n\n");
+
+    for (speaker, content) in messages {
+        let speaker_info = match speaker.role() {
+            Some(role) => format!("{} ({})", speaker.name(), role),
+            None => speaker.name().to_string(),
+        };
+
+        output.push_str(&format!("## {}\n{}\n\n", speaker_info, content));
+    }
+
+    output
+}
+
+/// Multipart format with explicit delimiters for long messages.
+fn format_messages_multipart(messages: &[(Speaker, String)]) -> String {
+    if messages.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::from(
+        "=================================================================================\n\
+         MESSAGES\n\
+         =================================================================================\n\n",
+    );
+
+    for (speaker, content) in messages {
+        let speaker_info = match speaker.role() {
+            Some(role) => format!("{} ({})", speaker.name(), role),
+            None => speaker.name().to_string(),
+        };
+
+        output.push_str(&format!(
+            "───────────────────────────────────────────────────────────────────────────────\n\
+             {}\n\
+             ───────────────────────────────────────────────────────────────────────────────\n\
+             {}\n\n",
+            speaker_info, content
+        ));
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,5 +328,79 @@ mod tests {
         assert_eq!(deserialized.id, msg.id);
         assert_eq!(deserialized.turn, msg.turn);
         assert_eq!(deserialized.content, msg.content);
+    }
+
+    #[test]
+    fn test_format_messages_simple() {
+        let messages = vec![
+            (Speaker::System, "Task: Discuss architecture".to_string()),
+            (
+                Speaker::agent("Alice", "Engineer"),
+                "I suggest microservices".to_string(),
+            ),
+        ];
+
+        let prompt = format_messages_to_prompt(&messages);
+
+        // Should use simple format (short messages)
+        assert!(prompt.contains("# Messages"));
+        assert!(prompt.contains("## System"));
+        assert!(prompt.contains("## Alice (Engineer)"));
+        assert!(prompt.contains("Task: Discuss architecture"));
+        assert!(prompt.contains("I suggest microservices"));
+
+        // Should NOT contain multipart delimiters
+        assert!(!prompt.contains("==="));
+        assert!(!prompt.contains("───"));
+    }
+
+    #[test]
+    fn test_format_messages_multipart() {
+        let long_content = "a".repeat(1500);
+        let messages = vec![
+            (Speaker::System, "Short task".to_string()),
+            (Speaker::agent("Alice", "Engineer"), long_content.clone()),
+        ];
+
+        let prompt = format_messages_to_prompt(&messages);
+
+        // Should use multipart format (long messages)
+        assert!(prompt.contains("MESSAGES"));
+        assert!(prompt.contains("==="));
+        assert!(prompt.contains("───"));
+        assert!(prompt.contains("System"));
+        assert!(prompt.contains("Alice (Engineer)"));
+
+        // Should NOT contain markdown headers
+        assert!(!prompt.contains("# Messages"));
+        assert!(!prompt.contains("## System"));
+    }
+
+    #[test]
+    fn test_format_messages_empty() {
+        let messages: Vec<(Speaker, String)> = vec![];
+        let prompt = format_messages_to_prompt(&messages);
+
+        assert_eq!(prompt, "");
+    }
+
+    #[test]
+    fn test_format_messages_threshold() {
+        // Test exactly at threshold (1000 chars)
+        let content_999 = "a".repeat(999);
+        let messages_under = vec![(Speaker::System, content_999)];
+        let prompt_under = format_messages_to_prompt(&messages_under);
+        assert!(
+            prompt_under.contains("# Messages"),
+            "Should use simple format for 999 chars"
+        );
+
+        let content_1000 = "a".repeat(1000);
+        let messages_at = vec![(Speaker::System, content_1000)];
+        let prompt_at = format_messages_to_prompt(&messages_at);
+        assert!(
+            prompt_at.contains("==="),
+            "Should use multipart format for 1000 chars"
+        );
     }
 }

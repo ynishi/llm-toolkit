@@ -327,7 +327,10 @@ where
         // 3. Extract and format current messages (the diff) with YOU/ME marking
         let messages = intent.to_messages();
         let current_messages_text = if !messages.is_empty() {
-            format!("# Current Messages\n{}", format_messages_with_relation(&messages, &self.persona.name))
+            format!(
+                "# Current Messages\n{}",
+                format_messages_with_relation(&messages, &self.persona.name)
+            )
         } else {
             String::new()
         };

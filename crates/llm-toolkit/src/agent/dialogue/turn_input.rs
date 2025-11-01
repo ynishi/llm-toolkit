@@ -99,30 +99,6 @@ impl TurnInput {
         }
     }
 
-    /// Formats the turn input as a complete prompt.
-    ///
-    /// # Format
-    ///
-    /// - If no context: returns just the user prompt
-    /// - If context exists:
-    ///   ```text
-    ///   # Context from other participants
-    ///
-    ///   ## Speaker Name (Role)
-    ///   Message content...
-    ///
-    ///   # Current task
-    ///   User prompt...
-    ///   ```
-    pub fn to_prompt(&self) -> String {
-        self.to_prompt_with_formatter(&SimpleContextFormatter)
-    }
-
-    /// Formats with a custom formatter.
-    pub fn to_prompt_with_formatter(&self, formatter: &dyn ContextFormatter) -> String {
-        formatter.format(self)
-    }
-
     /// Converts this TurnInput into a vector of Messages for structured dialogue.
     ///
     /// This extracts:
@@ -208,166 +184,10 @@ impl ContextMessage {
     }
 }
 
-/// Strategy for formatting turn input with context.
-pub trait ContextFormatter: Send {
-    fn format(&self, input: &TurnInput) -> String;
-}
-
-/// Simple markdown format for context.
-pub struct SimpleContextFormatter;
-
-impl ContextFormatter for SimpleContextFormatter {
-    fn format(&self, input: &TurnInput) -> String {
-        let mut output = String::new();
-
-        // Participants section (if available)
-        if !input.participants.is_empty() {
-            output.push_str("# Participants\n\n");
-            for participant in &input.participants {
-                let marker = if participant.name == input.current_participant {
-                    " (YOU)"
-                } else {
-                    ""
-                };
-                output.push_str(&format!(
-                    "- **{}{}** ({})\n  {}\n\n",
-                    participant.name, marker, participant.role, participant.description
-                ));
-            }
-        }
-
-        // Recent history section (if available)
-        if !input.context.is_empty() {
-            output.push_str("# Recent History\n\n");
-            for ctx in &input.context {
-                let marker = if ctx.speaker_name == input.current_participant {
-                    " (YOU)"
-                } else {
-                    ""
-                };
-                let turn_info = if ctx.turn > 0 {
-                    format!("[Turn {}] ", ctx.turn)
-                } else {
-                    String::new()
-                };
-                output.push_str(&format!(
-                    "{}{}{} ({}):\n{}\n\n",
-                    turn_info, ctx.speaker_name, marker, ctx.speaker_role, ctx.content
-                ));
-            }
-        }
-
-        // Current task (only add header if we have context sections)
-        let has_context_sections = !input.participants.is_empty() || !input.context.is_empty();
-        if has_context_sections {
-            output.push_str("# Current Task\n");
-        }
-        output.push_str(&input.user_prompt);
-
-        output
-    }
-}
-
-/// Multipart-style format for long discussions.
-pub struct MultipartContextFormatter;
-
-impl ContextFormatter for MultipartContextFormatter {
-    fn format(&self, input: &TurnInput) -> String {
-        let mut output = String::new();
-
-        // Participants section (if available)
-        if !input.participants.is_empty() {
-            output.push_str(
-                "=================================================================================\n\
-                 PARTICIPANTS\n\
-                 =================================================================================\n\n",
-            );
-            for participant in &input.participants {
-                let marker = if participant.name == input.current_participant {
-                    " (YOU)"
-                } else {
-                    ""
-                };
-                output.push_str(&format!(
-                    "{}{} ({})\n{}\n\n",
-                    participant.name, marker, participant.role, participant.description
-                ));
-            }
-        }
-
-        // Recent history section (if available)
-        if !input.context.is_empty() {
-            output.push_str(
-                "=================================================================================\n\
-                 RECENT HISTORY\n\
-                 =================================================================================\n\n",
-            );
-
-            for ctx in &input.context {
-                let marker = if ctx.speaker_name == input.current_participant {
-                    " (YOU)"
-                } else {
-                    ""
-                };
-                let turn_info = if ctx.turn > 0 {
-                    format!("[Turn {}] ", ctx.turn)
-                } else {
-                    String::new()
-                };
-                output.push_str(&format!(
-                    "───────────────────────────────────────────────────────────────────────────────\n\
-                     {}{}{} ({})\n\
-                     ───────────────────────────────────────────────────────────────────────────────\n\
-                     {}\n\n",
-                    turn_info, ctx.speaker_name, marker, ctx.speaker_role, ctx.content
-                ));
-            }
-        }
-
-        // Current task (only add header if we have context sections)
-        let has_context_sections = !input.participants.is_empty() || !input.context.is_empty();
-        if has_context_sections {
-            output.push_str(
-                "=================================================================================\n\
-                 CURRENT TASK\n\
-                 =================================================================================\n",
-            );
-        }
-        output.push_str(&input.user_prompt);
-
-        output
-    }
-}
-
-/// Adaptive formatter that selects format based on content length.
-pub struct AdaptiveContextFormatter {
-    /// Threshold in characters for switching to multipart
-    pub multipart_threshold: usize,
-}
-
-impl Default for AdaptiveContextFormatter {
-    fn default() -> Self {
-        Self {
-            multipart_threshold: 1000,
-        }
-    }
-}
-
-impl ContextFormatter for AdaptiveContextFormatter {
-    fn format(&self, input: &TurnInput) -> String {
-        let total_context_chars: usize = input.context.iter().map(|c| c.content.len()).sum();
-
-        if total_context_chars > self.multipart_threshold {
-            MultipartContextFormatter.format(input)
-        } else {
-            SimpleContextFormatter.format(input)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::dialogue::Speaker;
 
     #[test]
     fn test_turn_input_no_context() {
@@ -375,7 +195,12 @@ mod tests {
 
         assert_eq!(input.user_prompt, "Test prompt");
         assert!(input.context.is_empty());
-        assert_eq!(input.to_prompt(), "Test prompt");
+
+        // Verify to_messages conversion
+        let messages = input.to_messages();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].0, Speaker::System);
+        assert_eq!(messages[0].1, "Test prompt");
     }
 
     #[test]
@@ -390,113 +215,25 @@ mod tests {
         assert_eq!(input.user_prompt, "Discuss implementation");
         assert_eq!(input.context.len(), 2);
 
-        let formatted = input.to_prompt();
-        assert!(formatted.contains("# Recent History"));
-        assert!(formatted.contains("Alice (Engineer)"));
-        assert!(formatted.contains("Bob (Designer)"));
-        assert!(formatted.contains("# Current Task"));
-        assert!(formatted.contains("Discuss implementation"));
+        // Verify to_messages conversion includes context + current prompt
+        let messages = input.to_messages();
+        assert_eq!(messages.len(), 3); // 2 context + 1 current
+
+        // First context message
+        assert_eq!(messages[0].0, Speaker::agent("Alice", "Engineer"));
+        assert_eq!(messages[0].1, "I think we should use Rust");
+
+        // Second context message
+        assert_eq!(messages[1].0, Speaker::agent("Bob", "Designer"));
+        assert_eq!(messages[1].1, "The UI needs to be simple");
+
+        // Current prompt as System message
+        assert_eq!(messages[2].0, Speaker::System);
+        assert_eq!(messages[2].1, "Discuss implementation");
     }
 
     #[test]
-    fn test_multipart_formatter() {
-        let context = vec![ContextMessage::new("Alice", "Engineer", "Long message...")];
-
-        let input = TurnInput::with_context("Test", context);
-        let formatted = input.to_prompt_with_formatter(&MultipartContextFormatter);
-
-        // Check for multipart formatting elements
-        assert!(
-            formatted.contains("======="),
-            "Should contain header separator"
-        );
-        assert!(
-            formatted.contains("──────"),
-            "Should contain message separator"
-        );
-        assert!(formatted.contains("RECENT HISTORY"));
-        assert!(formatted.contains("CURRENT TASK"));
-    }
-
-    #[test]
-    fn test_adaptive_formatter_simple() {
-        let context = vec![ContextMessage::new("Alice", "Engineer", "Short")];
-
-        let input = TurnInput::with_context("Test", context);
-        let formatter = AdaptiveContextFormatter::default();
-        let formatted = input.to_prompt_with_formatter(&formatter);
-
-        // Should use simple format (no fancy borders)
-        assert!(!formatted.contains("═══"));
-        assert!(formatted.contains("# Recent History"));
-    }
-
-    #[test]
-    fn test_adaptive_formatter_multipart() {
-        let long_content = "a".repeat(1500);
-        let context = vec![ContextMessage::new("Alice", "Engineer", &long_content)];
-
-        let input = TurnInput::with_context("Test", context);
-        let formatter = AdaptiveContextFormatter::default();
-        let formatted = input.to_prompt_with_formatter(&formatter);
-
-        // Should use multipart format
-        assert!(
-            formatted.contains("======="),
-            "Should use multipart format for long content"
-        );
-    }
-
-    #[test]
-    fn test_full_dialogue_context_simple_format() {
-        let participants = vec![
-            ParticipantInfo::new("Alice", "Engineer", "Expert in system architecture"),
-            ParticipantInfo::new("Bob", "Designer", "Focuses on user experience"),
-            ParticipantInfo::new("Carol", "Marketer", "Marketing strategy specialist"),
-        ];
-
-        let context = vec![
-            ContextMessage::with_metadata(
-                "Alice",
-                "Engineer",
-                "I think we should use microservices architecture",
-                1,
-                1699000000,
-            ),
-            ContextMessage::with_metadata(
-                "Bob",
-                "Designer",
-                "The UI needs to be responsive and intuitive",
-                1,
-                1699000010,
-            ),
-        ];
-
-        let turn_input = TurnInput::with_dialogue_context(
-            "Discuss the implementation plan for the new feature",
-            context,
-            participants,
-            "Bob",
-        );
-
-        let formatted = turn_input.to_prompt_with_formatter(&SimpleContextFormatter);
-
-        println!("\n=== Simple Formatter Output ===\n{}\n", formatted);
-
-        // Verify structure
-        assert!(formatted.contains("# Participants"));
-        assert!(formatted.contains("**Alice** (Engineer)"));
-        assert!(formatted.contains("**Bob (YOU)** (Designer)"));
-        assert!(formatted.contains("**Carol** (Marketer)"));
-        assert!(formatted.contains("# Recent History"));
-        assert!(formatted.contains("[Turn 1] Alice (Engineer)"));
-        assert!(formatted.contains("[Turn 1] Bob (YOU) (Designer)"));
-        assert!(formatted.contains("# Current Task"));
-        assert!(formatted.contains("Discuss the implementation plan"));
-    }
-
-    #[test]
-    fn test_full_dialogue_context_multipart_format() {
+    fn test_turn_input_with_dialogue_context() {
         let participants = vec![
             ParticipantInfo::new("Alice", "Engineer", "Expert in system architecture"),
             ParticipantInfo::new("Bob", "Designer", "Focuses on user experience"),
@@ -505,7 +242,7 @@ mod tests {
         let context = vec![ContextMessage::with_metadata(
             "Alice",
             "Engineer",
-            "I think we should use microservices architecture for better scalability",
+            "I think we should use microservices architecture",
             1,
             1699000000,
         )];
@@ -513,20 +250,34 @@ mod tests {
         let turn_input = TurnInput::with_dialogue_context(
             "Discuss the implementation plan",
             context,
-            participants,
+            participants.clone(),
             "Bob",
         );
 
-        let formatted = turn_input.to_prompt_with_formatter(&MultipartContextFormatter);
+        // Verify participants are stored
+        assert_eq!(turn_input.participants.len(), 2);
+        assert_eq!(turn_input.current_participant, "Bob");
 
-        println!("\n=== Multipart Formatter Output ===\n{}\n", formatted);
+        // Verify to_messages conversion
+        let messages = turn_input.to_messages();
+        assert_eq!(messages.len(), 2); // 1 context + 1 current
+        assert_eq!(messages[0].0, Speaker::agent("Alice", "Engineer"));
+        assert_eq!(
+            messages[0].1,
+            "I think we should use microservices architecture"
+        );
+        assert_eq!(messages[1].0, Speaker::System);
+        assert_eq!(messages[1].1, "Discuss the implementation plan");
+    }
 
-        // Verify structure
-        assert!(formatted.contains("PARTICIPANTS"));
-        assert!(formatted.contains("Bob (YOU)"));
-        assert!(formatted.contains("RECENT HISTORY"));
-        assert!(formatted.contains("CURRENT TASK"));
-        assert!(formatted.contains("======="));
-        assert!(formatted.contains("───────"));
+    #[test]
+    fn test_context_message_with_metadata() {
+        let msg = ContextMessage::with_metadata("Alice", "Engineer", "Test message", 5, 1699000000);
+
+        assert_eq!(msg.speaker_name, "Alice");
+        assert_eq!(msg.speaker_role, "Engineer");
+        assert_eq!(msg.content, "Test message");
+        assert_eq!(msg.turn, 5);
+        assert_eq!(msg.timestamp, 1699000000);
     }
 }

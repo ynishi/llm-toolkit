@@ -339,12 +339,17 @@ mod tests {
         let calls = base_agent2.get_calls().await;
         assert_eq!(calls.len(), 1);
         let received_text = calls[0].to_text();
+        let received_messages = calls[0].to_messages();
 
-        // The second call should include the previous conversation
+        // The second call should include the previous conversation in text
         assert!(received_text.contains("Previous Conversation"));
         assert!(received_text.contains("[User]: What is Rust?"));
         assert!(received_text.contains("[System]: \"Response 1\""));
-        assert!(received_text.contains("Tell me more"));
+
+        // Current message should be in messages structure
+        assert_eq!(received_messages.len(), 1);
+        assert_eq!(received_messages[0].0, Speaker::user("User", "User"));
+        assert_eq!(received_messages[0].1, "Tell me more");
     }
 
     #[tokio::test]
@@ -383,10 +388,15 @@ mod tests {
         let calls = base_agent.get_calls().await;
         assert_eq!(calls.len(), 1);
         let received_text = calls[0].to_text();
+        let received_messages = calls[0].to_messages();
 
         // Should not contain "Previous Conversation" since it's the first call
         assert!(!received_text.contains("Previous Conversation"));
-        assert!(received_text.contains("Hello"));
+
+        // Current message should be in messages structure
+        assert_eq!(received_messages.len(), 1);
+        assert_eq!(received_messages[0].0, Speaker::user("User", "User"));
+        assert_eq!(received_messages[0].1, "Hello");
     }
 
     #[tokio::test]
