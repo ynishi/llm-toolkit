@@ -235,11 +235,7 @@ mod tests {
 
     #[test]
     fn test_message_serialization() {
-        let msg = DialogueMessage::new(
-            1,
-            Speaker::agent("Bob", "Designer"),
-            "Hello".to_string(),
-        );
+        let msg = DialogueMessage::new(1, Speaker::agent("Bob", "Designer"), "Hello".to_string());
 
         let json = serde_json::to_string(&msg).unwrap();
         let deserialized: DialogueMessage = serde_json::from_str(&json).unwrap();

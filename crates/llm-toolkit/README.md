@@ -1277,7 +1277,7 @@ let mut session = dialogue.partial_session("Draft release plan");
 
 while let Some(turn) = session.next_turn().await {
     let turn = turn?; // handle AgentError per participant
-    println!("[{}] {}", turn.participant_name, turn.content);
+    println!("[{}] {}", turn.speaker.name(), turn.content);
 }
 ```
 
@@ -1314,7 +1314,7 @@ dialogue.remove_participant("Expert")?;
 
 // Access conversation history
 for turn in dialogue.history() {
-    println!("[{}]: {}", turn.participant_name, turn.content);
+    println!("[{}]: {}", turn.speaker.name(), turn.content);
 }
 ```
 
@@ -1349,11 +1349,24 @@ let mut dialogue = Dialogue::broadcast()
 let more_turns = dialogue.run("Continue from last discussion").await?;
 ```
 
+**DialogueTurn Structure:**
+
+The `DialogueTurn` struct represents a single turn in the conversation with full speaker attribution:
+
+```rust
+pub struct DialogueTurn {
+    pub speaker: Speaker,  // Who spoke (System/User/Agent with full role info)
+    pub content: String,   // What was said
+}
+```
+
+The `speaker` field uses the `Speaker` enum to preserve complete attribution information including roles, which is essential for session resumption and conversation analysis.
+
 Key methods for session management:
 
--   **`with_history(history: Vec<DialogueTurn>)`**: Builder method to inject conversation history into a new dialogue instance. Following the Orchestrator Step pattern, this creates a fresh instance with pre-populated history rather than mutating existing state.
--   **`save_history(path)`**: Persists the current conversation history to a JSON file.
--   **`load_history(path)`**: Loads conversation history from a JSON file.
+-   **`with_history(history: Vec<DialogueTurn>)`**: Builder method to inject conversation history into a new dialogue instance. Following the Orchestrator Step pattern, this creates a fresh instance with pre-populated history rather than mutating existing state. **Preserves full speaker information including roles.**
+-   **`save_history(path)`**: Persists the current conversation history to a JSON file with complete speaker attribution.
+-   **`load_history(path)`**: Loads conversation history from a JSON file, restoring all speaker details.
 
 Use cases:
 - ✅ **Persistent Conversations**: Maintain dialogue context across application restarts
@@ -1396,6 +1409,83 @@ This design enables:
 - ✅ **Extensibility**: New `Payload` features automatically work
 - ✅ **Type Safety**: Compiler-enforced correct usage
 - ✅ **Zero Method Proliferation**: No `_with_payload` variants needed
+
+**Multi-Message Payloads and Speaker Attribution:**
+
+The `Dialogue` API supports multi-message payloads with explicit speaker attribution, enabling complex conversation structures with System prompts, User inputs, and Agent responses.
+
+```rust
+use llm_toolkit::agent::Payload;
+use llm_toolkit::agent::dialogue::message::Speaker;
+
+// Create a payload with multiple messages from different speakers
+let payload = Payload::from_messages(vec![
+    (Speaker::System, "Context: Project planning meeting".to_string()),
+    (Speaker::user("Alice", "Product Manager"), "What features should we prioritize?".to_string()),
+]);
+
+// All messages are stored with proper speaker attribution
+let turns = dialogue.run(payload).await?;
+
+// Access conversation history with full speaker information
+for turn in dialogue.history() {
+    match &turn.speaker {
+        Speaker::System => println!("[System]: {}", turn.content),
+        Speaker::User { name, role } => println!("[{} ({})]: {}", name, role, turn.content),
+        Speaker::Agent { name, role } => println!("[{} ({})]: {}", name, role, turn.content),
+    }
+}
+```
+
+The `Speaker` enum provides three variants:
+- **`System`**: System-generated prompts or instructions
+- **`User { name, role }`**: Human user messages with name and role
+- **`Agent { name, role }`**: AI agent responses with persona information
+
+This enables:
+- ✅ **Proper Attribution**: Distinguish between System, User, and Agent messages
+- ✅ **Role Preservation**: User and Agent roles are preserved in history
+- ✅ **Complex Conversations**: Support multi-speaker turns with System + User messages
+- ✅ **Session Resumption**: Full speaker context is maintained across save/load cycles
+
+**Enhanced Context Formatting:**
+
+Dialogue participants receive enhanced context that includes:
+
+1. **Participants Table**: Shows all conversation participants with clear "(YOU)" marker
+2. **Recent History**: Previous messages with turn numbers and timestamps
+3. **Current Task**: The current prompt or request
+
+```text
+# Persona Profile
+**Name**: Alice
+**Role**: Product Manager
+...
+
+# Request
+# Participants
+
+- **Alice (YOU)** (Product Manager)
+  Expert in product strategy
+
+- **Bob** (Engineer)
+  Senior backend engineer
+
+# Recent History
+
+## Turn 1 (2024-01-15 10:30:22)
+### Bob (Engineer)
+I think we should focus on performance...
+
+# Current Task
+What should be our next priority?
+```
+
+This structured format helps agents:
+- ✅ **Understand Context**: Know who else is in the conversation
+- ✅ **Self-Identification**: Clear "(YOU)" marker for the current speaker
+- ✅ **Temporal Awareness**: Turn numbers and timestamps for conversation flow
+- ✅ **Role Clarity**: See the roles and backgrounds of other participants
 
 ## Agent API and Multi-Agent Orchestration
 

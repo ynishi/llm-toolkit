@@ -149,17 +149,9 @@ mod tests {
         let mut store = MessageStore::new();
 
         let msg1 = DialogueMessage::new(1, Speaker::System, "Turn 1".to_string());
-        let msg2 = DialogueMessage::new(
-            1,
-            Speaker::agent("A", "Role"),
-            "Response 1".to_string(),
-        );
+        let msg2 = DialogueMessage::new(1, Speaker::agent("A", "Role"), "Response 1".to_string());
         let msg3 = DialogueMessage::new(2, Speaker::System, "Turn 2".to_string());
-        let msg4 = DialogueMessage::new(
-            2,
-            Speaker::agent("B", "Role"),
-            "Response 2".to_string(),
-        );
+        let msg4 = DialogueMessage::new(2, Speaker::agent("B", "Role"), "Response 2".to_string());
 
         store.push(msg1);
         store.push(msg2);

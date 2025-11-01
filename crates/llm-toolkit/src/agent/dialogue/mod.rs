@@ -791,7 +791,8 @@ impl Dialogue {
         let current_turn = self.message_store.current_turn() + 1;
 
         // 1. Extract and store messages from payload
-        let (input_messages, prompt_text) = self.extract_messages_from_payload(&payload, current_turn);
+        let (input_messages, prompt_text) =
+            self.extract_messages_from_payload(&payload, current_turn);
 
         for msg in input_messages {
             self.message_store.push(msg);
@@ -876,20 +877,14 @@ impl Dialogue {
                     // Store response message
                     let response_message = DialogueMessage::new(
                         current_turn,
-                        Speaker::agent(
-                            name.clone(),
-                            self.participants[idx].persona.role.clone(),
-                        ),
+                        Speaker::agent(name.clone(), self.participants[idx].persona.role.clone()),
                         content.clone(),
                     );
                     self.message_store.push(response_message);
 
                     // Create DialogueTurn for backward compatibility
                     dialogue_turns.push(DialogueTurn {
-                        speaker: Speaker::agent(
-                            name,
-                            self.participants[idx].persona.role.clone(),
-                        ),
+                        speaker: Speaker::agent(name, self.participants[idx].persona.role.clone()),
                         content,
                     });
                 }
@@ -912,7 +907,8 @@ impl Dialogue {
         let current_turn = self.message_store.current_turn() + 1;
 
         // 1. Extract and store messages from payload
-        let (input_messages, prompt_text) = self.extract_messages_from_payload(&payload, current_turn);
+        let (input_messages, prompt_text) =
+            self.extract_messages_from_payload(&payload, current_turn);
 
         for msg in input_messages {
             self.message_store.push(msg);
@@ -997,11 +993,7 @@ impl Dialogue {
             match content {
                 PayloadContent::Message { speaker, content } => {
                     // Store as individual message with explicit speaker
-                    messages.push(DialogueMessage::new(
-                        turn,
-                        speaker.clone(),
-                        content.clone(),
-                    ));
+                    messages.push(DialogueMessage::new(turn, speaker.clone(), content.clone()));
                     text_parts.push(content.as_str());
                 }
                 PayloadContent::Text(text) => {
@@ -2497,7 +2489,10 @@ mod tests {
 
         // Create multi-message payload with System + User messages
         let payload = Payload::from_messages(vec![
-            (Speaker::System, "System: Initializing conversation".to_string()),
+            (
+                Speaker::System,
+                "System: Initializing conversation".to_string(),
+            ),
             (
                 Speaker::user("Alice", "Product Manager"),
                 "User: What should we build?".to_string(),
@@ -2559,7 +2554,10 @@ mod tests {
 
         // Create payload with multiple speakers
         let payload = Payload::from_messages(vec![
-            (Speaker::System, "Context: Project initialization".to_string()),
+            (
+                Speaker::System,
+                "Context: Project initialization".to_string(),
+            ),
             (
                 Speaker::user("Bob", "Engineer"),
                 "Request: Analyze architecture".to_string(),

@@ -226,9 +226,7 @@ impl Payload {
     ///     (Speaker::user("user1"), "What is Rust?".to_string()),
     /// ]);
     /// ```
-    pub fn from_messages(
-        messages: Vec<(crate::agent::dialogue::Speaker, String)>,
-    ) -> Self {
+    pub fn from_messages(messages: Vec<(crate::agent::dialogue::Speaker, String)>) -> Self {
         let contents = messages
             .into_iter()
             .map(|(speaker, content)| PayloadContent::Message { speaker, content })
