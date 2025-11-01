@@ -130,7 +130,7 @@ mod tests {
         let mut store = MessageStore::new();
 
         let msg1 = DialogueMessage::new(1, Speaker::System, "First".to_string());
-        let msg2 = DialogueMessage::new(1, Speaker::participant("A", "Role"), "Second".to_string());
+        let msg2 = DialogueMessage::new(1, Speaker::agent("A", "Role"), "Second".to_string());
         let msg3 = DialogueMessage::new(2, Speaker::System, "Third".to_string());
 
         store.push(msg1);
@@ -151,13 +151,13 @@ mod tests {
         let msg1 = DialogueMessage::new(1, Speaker::System, "Turn 1".to_string());
         let msg2 = DialogueMessage::new(
             1,
-            Speaker::participant("A", "Role"),
+            Speaker::agent("A", "Role"),
             "Response 1".to_string(),
         );
         let msg3 = DialogueMessage::new(2, Speaker::System, "Turn 2".to_string());
         let msg4 = DialogueMessage::new(
             2,
-            Speaker::participant("B", "Role"),
+            Speaker::agent("B", "Role"),
             "Response 2".to_string(),
         );
 
@@ -192,7 +192,7 @@ mod tests {
 
         store.push(DialogueMessage::new(
             1,
-            Speaker::participant("A", "Role"),
+            Speaker::agent("A", "Role"),
             "Response".to_string(),
         ));
         assert_eq!(store.current_turn(), 1); // Still turn 1

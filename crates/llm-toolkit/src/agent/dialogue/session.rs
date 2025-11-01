@@ -47,7 +47,7 @@ impl<'a> DialogueSession<'a> {
                                         let participant = &self.dialogue.participants[idx];
                                         let message = DialogueMessage::new(
                                             current_turn,
-                                            Speaker::participant(
+                                            Speaker::agent(
                                                 participant_name.clone(),
                                                 participant.persona.role.clone(),
                                             ),
@@ -56,7 +56,10 @@ impl<'a> DialogueSession<'a> {
                                         self.dialogue.message_store.push(message);
 
                                         let turn = DialogueTurn {
-                                            participant_name: participant_name.clone(),
+                                            speaker: Speaker::agent(
+                                                participant_name.clone(),
+                                                participant.persona.role.clone(),
+                                            ),
                                             content: content.clone(),
                                         };
                                         info!(
@@ -162,7 +165,7 @@ impl<'a> DialogueSession<'a> {
                             // Store in MessageStore
                             let message = DialogueMessage::new(
                                 turn,
-                                Speaker::participant(
+                                Speaker::agent(
                                     participant_name.clone(),
                                     participant.persona.role.clone(),
                                 ),
@@ -171,7 +174,10 @@ impl<'a> DialogueSession<'a> {
                             self.dialogue.message_store.push(message);
 
                             let turn = DialogueTurn {
-                                participant_name: participant_name.clone(),
+                                speaker: Speaker::agent(
+                                    participant_name.clone(),
+                                    participant.persona.role.clone(),
+                                ),
                                 content,
                             };
                             info!(

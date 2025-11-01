@@ -136,7 +136,10 @@ pub struct DialogueBlueprint {
 /// Represents a single turn in the dialogue.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DialogueTurn {
-    pub participant_name: String,
+    /// Who spoke in this turn
+    pub speaker: Speaker,
+
+    /// What was said
     pub content: String,
 }
 
@@ -309,17 +312,10 @@ impl Dialogue {
         let mut turn_counter = 1;
 
         for dialogue_turn in history {
-            let speaker = if dialogue_turn.participant_name == "System" {
-                Speaker::System
-            } else {
-                // We don't have role information in DialogueTurn, use generic
-                Speaker::participant(dialogue_turn.participant_name.clone(), "Participant")
-            };
-
             let message = DialogueMessage {
                 id: MessageId::new(),
                 turn: turn_counter,
-                speaker,
+                speaker: dialogue_turn.speaker.clone(),
                 content: dialogue_turn.content,
                 timestamp: message::current_unix_timestamp(),
                 metadata: Default::default(),
@@ -328,7 +324,7 @@ impl Dialogue {
             self.message_store.push(message);
 
             // Increment turn when we see a System message
-            if dialogue_turn.participant_name == "System" {
+            if matches!(dialogue_turn.speaker, Speaker::System) {
                 turn_counter += 1;
             }
         }
@@ -657,7 +653,7 @@ impl Dialogue {
                         .messages_for_turn(current_turn - 1)
                         .into_iter()
                         .filter_map(|msg| {
-                            if let Speaker::Participant { name, role } = &msg.speaker {
+                            if let Speaker::Agent { name, role } = &msg.speaker {
                                 Some(ContextMessage::with_metadata(
                                     name.clone(),
                                     role.clone(),
@@ -819,7 +815,7 @@ impl Dialogue {
                 .messages_for_turn(current_turn - 1)
                 .into_iter()
                 .filter_map(|msg| {
-                    if let Speaker::Participant { name, role } = &msg.speaker {
+                    if let Speaker::Agent { name, role } = &msg.speaker {
                         Some(ContextMessage::with_metadata(
                             name.clone(),
                             role.clone(),
@@ -879,7 +875,7 @@ impl Dialogue {
                     // Store response message
                     let response_message = DialogueMessage::new(
                         current_turn,
-                        Speaker::participant(
+                        Speaker::agent(
                             name.clone(),
                             self.participants[idx].persona.role.clone(),
                         ),
@@ -889,7 +885,10 @@ impl Dialogue {
 
                     // Create DialogueTurn for backward compatibility
                     dialogue_turns.push(DialogueTurn {
-                        participant_name: name,
+                        speaker: Speaker::agent(
+                            name,
+                            self.participants[idx].persona.role.clone(),
+                        ),
                         content,
                     });
                 }
@@ -945,7 +944,7 @@ impl Dialogue {
             // Store response message
             let response_message = DialogueMessage::new(
                 current_turn,
-                Speaker::participant(name.clone(), participant.persona.role.clone()),
+                Speaker::agent(name.clone(), participant.persona.role.clone()),
                 response.clone(),
             );
             self.message_store.push(response_message);
@@ -955,7 +954,7 @@ impl Dialogue {
 
             // Keep track of final turn
             final_turn = Some(DialogueTurn {
-                participant_name: name,
+                speaker: Speaker::agent(name, participant.persona.role.clone()),
                 content: response,
             });
         }
@@ -972,7 +971,7 @@ impl Dialogue {
     pub(crate) fn format_history(&self) -> String {
         self.history()
             .iter()
-            .map(|turn| format!("[{}]: {}", turn.participant_name, turn.content))
+            .map(|turn| format!("[{}]: {}", turn.speaker.name(), turn.content))
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -988,7 +987,7 @@ impl Dialogue {
             .all_messages()
             .into_iter()
             .map(|msg| DialogueTurn {
-                participant_name: msg.speaker_name().to_string(),
+                speaker: msg.speaker.clone(),
                 content: msg.content.clone(),
             })
             .collect()
@@ -1183,16 +1182,16 @@ mod tests {
 
         // Should return 2 turns (one from each participant)
         assert_eq!(turns.len(), 2);
-        assert_eq!(turns[0].participant_name, "Agent1");
+        assert_eq!(turns[0].speaker.name(), "Agent1");
         assert_eq!(turns[0].content, "Response 1");
-        assert_eq!(turns[1].participant_name, "Agent2");
+        assert_eq!(turns[1].speaker.name(), "Agent2");
         assert_eq!(turns[1].content, "Response 2");
 
         // Check history: System + 2 participant responses
         assert_eq!(dialogue.history().len(), 3);
-        assert_eq!(dialogue.history()[0].participant_name, "System");
-        assert_eq!(dialogue.history()[1].participant_name, "Agent1");
-        assert_eq!(dialogue.history()[2].participant_name, "Agent2");
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
+        assert_eq!(dialogue.history()[1].speaker.name(), "Agent1");
+        assert_eq!(dialogue.history()[2].speaker.name(), "Agent2");
     }
 
     #[tokio::test]
@@ -1277,7 +1276,7 @@ mod tests {
 
         // Sequential mode returns only the final turn
         assert_eq!(turns.len(), 1);
-        assert_eq!(turns[0].participant_name, "Finalizer");
+        assert_eq!(turns[0].speaker.name(), "Finalizer");
         assert_eq!(turns[0].content, "Final output: all done");
 
         // Check that history contains the correct number of turns
@@ -1285,16 +1284,16 @@ mod tests {
         assert_eq!(dialogue.history().len(), 4);
 
         // Verify the history structure
-        assert_eq!(dialogue.history()[0].participant_name, "System");
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
         assert_eq!(dialogue.history()[0].content, "Initial prompt");
 
-        assert_eq!(dialogue.history()[1].participant_name, "Summarizer");
+        assert_eq!(dialogue.history()[1].speaker.name(), "Summarizer");
         assert_eq!(dialogue.history()[1].content, "Summary: input received");
 
-        assert_eq!(dialogue.history()[2].participant_name, "Translator");
+        assert_eq!(dialogue.history()[2].speaker.name(), "Translator");
         assert_eq!(dialogue.history()[2].content, "Translated: previous output");
 
-        assert_eq!(dialogue.history()[3].participant_name, "Finalizer");
+        assert_eq!(dialogue.history()[3].speaker.name(), "Finalizer");
         assert_eq!(dialogue.history()[3].content, "Final output: all done");
     }
 
@@ -1332,19 +1331,19 @@ mod tests {
         assert_eq!(session.execution_model(), ExecutionModel::Sequential);
 
         let first = session.next_turn().await.unwrap().unwrap();
-        assert_eq!(first.participant_name, "Step1");
+        assert_eq!(first.speaker.name(), "Step1");
         assert_eq!(first.content, "S1 output");
 
         let second = session.next_turn().await.unwrap().unwrap();
-        assert_eq!(second.participant_name, "Step2");
+        assert_eq!(second.speaker.name(), "Step2");
         assert_eq!(second.content, "S2 output");
 
         assert!(session.next_turn().await.is_none());
 
         assert_eq!(dialogue.history().len(), 3);
-        assert_eq!(dialogue.history()[0].participant_name, "System");
-        assert_eq!(dialogue.history()[1].participant_name, "Step1");
-        assert_eq!(dialogue.history()[2].participant_name, "Step2");
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
+        assert_eq!(dialogue.history()[1].speaker.name(), "Step1");
+        assert_eq!(dialogue.history()[2].speaker.name(), "Step2");
     }
 
     #[derive(Clone)]
@@ -1404,11 +1403,11 @@ mod tests {
         assert_eq!(session.execution_model(), ExecutionModel::Broadcast);
 
         let first = session.next_turn().await.unwrap().unwrap();
-        assert_eq!(first.participant_name, "Fast");
+        assert_eq!(first.speaker.name(), "Fast");
         assert!(first.content.contains("Fast handled"));
 
         let second = session.next_turn().await.unwrap().unwrap();
-        assert_eq!(second.participant_name, "Slow");
+        assert_eq!(second.speaker.name(), "Slow");
         assert!(second.content.contains("Slow handled"));
 
         assert!(session.next_turn().await.is_none());
@@ -1442,11 +1441,11 @@ mod tests {
             .partial_session_with_order("Hello".to_string(), BroadcastOrder::ParticipantOrder);
 
         let first = session.next_turn().await.unwrap().unwrap();
-        assert_eq!(first.participant_name, "Slow");
+        assert_eq!(first.speaker.name(), "Slow");
         assert!(first.content.contains("Slow handled"));
 
         let second = session.next_turn().await.unwrap().unwrap();
-        assert_eq!(second.participant_name, "Fast");
+        assert_eq!(second.speaker.name(), "Fast");
         assert!(second.content.contains("Fast handled"));
 
         assert!(session.next_turn().await.is_none());
@@ -1614,8 +1613,8 @@ mod tests {
         // Verify remaining agents work
         let turns = dialogue.run("Test".to_string()).await.unwrap();
         assert_eq!(turns.len(), 2);
-        assert_eq!(turns[0].participant_name, "Agent1");
-        assert_eq!(turns[1].participant_name, "Agent3");
+        assert_eq!(turns[0].speaker.name(), "Agent1");
+        assert_eq!(turns[1].speaker.name(), "Agent3");
     }
 
     #[tokio::test]
@@ -1700,8 +1699,8 @@ mod tests {
 
         let turns = dialogue.run("Test".to_string()).await.unwrap();
         assert_eq!(turns.len(), 2);
-        assert_eq!(turns[0].participant_name, "Alice");
-        assert_eq!(turns[1].participant_name, "Bob");
+        assert_eq!(turns[0].speaker.name(), "Alice");
+        assert_eq!(turns[1].speaker.name(), "Bob");
     }
 
     #[tokio::test]
@@ -1867,12 +1866,12 @@ mod tests {
         let mut session = dialogue.partial_session(payload);
 
         let turn = session.next_turn().await.unwrap().unwrap();
-        assert_eq!(turn.participant_name, "Analyst");
+        assert_eq!(turn.speaker.name(), "Analyst");
         assert_eq!(turn.content, "Image analysis complete");
 
         // Verify history contains text representation
         assert_eq!(dialogue.history().len(), 2);
-        assert_eq!(dialogue.history()[0].participant_name, "System");
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
         assert_eq!(dialogue.history()[0].content, "Analyze this image");
     }
 
@@ -1941,7 +1940,7 @@ mod tests {
 
         // Sequential returns only final turn
         assert_eq!(turns.len(), 1);
-        assert_eq!(turns[0].participant_name, "Summarizer");
+        assert_eq!(turns[0].speaker.name(), "Summarizer");
         assert_eq!(turns[0].content, "Summary complete");
 
         // Verify history has both turns
@@ -1981,10 +1980,10 @@ mod tests {
 
         // Should yield in participant order, not completion order
         let first = session.next_turn().await.unwrap().unwrap();
-        assert_eq!(first.participant_name, "First");
+        assert_eq!(first.speaker.name(), "First");
 
         let second = session.next_turn().await.unwrap().unwrap();
-        assert_eq!(second.participant_name, "Second");
+        assert_eq!(second.speaker.name(), "Second");
 
         assert!(session.next_turn().await.is_none());
     }
@@ -2023,8 +2022,8 @@ mod tests {
 
         // Verify the injected history is present
         assert_eq!(dialogue2.history().len(), 2);
-        assert_eq!(dialogue2.history()[0].participant_name, "System");
-        assert_eq!(dialogue2.history()[1].participant_name, "Agent1");
+        assert_eq!(dialogue2.history()[0].speaker.name(), "System");
+        assert_eq!(dialogue2.history()[1].speaker.name(), "Agent1");
         assert_eq!(dialogue2.history()[1].content, "Response 1");
 
         // Run new dialogue - should add to existing history
@@ -2066,9 +2065,9 @@ mod tests {
 
         // Verify loaded history matches original
         assert_eq!(loaded_history.len(), dialogue.history().len());
-        assert_eq!(loaded_history[0].participant_name, "System");
+        assert_eq!(loaded_history[0].speaker.name(), "System");
         assert_eq!(loaded_history[0].content, "Test prompt");
-        assert_eq!(loaded_history[1].participant_name, "Agent1");
+        assert_eq!(loaded_history[1].speaker.name(), "Agent1");
         assert_eq!(loaded_history[1].content, "Test response");
     }
 
@@ -2122,14 +2121,14 @@ mod tests {
         // Verify complete history
         assert_eq!(session2.history().len(), 4);
         // Session 1 turns
-        assert_eq!(session2.history()[0].participant_name, "System");
+        assert_eq!(session2.history()[0].speaker.name(), "System");
         assert_eq!(session2.history()[0].content, "First prompt");
-        assert_eq!(session2.history()[1].participant_name, "Agent1");
+        assert_eq!(session2.history()[1].speaker.name(), "Agent1");
         assert_eq!(session2.history()[1].content, "First response");
         // Session 2 turns
-        assert_eq!(session2.history()[2].participant_name, "System");
+        assert_eq!(session2.history()[2].speaker.name(), "System");
         assert_eq!(session2.history()[2].content, "Second prompt");
-        assert_eq!(session2.history()[3].participant_name, "Agent1");
+        assert_eq!(session2.history()[3].speaker.name(), "Agent1");
         assert_eq!(session2.history()[3].content, "Second response");
     }
 
@@ -2137,14 +2136,15 @@ mod tests {
     async fn test_dialogue_turn_serialization() {
         // Test that DialogueTurn can be serialized and deserialized
         let turn = DialogueTurn {
-            participant_name: "TestAgent".to_string(),
+            speaker: Speaker::agent("TestAgent", "Tester"),
             content: "Test content".to_string(),
         };
 
         let json = serde_json::to_string(&turn).unwrap();
         let deserialized: DialogueTurn = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(deserialized.participant_name, "TestAgent");
+        assert_eq!(deserialized.speaker.name(), "TestAgent");
+        assert_eq!(deserialized.speaker.role(), Some("Tester"));
         assert_eq!(deserialized.content, "Test content");
     }
 
@@ -2223,7 +2223,7 @@ mod tests {
 
         // History should have: [System]: First message, [AgentA]: response, [AgentB]: response
         assert_eq!(dialogue.history().len(), 3);
-        assert_eq!(dialogue.history()[0].participant_name, "System");
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
         assert_eq!(dialogue.history()[0].content, "First message");
 
         // Turn 2: Second broadcast - agents should see all previous messages
@@ -2238,14 +2238,14 @@ mod tests {
         for turn in &turns2 {
             // Each agent should receive context from OTHER participants (new format)
             // Format: ## AgentName (Role)\n content...
-            if turn.participant_name == "AgentA" {
+            if turn.speaker.name() == "AgentA" {
                 // AgentA should see AgentB's context
                 assert!(
                     turn.content.contains("AgentB"),
                     "AgentA should see AgentB's context. Got: {}",
                     turn.content
                 );
-            } else if turn.participant_name == "AgentB" {
+            } else if turn.speaker.name() == "AgentB" {
                 // AgentB should see AgentA's context
                 assert!(
                     turn.content.contains("AgentA"),
@@ -2258,7 +2258,7 @@ mod tests {
             assert!(
                 turn.content.contains("Second message"),
                 "Agent {} should see the current task. Got: {}",
-                turn.participant_name,
+                turn.speaker.name(),
                 turn.content
             );
         }
@@ -2270,14 +2270,14 @@ mod tests {
         assert_eq!(dialogue.history().len(), 6);
 
         // Verify the complete history structure
-        assert_eq!(dialogue.history()[0].participant_name, "System");
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
         assert_eq!(dialogue.history()[0].content, "First message");
-        assert_eq!(dialogue.history()[1].participant_name, "AgentA");
-        assert_eq!(dialogue.history()[2].participant_name, "AgentB");
-        assert_eq!(dialogue.history()[3].participant_name, "System");
+        assert_eq!(dialogue.history()[1].speaker.name(), "AgentA");
+        assert_eq!(dialogue.history()[2].speaker.name(), "AgentB");
+        assert_eq!(dialogue.history()[3].speaker.name(), "System");
         assert_eq!(dialogue.history()[3].content, "Second message");
-        assert_eq!(dialogue.history()[4].participant_name, "AgentA");
-        assert_eq!(dialogue.history()[5].participant_name, "AgentB");
+        assert_eq!(dialogue.history()[4].speaker.name(), "AgentA");
+        assert_eq!(dialogue.history()[5].speaker.name(), "AgentB");
     }
 
     /// Test to verify HistoryAwareAgent behavior with new context distribution.
@@ -2371,31 +2371,31 @@ mod tests {
         let turns1 = dialogue.run("First message").await.unwrap();
         println!("\n=== Turn 1 ===");
         for turn in &turns1 {
-            println!("[{}]: {}", turn.participant_name, turn.content);
+            println!("[{}]: {}", turn.speaker.name(), turn.content);
         }
 
         // Turn 2 - Verify new context distribution works correctly
         let turns2 = dialogue.run("Second message").await.unwrap();
         println!("\n=== Turn 2 ===");
         for turn in &turns2 {
-            println!("[{}]: {}", turn.participant_name, turn.content);
+            println!("[{}]: {}", turn.speaker.name(), turn.content);
 
             // Check if the response contains "Previous Conversation" (from HistoryAwareAgent)
             // This is EXPECTED and CORRECT - each agent manages its own history
             if turn.content.contains("Previous Conversation") {
                 println!(
                     "✓ Agent {} maintains its own conversation history (expected)",
-                    turn.participant_name
+                    turn.speaker.name()
                 );
             }
 
             // Verify context from other participants is present
-            if turn.participant_name == "AgentA" {
+            if turn.speaker.name() == "AgentA" {
                 assert!(
                     turn.content.contains("AgentB") || turn.content.contains("# Request"),
                     "AgentA should receive context or request"
                 );
-            } else if turn.participant_name == "AgentB" {
+            } else if turn.speaker.name() == "AgentB" {
                 assert!(
                     turn.content.contains("AgentA") || turn.content.contains("# Request"),
                     "AgentB should receive context or request"

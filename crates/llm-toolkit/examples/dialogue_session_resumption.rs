@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     for turn in &turns1 {
-        println!("[{}]:", turn.participant_name);
+        println!("[{}]:", turn.speaker.name());
         println!("{}\n", turn.content);
     }
 
@@ -151,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "  {}. [{}]: {}",
             i + 1,
-            turn.participant_name,
+            turn.speaker.name(),
             if turn.content.len() > 60 {
                 format!("{}...", &turn.content[..60])
             } else {
@@ -166,7 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let turns2 = session2.run("What are the security implications?").await?;
 
     for turn in &turns2 {
-        println!("[{}]:", turn.participant_name);
+        println!("[{}]:", turn.speaker.name());
         println!("{}\n", turn.content);
     }
 
@@ -187,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     for turn in &turns3 {
-        println!("[{}]:", turn.participant_name);
+        println!("[{}]:", turn.speaker.name());
         println!("{}\n", turn.content);
     }
 
@@ -209,7 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "{}. [{}]: {}",
             i + 1,
-            turn.participant_name,
+            turn.speaker.name(),
             if turn.content.len() > 80 {
                 format!("{}...", &turn.content[..80])
             } else {

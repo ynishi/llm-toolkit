@@ -69,7 +69,7 @@ async fn main() {
         Ok(turns) => {
             println!("Sequential Pipeline Results:");
             for turn in &turns {
-                println!("  [{}]: {}", turn.participant_name, turn.content);
+                println!("  [{}]: {}", turn.speaker.name(), turn.content);
             }
         }
         Err(e) => eprintln!("Sequential dialogue failed: {}", e),
@@ -116,7 +116,7 @@ async fn main() {
         Ok(turns) => {
             println!("Broadcast Responses (from all agents):");
             for turn in &turns {
-                println!("  [{}]: {}", turn.participant_name, turn.content);
+                println!("  [{}]: {}", turn.speaker.name(), turn.content);
             }
         }
         Err(e) => eprintln!("Broadcast dialogue failed: {}", e),

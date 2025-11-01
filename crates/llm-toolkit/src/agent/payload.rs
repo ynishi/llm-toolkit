@@ -13,10 +13,17 @@ use std::sync::Arc;
 /// including text, attachments, and potentially other media types in the future.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PayloadContent {
-    /// Plain text content
+    /// Plain text content (treated as User input in dialogue context)
     Text(String),
+
     /// Arbitrary file attachment (local, remote, or in-memory)
     Attachment(Attachment),
+
+    /// Dialogue message with explicit speaker information
+    Message {
+        speaker: crate::agent::dialogue::Speaker,
+        content: String,
+    },
 }
 
 /// Inner payload data, wrapped in Arc for efficient cloning.
@@ -177,9 +184,65 @@ impl Payload {
         }
     }
 
+    /// Adds a dialogue message to this payload.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::agent::dialogue::Speaker;
+    ///
+    /// let payload = Payload::new()
+    ///     .with_message(Speaker::System, "You are an AI assistant")
+    ///     .with_message(Speaker::user("Alice"), "Hello!");
+    /// ```
+    pub fn with_message(
+        self,
+        speaker: crate::agent::dialogue::Speaker,
+        content: impl Into<String>,
+    ) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.push(PayloadContent::Message {
+            speaker,
+            content: content.into(),
+        });
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
+    }
+
+    /// Creates a payload from multiple dialogue messages.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::agent::dialogue::Speaker;
+    ///
+    /// let payload = Payload::from_messages(vec![
+    ///     (Speaker::System, "You are a helpful assistant".to_string()),
+    ///     (Speaker::user("user1"), "What is Rust?".to_string()),
+    /// ]);
+    /// ```
+    pub fn from_messages(
+        messages: Vec<(crate::agent::dialogue::Speaker, String)>,
+    ) -> Self {
+        let contents = messages
+            .into_iter()
+            .map(|(speaker, content)| PayloadContent::Message { speaker, content })
+            .collect();
+
+        Self {
+            inner: Arc::new(PayloadInner { contents }),
+        }
+    }
+
     /// Returns all text contents concatenated with newlines.
     ///
     /// This is useful for agents that only support text input.
+    /// Note: This only returns Text variants, not Message variants.
     pub fn to_text(&self) -> String {
         self.inner
             .contents

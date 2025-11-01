@@ -83,7 +83,7 @@ impl BroadcastState {
                 // Store in MessageStore
                 let message = DialogueMessage::new(
                     self.current_turn,
-                    Speaker::participant(
+                    Speaker::agent(
                         participant_name.clone(),
                         participant.persona.role.clone(),
                     ),
@@ -92,7 +92,10 @@ impl BroadcastState {
                 dialogue.message_store.push(message);
 
                 let turn = DialogueTurn {
-                    participant_name: participant_name.clone(),
+                    speaker: Speaker::agent(
+                        participant_name.clone(),
+                        participant.persona.role.clone(),
+                    ),
                     content: content.clone(),
                 };
                 info!(

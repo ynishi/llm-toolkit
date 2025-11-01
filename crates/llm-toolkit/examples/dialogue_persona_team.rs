@@ -124,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   //   - content: String (the participant's response)");
     println!();
     println!("   for turn in turns {{");
-    println!("       println!(\"[{{}}]: {{}}\", turn.participant_name, turn.content);");
+    println!("       println!(\"[{{}}]: {{}}\", turn.speaker.name(), turn.content);");
     println!("   }}");
     println!();
     println!("---\n");
@@ -265,7 +265,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("   // In broadcast mode: all participants respond");
     println!("   for turn in &turns {{");
-    println!("       println!(\"[{{}}]:\", turn.participant_name);");
+    println!("       println!(\"[{{}}]:\", turn.speaker.name());");
     println!("       println!(\"{{}}\", turn.content);");
     println!("       println!();");
     println!("   }}");

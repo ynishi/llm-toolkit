@@ -109,22 +109,30 @@ impl DialogueMessage {
 ///
 /// # Design Notes
 ///
-/// - System: Generated prompts/instructions
-/// - Participant: Human or AI agent in the dialogue
-///
-/// TODO: Consider making role an enum for common roles (Engineer, Designer, etc.)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// - System: System-generated prompts/instructions
+/// - User: Human user input (with name and role)
+/// - Agent: AI agent with persona (name + role)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Speaker {
-    /// System-generated prompt
+    /// System-generated prompt or instruction
     System,
 
-    /// Participant in the dialogue
-    Participant {
-        /// Name of the participant
+    /// Human user
+    User {
+        /// Name of the user
         name: String,
 
-        /// Role/title of the participant
+        /// Role/title of the user (e.g., "Customer", "Admin", "Product Manager")
+        role: String,
+    },
+
+    /// AI agent with persona
+    Agent {
+        /// Name of the agent
+        name: String,
+
+        /// Role/title of the agent
         role: String,
     },
 }
@@ -134,24 +142,40 @@ impl Speaker {
     pub fn name(&self) -> &str {
         match self {
             Speaker::System => "System",
-            Speaker::Participant { name, .. } => name,
+            Speaker::User { name, .. } => name,
+            Speaker::Agent { name, .. } => name,
         }
     }
 
-    /// Returns the speaker's role (if participant).
+    /// Returns the speaker's role (if user or agent).
     pub fn role(&self) -> Option<&str> {
         match self {
             Speaker::System => None,
-            Speaker::Participant { role, .. } => Some(role),
+            Speaker::User { role, .. } => Some(role),
+            Speaker::Agent { role, .. } => Some(role),
         }
     }
 
-    /// Creates a new participant speaker.
-    pub fn participant(name: impl Into<String>, role: impl Into<String>) -> Self {
-        Self::Participant {
+    /// Creates a new user speaker.
+    pub fn user(name: impl Into<String>, role: impl Into<String>) -> Self {
+        Self::User {
             name: name.into(),
             role: role.into(),
         }
+    }
+
+    /// Creates a new agent speaker.
+    pub fn agent(name: impl Into<String>, role: impl Into<String>) -> Self {
+        Self::Agent {
+            name: name.into(),
+            role: role.into(),
+        }
+    }
+
+    /// Creates a new participant speaker (backward compatibility).
+    #[deprecated(note = "Use `agent()` instead")]
+    pub fn participant(name: impl Into<String>, role: impl Into<String>) -> Self {
+        Self::agent(name, role)
     }
 }
 
@@ -195,7 +219,7 @@ mod tests {
 
     #[test]
     fn test_participant_speaker() {
-        let speaker = Speaker::participant("Alice", "Engineer");
+        let speaker = Speaker::agent("Alice", "Engineer");
 
         assert_eq!(speaker.name(), "Alice");
         assert_eq!(speaker.role(), Some("Engineer"));
@@ -213,7 +237,7 @@ mod tests {
     fn test_message_serialization() {
         let msg = DialogueMessage::new(
             1,
-            Speaker::participant("Bob", "Designer"),
+            Speaker::agent("Bob", "Designer"),
             "Hello".to_string(),
         );
 
