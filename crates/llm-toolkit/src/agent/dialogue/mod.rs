@@ -688,11 +688,6 @@ impl Dialogue {
                     let messages = turn_input.to_messages();
                     let mut input_payload = Payload::from_messages(messages);
 
-                    // Add formatted text for agents that use to_text()
-                    let formatted_input =
-                        turn_input.to_prompt_with_formatter(&*self.context_formatter);
-                    input_payload = input_payload.with_text(formatted_input);
-
                     // Add Participants metadata
                     input_payload = input_payload.with_participants(participants_info.clone());
 
@@ -869,10 +864,6 @@ impl Dialogue {
             // Create payload with Messages (for structured dialogue history)
             let messages = turn_input.to_messages();
             let mut input_payload = Payload::from_messages(messages);
-
-            // Add formatted text for agents that use to_text()
-            let formatted_input = turn_input.to_prompt_with_formatter(&*self.context_formatter);
-            input_payload = input_payload.with_text(formatted_input);
 
             // Add Participants metadata
             input_payload = input_payload.with_participants(participants_info.clone());

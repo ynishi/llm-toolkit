@@ -173,7 +173,7 @@ where
         eprintln!("[HistoryAwareAgent] history_prompt: '{}'", history_prompt);
         drop(history);
 
-        // Extract current messages from intent
+        // Extract current messages from intent (these are the diff to be stored)
         let current_messages = intent.to_messages();
 
         #[cfg(test)]
@@ -181,34 +181,18 @@ where
             "[HistoryAwareAgent] current_messages count: {}",
             current_messages.len()
         );
-        #[cfg(test)]
-        eprintln!("[HistoryAwareAgent] to_text(): '{}'", intent.to_text());
 
-        // Get text for backward compatibility with agents that don't support messages
-        // If no text is available, format messages as text
-        let user_request = if intent.to_text().is_empty() && !current_messages.is_empty() {
-            current_messages
-                .iter()
-                .map(|(speaker, content)| format!("[{}]: {}", speaker.name(), content))
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            intent.to_text()
-        };
+        // Create payload: start with messages (preserving structure)
+        let mut final_payload = Payload::from_messages(current_messages.clone());
 
-        // Create combined prompt with history context
-        let combined_prompt = if history_prompt.is_empty() {
-            user_request.clone()
-        } else {
-            format!("{}{}", history_prompt, user_request)
-        };
+        // Add history as text (if exists)
+        if !history_prompt.is_empty() {
+            final_payload = final_payload.with_text(history_prompt);
+        }
 
-        // Create new payload with combined prompt while preserving messages and attachments
-        let mut final_payload = Payload::text(combined_prompt);
-
-        // Preserve messages structure
-        for (speaker, content) in &current_messages {
-            final_payload = final_payload.with_message(speaker.clone(), content.clone());
+        // Preserve participants
+        if let Some(participants) = intent.participants() {
+            final_payload = final_payload.with_participants(participants.clone());
         }
 
         // Preserve attachments

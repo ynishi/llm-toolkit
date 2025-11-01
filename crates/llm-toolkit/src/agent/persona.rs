@@ -234,13 +234,23 @@ fn format_participants_with_relation(
         .join("\n")
 }
 
-/// Formats messages with speaker information.
+/// Formats messages with speaker information and YOU/ME marking.
 ///
-/// Each message is formatted as "[Speaker]: content"
-fn format_messages(messages: &[(super::dialogue::Speaker, String)]) -> String {
+/// Each message is formatted as "[Speaker]: content" or "[Speaker (YOU)]: content"
+/// based on whether the speaker is the current persona.
+fn format_messages_with_relation(
+    messages: &[(super::dialogue::Speaker, String)],
+    self_name: &str,
+) -> String {
     messages
         .iter()
-        .map(|(speaker, content)| format!("[{}]: {}", speaker.name(), content))
+        .map(|(speaker, content)| {
+            if speaker.name() == self_name {
+                format!("[{} (YOU)]: {}", speaker.name(), content)
+            } else {
+                format!("[{}]: {}", speaker.name(), content)
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -304,38 +314,44 @@ where
         )
     )]
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
-        // 1. Extract and format participants with relation interpretation
+        // 1. Extract and format participants with relation interpretation (YOU/ME marking)
         let participants_text = if let Some(participants) = intent.participants() {
             format_participants_with_relation(participants, &self.persona.name)
         } else {
             String::new()
         };
 
-        // 2. Extract and format messages or use provided text
-        // If intent has Text (e.g., from HistoryAwareAgent with history), use it
-        // Otherwise, format Messages
+        // 2. Get history text from HistoryAwareAgent (if provided)
+        let history_text = intent.to_text();
+
+        // 3. Extract and format current messages (the diff) with YOU/ME marking
         let messages = intent.to_messages();
-        let current_content = if !intent.to_text().is_empty() {
-            // Use the provided text (may include history from HistoryAwareAgent)
-            intent.to_text()
-        } else if !messages.is_empty() {
-            // Format messages if no text provided
-            format!("# Current Messages\n{}", format_messages(&messages))
+        let current_messages_text = if !messages.is_empty() {
+            format!("# Current Messages\n{}", format_messages_with_relation(&messages, &self.persona.name))
         } else {
             String::new()
         };
 
-        // 3. Build structured prompt
+        // 4. Combine: History (from HistoryAwareAgent) + Current Messages (formatted here)
+        let current_content = if !history_text.is_empty() && !current_messages_text.is_empty() {
+            format!("{}\n\n{}", history_text, current_messages_text)
+        } else if !history_text.is_empty() {
+            history_text
+        } else {
+            current_messages_text
+        };
+
+        // 5. Build structured prompt
         let prompt_struct = PersonaAgentPrompt {
             persona: self.persona.clone(),
             participants: participants_text,
             current_content,
         };
 
-        // 4. Convert to text
+        // 6. Convert to text
         let prompt_text = prompt_struct.to_prompt();
 
-        // 5. Create payload with Text + Messages (preserved)
+        // 7. Create payload with Text + Messages (preserved)
         let mut final_payload = Payload::text(prompt_text);
 
         // Preserve messages structure
