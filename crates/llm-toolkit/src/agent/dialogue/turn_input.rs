@@ -183,7 +183,7 @@ impl ContextMessage {
 }
 
 /// Strategy for formatting turn input with context.
-pub trait ContextFormatter {
+pub trait ContextFormatter: Send {
     fn format(&self, input: &TurnInput) -> String;
 }
 
