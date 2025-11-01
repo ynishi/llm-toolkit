@@ -10,6 +10,10 @@
 // to work correctly in examples, tests, and bins
 extern crate self as llm_toolkit;
 
+// Re-export tracing for use by generated code from macros
+// Using extern crate to ensure it's accessible via absolute path
+pub extern crate tracing;
+
 /// A derive macro to implement the `ToPrompt` trait for structs.
 ///
 /// This macro is available only when the `derive` feature is enabled.
@@ -102,6 +106,9 @@ pub mod extract;
 pub mod intent;
 pub mod multimodal;
 pub mod prompt;
+
+#[cfg(feature = "agent")]
+pub mod observability;
 
 #[cfg(feature = "agent")]
 pub mod agent;

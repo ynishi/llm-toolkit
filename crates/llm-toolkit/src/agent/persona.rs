@@ -234,6 +234,14 @@ where
         &self.persona.role
     }
 
+    #[crate::tracing::instrument(
+        name = "persona_agent.execute",
+        skip(self, intent),
+        fields(
+            agent.name = %self.persona.name,
+            agent.role = %self.persona.role,
+        )
+    )]
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         let system_prompt = self.persona.to_prompt();
         let user_request = intent.to_text();

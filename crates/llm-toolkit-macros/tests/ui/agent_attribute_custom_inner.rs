@@ -1,4 +1,6 @@
 // Test for agent attribute macro with custom default_inner type
+// The trybuild environment needs explicit imports for all crates used by the macro expansion.
+extern crate tracing;
 
 use llm_toolkit::agent::{Agent, AgentError, Payload};
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,6 @@
 // Test for the new attribute macro #[agent(...)]
+// The trybuild environment needs explicit imports for all crates used by the macro expansion.
+extern crate tracing;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, llm_toolkit_macros::ToPrompt)]

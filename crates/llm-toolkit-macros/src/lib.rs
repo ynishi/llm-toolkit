@@ -4367,6 +4367,7 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the input struct
     let input = parse_macro_input!(item as DeriveInput);
     let struct_name = &input.ident;
+    let struct_name_str = struct_name.to_string();
     let vis = &input.vis;
 
     let expertise = agent_attrs
@@ -4668,6 +4669,7 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                     #enhanced_expertise
                 }
 
+                #[#crate_path::tracing::instrument(name = "agent.execute", skip_all, fields(agent.name = #struct_name_str, agent.expertise = self.expertise()))]
                 async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
                     // Prepend expertise to the payload
                     let enhanced_payload = intent.prepend_text(self.expertise());
