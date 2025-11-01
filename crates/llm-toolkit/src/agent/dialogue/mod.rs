@@ -2590,4 +2590,183 @@ mod tests {
         assert_eq!(history[0].speaker, Speaker::System);
         assert_eq!(history[1].speaker, Speaker::user("Bob", "Engineer"));
     }
+
+    /// Test to verify that partial_session correctly maintains history across multiple turns,
+    /// just like run() does.
+    #[tokio::test]
+    async fn test_partial_session_multi_turn_history_continuity() {
+        use crate::agent::persona::Persona;
+
+        // Create an echo agent that shows what it receives
+        #[derive(Clone)]
+        struct HistoryEchoAgent {
+            name: String,
+        }
+
+        #[async_trait]
+        impl Agent for HistoryEchoAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "History echo agent"
+            }
+
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                // Echo back input to verify what history was received
+                Ok(format!("{} received: {}", self.name, payload.to_text()))
+            }
+        }
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona = Persona {
+            name: "Agent1".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        dialogue.add_participant(
+            persona,
+            HistoryEchoAgent {
+                name: "Agent1".to_string(),
+            },
+        );
+
+        // Turn 1: Execute first turn with partial_session
+        let mut session1 = dialogue.partial_session("First message");
+        let mut turn1_results = Vec::new();
+        while let Some(Ok(turn)) = session1.next_turn().await {
+            turn1_results.push(turn);
+        }
+
+        assert_eq!(turn1_results.len(), 1);
+        assert!(turn1_results[0].content.contains("First message"));
+
+        // Verify Turn 1 is stored in history
+        assert_eq!(dialogue.history().len(), 2); // System + Agent1
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
+        assert_eq!(dialogue.history()[0].content, "First message");
+        assert_eq!(dialogue.history()[1].speaker.name(), "Agent1");
+
+        // Turn 2: Execute second turn with partial_session
+        let mut session2 = dialogue.partial_session("Second message");
+        let mut turn2_results = Vec::new();
+        while let Some(Ok(turn)) = session2.next_turn().await {
+            turn2_results.push(turn);
+        }
+
+        assert_eq!(turn2_results.len(), 1);
+
+        // Verify Turn 2 receives context from Turn 1 (via TurnInput formatting)
+        // The agent should see context from other participants (in this case, none because solo)
+        // but the current task should be "Second message"
+        assert!(turn2_results[0].content.contains("Second message"));
+
+        // Verify complete history contains both turns
+        assert_eq!(dialogue.history().len(), 4); // System + Agent1 + System + Agent1
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
+        assert_eq!(dialogue.history()[0].content, "First message");
+        assert_eq!(dialogue.history()[1].speaker.name(), "Agent1");
+        assert_eq!(dialogue.history()[2].speaker.name(), "System");
+        assert_eq!(dialogue.history()[2].content, "Second message");
+        assert_eq!(dialogue.history()[3].speaker.name(), "Agent1");
+
+        // Verify current_turn increments correctly
+        assert_eq!(dialogue.message_store.current_turn(), 2);
+    }
+
+    /// Test that partial_session multi-turn behavior matches run() multi-turn behavior
+    #[tokio::test]
+    async fn test_partial_session_vs_run_multi_turn_equivalence() {
+        use crate::agent::persona::Persona;
+
+        #[derive(Clone)]
+        struct SimpleAgent {
+            response: String,
+        }
+
+        #[async_trait]
+        impl Agent for SimpleAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Simple agent"
+            }
+
+            fn name(&self) -> String {
+                "SimpleAgent".to_string()
+            }
+
+            async fn execute(&self, _payload: Payload) -> Result<Self::Output, AgentError> {
+                Ok(self.response.clone())
+            }
+        }
+
+        let persona = Persona {
+            name: "Agent".to_string(),
+            role: "Tester".to_string(),
+            background: "Test".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        // Test with run()
+        let mut dialogue_run = Dialogue::broadcast();
+        dialogue_run.add_participant(
+            persona.clone(),
+            SimpleAgent {
+                response: "Response".to_string(),
+            },
+        );
+
+        dialogue_run.run("Turn 1").await.unwrap();
+        dialogue_run.run("Turn 2").await.unwrap();
+
+        let history_run = dialogue_run.history();
+
+        // Test with partial_session
+        let mut dialogue_partial = Dialogue::broadcast();
+        dialogue_partial.add_participant(
+            persona,
+            SimpleAgent {
+                response: "Response".to_string(),
+            },
+        );
+
+        let mut session1 = dialogue_partial.partial_session("Turn 1");
+        while let Some(_) = session1.next_turn().await {}
+
+        let mut session2 = dialogue_partial.partial_session("Turn 2");
+        while let Some(_) = session2.next_turn().await {}
+
+        let history_partial = dialogue_partial.history();
+
+        // Both should have identical history structure
+        assert_eq!(history_run.len(), history_partial.len());
+        assert_eq!(
+            dialogue_run.message_store.current_turn(),
+            dialogue_partial.message_store.current_turn()
+        );
+
+        // Verify both have the same message structure
+        for (i, (run_msg, partial_msg)) in
+            history_run.iter().zip(history_partial.iter()).enumerate()
+        {
+            assert_eq!(
+                run_msg.speaker.name(),
+                partial_msg.speaker.name(),
+                "Speaker mismatch at index {}",
+                i
+            );
+            assert_eq!(
+                run_msg.content, partial_msg.content,
+                "Content mismatch at index {}",
+                i
+            );
+        }
+    }
 }
