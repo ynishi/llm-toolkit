@@ -208,6 +208,69 @@ impl PersonaTeam {
     }
 }
 
+/// Formats participants information with relation interpretation.
+///
+/// The current agent (self) is marked as "YOU" or "ME", while other participants
+/// are listed with their speaker information.
+///
+/// # Arguments
+///
+/// * `participants` - List of all participants in the dialogue
+/// * `self_name` - Name of the current agent (persona)
+fn format_participants_with_relation(
+    participants: &[super::dialogue::ParticipantInfo],
+    self_name: &str,
+) -> String {
+    participants
+        .iter()
+        .map(|p| {
+            if p.name == self_name {
+                format!(
+                    "- **{} (YOU)** - {}: {}",
+                    p.name, p.role, p.description
+                )
+            } else {
+                format!("- **{}** - {}: {}", p.name, p.role, p.description)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Formats messages with speaker information.
+///
+/// Each message is formatted as "[Speaker]: content"
+fn format_messages(messages: &[(super::dialogue::Speaker, String)]) -> String {
+    messages
+        .iter()
+        .map(|(speaker, content)| format!("[{}]: {}", speaker.name(), content))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Structured prompt for PersonaAgent that combines persona information,
+/// participants context, and current messages.
+///
+/// This structure allows PersonaAgent to build prompts in a type-safe way
+/// and defer the actual text formatting until needed.
+#[derive(ToPrompt, Serialize)]
+#[prompt(template = r#"{{persona}}{% if participants %}
+
+# Participants
+{{participants}}
+{% endif %}{% if current_messages %}
+
+# Current Messages
+{{current_messages}}
+{% endif %}"#)]
+struct PersonaAgentPrompt {
+    persona: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    participants: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    current_messages: String,
+}
+
 pub struct PersonaAgent<T: Agent> {
     inner_agent: T,
     persona: Persona,
@@ -240,16 +303,45 @@ where
         fields(
             agent.name = %self.persona.name,
             agent.role = %self.persona.role,
+            has_participants = intent.participants().is_some(),
+            message_count = intent.to_messages().len(),
         )
     )]
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
-        let system_prompt = self.persona.to_prompt();
-        let user_request = intent.to_text();
+        // 1. Extract and format participants with relation interpretation
+        let participants_text = if let Some(participants) = intent.participants() {
+            format_participants_with_relation(participants, &self.persona.name)
+        } else {
+            String::new()
+        };
 
-        let final_prompt = format!("{}\n\n# Request\n{}", system_prompt, user_request);
+        // 2. Extract and format messages
+        let messages = intent.to_messages();
+        let current_messages_text = if messages.is_empty() {
+            String::new()
+        } else {
+            format_messages(&messages)
+        };
 
-        let mut final_payload = Payload::text(final_prompt);
+        // 3. Build structured prompt
+        let prompt_struct = PersonaAgentPrompt {
+            persona: self.persona.to_prompt(),
+            participants: participants_text,
+            current_messages: current_messages_text,
+        };
 
+        // 4. Convert to text
+        let prompt_text = prompt_struct.to_prompt();
+
+        // 5. Create payload with Text + Messages (preserved)
+        let mut final_payload = Payload::text(prompt_text);
+
+        // Preserve messages structure
+        for (speaker, content) in messages {
+            final_payload = final_payload.with_message(speaker, content);
+        }
+
+        // Preserve attachments
         for content in intent.contents() {
             if let PayloadContent::Attachment(attachment) = content {
                 final_payload = final_payload.with_attachment(attachment.clone());
@@ -424,5 +516,175 @@ mod tests {
         assert!(prompt.contains("Persona Team Generation Task"));
         assert!(prompt.contains("Product development meeting"));
         assert!(prompt.contains("PO, Designer, Engineer"));
+    }
+
+    #[tokio::test]
+    async fn persona_agent_formats_participants_with_self_as_you() {
+        use crate::agent::dialogue::ParticipantInfo;
+
+        let persona = Persona {
+            name: "Alice".to_string(),
+            role: "PM".to_string(),
+            background: "Product manager".to_string(),
+            communication_style: "Strategic".to_string(),
+        };
+
+        let participants = vec![
+            ParticipantInfo::new(
+                "Alice".to_string(),
+                "PM".to_string(),
+                "Product manager".to_string(),
+            ),
+            ParticipantInfo::new(
+                "Bob".to_string(),
+                "Engineer".to_string(),
+                "Backend developer".to_string(),
+            ),
+        ];
+
+        let base_agent = RecordingAgent::new("response".to_string());
+        let persona_agent = PersonaAgent::new(base_agent.clone(), persona);
+
+        let payload = Payload::text("Task").with_participants(participants);
+
+        let _ = persona_agent.execute(payload).await.unwrap();
+
+        let call = base_agent.last_call().await.unwrap();
+        let call_text = call.to_text();
+
+        // Alice should be marked as "YOU"
+        assert!(call_text.contains("Alice (YOU)"));
+        // Bob should not be marked as "YOU"
+        assert!(call_text.contains("**Bob**"));
+        assert!(!call_text.contains("Bob (YOU)"));
+    }
+
+    #[tokio::test]
+    async fn persona_agent_formats_messages() {
+        use crate::agent::dialogue::Speaker;
+
+        let persona = Persona {
+            name: "Agent".to_string(),
+            role: "Assistant".to_string(),
+            background: "Helper".to_string(),
+            communication_style: "Friendly".to_string(),
+        };
+
+        let base_agent = RecordingAgent::new("response".to_string());
+        let persona_agent = PersonaAgent::new(base_agent.clone(), persona);
+
+        let payload = Payload::from_messages(vec![
+            (Speaker::System, "System instruction".to_string()),
+            (Speaker::user("Alice", "PM"), "User message".to_string()),
+        ]);
+
+        let _ = persona_agent.execute(payload).await.unwrap();
+
+        let call = base_agent.last_call().await.unwrap();
+        let call_text = call.to_text();
+
+        // Messages should be formatted with speaker names
+        assert!(call_text.contains("[System]: System instruction"));
+        assert!(call_text.contains("[Alice]: User message"));
+    }
+
+    #[tokio::test]
+    async fn persona_agent_preserves_messages_structure() {
+        use crate::agent::dialogue::Speaker;
+
+        let persona = Persona {
+            name: "Agent".to_string(),
+            role: "Assistant".to_string(),
+            background: "Helper".to_string(),
+            communication_style: "Friendly".to_string(),
+        };
+
+        let base_agent = RecordingAgent::new("response".to_string());
+        let persona_agent = PersonaAgent::new(base_agent.clone(), persona);
+
+        let original_messages = vec![
+            (Speaker::System, "System msg".to_string()),
+            (Speaker::user("Alice", "PM"), "User msg".to_string()),
+        ];
+
+        let payload = Payload::from_messages(original_messages.clone());
+
+        let _ = persona_agent.execute(payload).await.unwrap();
+
+        let call = base_agent.last_call().await.unwrap();
+        let received_messages = call.to_messages();
+
+        // Messages should be preserved in the payload
+        assert_eq!(received_messages.len(), original_messages.len());
+        assert_eq!(received_messages[0].0, Speaker::System);
+        assert_eq!(received_messages[0].1, "System msg");
+        assert_eq!(received_messages[1].0, Speaker::user("Alice", "PM"));
+        assert_eq!(received_messages[1].1, "User msg");
+    }
+
+    #[tokio::test]
+    async fn persona_agent_full_integration() {
+        use crate::agent::dialogue::{ParticipantInfo, Speaker};
+
+        let persona = Persona {
+            name: "Alice".to_string(),
+            role: "PM".to_string(),
+            background: "Product manager with 5 years experience".to_string(),
+            communication_style: "Strategic and data-driven".to_string(),
+        };
+
+        let participants = vec![
+            ParticipantInfo::new(
+                "Alice".to_string(),
+                "PM".to_string(),
+                "Product manager".to_string(),
+            ),
+            ParticipantInfo::new(
+                "Bob".to_string(),
+                "Engineer".to_string(),
+                "Backend developer".to_string(),
+            ),
+        ];
+
+        let messages = vec![
+            (Speaker::System, "Discuss feature priorities".to_string()),
+            (
+                Speaker::user("Bob", "Engineer"),
+                "I suggest we focus on performance".to_string(),
+            ),
+        ];
+
+        let base_agent = RecordingAgent::new("Good idea".to_string());
+        let persona_agent = PersonaAgent::new(base_agent.clone(), persona);
+
+        let payload = Payload::from_messages(messages.clone())
+            .with_participants(participants);
+
+        let result = persona_agent.execute(payload).await.unwrap();
+        assert_eq!(result, "Good idea");
+
+        let call = base_agent.last_call().await.unwrap();
+        let call_text = call.to_text();
+
+        // Debug: print actual output
+        println!("=== Actual call_text ===\n{}\n=== End ===", call_text);
+
+        // Verify all components are present
+        assert!(call_text.contains("# Persona Profile"));
+        assert!(call_text.contains("**Name**: Alice"));
+        assert!(call_text.contains("# Participants"));
+        assert!(call_text.contains("Alice (YOU)"));
+        assert!(call_text.contains("**Bob**"));
+        assert!(call_text.contains("# Current Messages"));
+        assert!(call_text.contains("[System]: Discuss feature priorities"));
+        assert!(call_text.contains("[Bob]: I suggest we focus on performance"));
+
+        // Verify messages are preserved (Text is excluded, only Message variants)
+        let received_messages = call.to_messages();
+        assert_eq!(received_messages.len(), 2);
+        assert_eq!(received_messages[0].0, Speaker::System);
+        assert_eq!(received_messages[0].1, "Discuss feature priorities");
+        assert_eq!(received_messages[1].0, Speaker::user("Bob", "Engineer"));
+        assert_eq!(received_messages[1].1, "I suggest we focus on performance");
     }
 }

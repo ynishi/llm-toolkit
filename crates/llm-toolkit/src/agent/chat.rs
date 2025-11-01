@@ -44,6 +44,8 @@ use serde::{Serialize, de::DeserializeOwned};
 pub struct Chat<A: Agent> {
     agent: A,
     with_history: bool,
+    /// Identity information for history attribution (if persona is set)
+    identity: Option<(String, String)>, // (name, role)
 }
 
 impl<A: Agent> Chat<A> {
@@ -64,6 +66,7 @@ impl<A: Agent> Chat<A> {
         Self {
             agent,
             with_history: true,
+            identity: None,
         }
     }
 
@@ -91,43 +94,11 @@ impl<A: Agent> Chat<A> {
     where
         A::Output: Send,
     {
+        let identity = Some((persona.name.clone(), persona.role.clone()));
         Chat {
             agent: PersonaAgent::new(self.agent, persona),
             with_history: self.with_history,
-        }
-    }
-
-    /// Wraps the current agent with a `PersonaAgent` for runtime-generated personas.
-    ///
-    /// This is an alias for `with_persona()` and is kept for backwards compatibility.
-    /// Since `Persona` now uses owned `String` fields, both methods are equivalent.
-    ///
-    /// # Arguments
-    ///
-    /// * `persona` - The persona configuration to apply
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let persona = Persona {
-    ///     name: "Dr. Smith".to_string(),
-    ///     role: "Security Expert".to_string(),
-    ///     background: "20 years in enterprise security...".to_string(),
-    ///     communication_style: "Detail-oriented and thorough...".to_string(),
-    /// };
-    /// let chat = Chat::new(agent).with_persona_owned(persona);
-    /// ```
-    #[deprecated(
-        since = "0.34.0",
-        note = "Use `with_persona` instead. Both methods are now equivalent."
-    )]
-    pub fn with_persona_owned(self, persona: Persona) -> Chat<PersonaAgent<A>>
-    where
-        A::Output: Send,
-    {
-        Chat {
-            agent: PersonaAgent::new(self.agent, persona),
-            with_history: self.with_history,
+            identity,
         }
     }
 
@@ -179,7 +150,12 @@ impl<A: Agent> Chat<A> {
         A::Output: 'static + Send,
     {
         if self.with_history {
-            Box::new(HistoryAwareAgent::new(self.agent))
+            match self.identity {
+                Some((name, role)) => {
+                    Box::new(HistoryAwareAgent::new_with_identity(self.agent, name, role))
+                }
+                None => Box::new(HistoryAwareAgent::new(self.agent)),
+            }
         } else {
             Box::new(self.agent)
         }

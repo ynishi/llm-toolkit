@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Information about a dialogue participant.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParticipantInfo {
     /// Participant's name
     pub name: String,

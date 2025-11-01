@@ -24,6 +24,13 @@ pub enum PayloadContent {
         speaker: crate::agent::dialogue::Speaker,
         content: String,
     },
+
+    /// Dialogue participants information
+    ///
+    /// Contains metadata about all participants in a dialogue, including their
+    /// names, roles, and background information. This allows agents to understand
+    /// the context of who they're interacting with.
+    Participants(Vec<crate::agent::dialogue::ParticipantInfo>),
 }
 
 /// Inner payload data, wrapped in Arc for efficient cloning.
@@ -288,10 +295,64 @@ impl Payload {
         }
     }
 
+    /// Adds participants information to this payload.
+    ///
+    /// This provides context about all participants in a dialogue, which can be
+    /// used by agents to understand the conversation context and relationships.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::agent::dialogue::ParticipantInfo;
+    ///
+    /// let participants = vec![
+    ///     ParticipantInfo::new("Alice".to_string(), "PM".to_string(), "Product manager".to_string()),
+    ///     ParticipantInfo::new("Bob".to_string(), "Engineer".to_string(), "Backend developer".to_string()),
+    /// ];
+    ///
+    /// let payload = Payload::text("Current task")
+    ///     .with_participants(participants);
+    /// ```
+    pub fn with_participants(
+        self,
+        participants: Vec<crate::agent::dialogue::ParticipantInfo>,
+    ) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.push(PayloadContent::Participants(participants));
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
+    }
+
+    /// Returns the participants information if present.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// let payload = Payload::text("Task")
+    ///     .with_participants(participants);
+    ///
+    /// if let Some(participants) = payload.participants() {
+    ///     println!("Found {} participants", participants.len());
+    /// }
+    /// ```
+    pub fn participants(&self) -> Option<&Vec<crate::agent::dialogue::ParticipantInfo>> {
+        self.inner.contents.iter().find_map(|c| match c {
+            PayloadContent::Participants(p) => Some(p),
+            _ => None,
+        })
+    }
+
     /// Returns all text contents concatenated with newlines.
     ///
     /// This is useful for agents that only support text input.
     /// Note: This only returns Text variants, not Message variants.
+    /// For Message-aware processing, use `to_messages()` instead.
     pub fn to_text(&self) -> String {
         self.inner
             .contents
@@ -302,6 +363,47 @@ impl Payload {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Returns all messages (both Text and Message variants) as a vector of tuples.
+    ///
+    /// This preserves the structure of dialogue messages with speaker information.
+    /// - `Text` variants are converted to `(Speaker::System, content)`
+    /// - `Message` variants preserve their original speaker and content
+    /// - `Attachment` variants are not included
+    ///
+    /// This is useful for agents that need to understand the message structure
+    /// and maintain proper conversation history.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::agent::dialogue::Speaker;
+    ///
+    /// let payload = Payload::from_messages(vec![
+    ///     (Speaker::System, "System instruction".to_string()),
+    ///     (Speaker::user("Alice", "PM"), "What should we build?".to_string()),
+    /// ]);
+    ///
+    /// let messages = payload.to_messages();
+    /// assert_eq!(messages.len(), 2);
+    /// assert_eq!(messages[0].0, Speaker::System);
+    /// assert_eq!(messages[1].0, Speaker::user("Alice", "PM"));
+    /// ```
+    pub fn to_messages(&self) -> Vec<(crate::agent::dialogue::Speaker, String)> {
+        self.inner
+            .contents
+            .iter()
+            .filter_map(|c| match c {
+                PayloadContent::Message { speaker, content } => {
+                    Some((speaker.clone(), content.clone()))
+                }
+                PayloadContent::Text(_)
+                | PayloadContent::Attachment(_)
+                | PayloadContent::Participants(_) => None,
+            })
+            .collect()
     }
 
     /// Returns true if this payload contains only text.
@@ -668,5 +770,85 @@ mod tests {
 
         assert_eq!(merged.contents().len(), 1);
         assert_eq!(merged.to_text(), "Content");
+    }
+
+    #[test]
+    fn test_to_messages_with_text_variants() {
+        let payload = Payload::text("First").with_text("Second");
+
+        // Text variants are NOT included in to_messages()
+        let messages = payload.to_messages();
+        assert_eq!(messages.len(), 0);
+
+        // Text should be retrievable via to_text()
+        assert_eq!(payload.to_text(), "First\nSecond");
+    }
+
+    #[test]
+    fn test_to_messages_with_message_variants() {
+        use crate::agent::dialogue::Speaker;
+
+        let payload = Payload::from_messages(vec![
+            (Speaker::System, "System message".to_string()),
+            (Speaker::user("Alice", "PM"), "User message".to_string()),
+        ]);
+
+        let messages = payload.to_messages();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].0, Speaker::System);
+        assert_eq!(messages[0].1, "System message");
+        assert_eq!(messages[1].0, Speaker::user("Alice", "PM"));
+        assert_eq!(messages[1].1, "User message");
+    }
+
+    #[test]
+    fn test_to_messages_mixed_content() {
+        use crate::agent::dialogue::Speaker;
+        use crate::attachment::Attachment;
+
+        let payload = Payload::text("Plain text")
+            .with_message(Speaker::user("Bob", "Dev"), "User input")
+            .with_attachment(Attachment::local("/test.png"))
+            .with_text("More text");
+
+        // to_messages() returns only Message variants (Text and Attachment excluded)
+        let messages = payload.to_messages();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].0, Speaker::user("Bob", "Dev"));
+        assert_eq!(messages[0].1, "User input");
+
+        // to_text() returns only Text variants
+        assert_eq!(payload.to_text(), "Plain text\nMore text");
+    }
+
+    #[test]
+    fn test_to_text_does_not_include_messages() {
+        use crate::agent::dialogue::Speaker;
+
+        let payload = Payload::from_messages(vec![
+            (Speaker::System, "System message".to_string()),
+            (Speaker::user("Alice", "PM"), "User message".to_string()),
+        ]);
+
+        // to_text() should return empty string (only Text variants)
+        assert_eq!(payload.to_text(), "");
+    }
+
+    #[test]
+    fn test_to_text_vs_to_messages_separation() {
+        use crate::agent::dialogue::Speaker;
+
+        let payload = Payload::text("Plain text 1")
+            .with_text("Plain text 2")
+            .with_message(Speaker::System, "Message 1");
+
+        // to_text() returns only Text variants
+        assert_eq!(payload.to_text(), "Plain text 1\nPlain text 2");
+
+        // to_messages() returns only Message variants (Text excluded)
+        let messages = payload.to_messages();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].0, Speaker::System);
+        assert_eq!(messages[0].1, "Message 1");
     }
 }

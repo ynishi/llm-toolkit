@@ -1,14 +1,57 @@
+use super::dialogue::Speaker;
 use super::{Agent, AgentError, Payload, PayloadContent};
 use async_trait::async_trait;
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// A single entry in the conversation history.
+///
+/// Each entry represents one message in the dialogue, with speaker information
+/// and the message content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryEntry {
+    pub speaker: Speaker,
+    pub content: String,
+}
+
+impl HistoryEntry {
+    /// Creates a new history entry.
+    pub fn new(speaker: Speaker, content: String) -> Self {
+        Self { speaker, content }
+    }
+
+    /// Creates a history entry for a user message.
+    pub fn user(name: impl Into<String>, role: impl Into<String>, content: String) -> Self {
+        Self {
+            speaker: Speaker::user(name, role),
+            content,
+        }
+    }
+
+    /// Creates a history entry for a system message.
+    pub fn system(content: String) -> Self {
+        Self {
+            speaker: Speaker::System,
+            content,
+        }
+    }
+
+    /// Formats this entry for display in conversation history.
+    pub fn format(&self) -> String {
+        format!("[{}]: {}", self.speaker.name(), self.content)
+    }
+}
+
 /// An agent wrapper that maintains dialogue history across multiple executions.
 ///
 /// This agent wraps any inner agent and automatically maintains a history of all
-/// interactions (user requests and agent responses). The history is prepended to
-/// each new request, allowing the agent to have context of previous interactions.
+/// interactions (messages with speaker information and agent responses).
+/// The history is prepended to each new request, allowing the agent to have
+/// context of previous interactions.
+///
+/// The history preserves the full message structure (Speaker + content) for
+/// proper conversation context.
 ///
 /// # Example
 ///
@@ -26,11 +69,19 @@ use tokio::sync::Mutex;
 /// ```
 pub struct HistoryAwareAgent<T: Agent> {
     inner_agent: T,
-    dialogue_history: Arc<Mutex<Vec<String>>>,
+    dialogue_history: Arc<Mutex<Vec<HistoryEntry>>>,
+    /// Name of this agent (for attributing responses in history)
+    self_name: Option<String>,
+    /// Role of this agent (for attributing responses in history)
+    self_role: Option<String>,
 }
 
 impl<T: Agent> HistoryAwareAgent<T> {
     /// Creates a new history-aware agent wrapping the given inner agent.
+    ///
+    /// This version does not set identity information, so responses will be
+    /// attributed as System messages. For proper speaker attribution in dialogue
+    /// contexts, use `new_with_identity` instead.
     ///
     /// # Arguments
     ///
@@ -39,6 +90,43 @@ impl<T: Agent> HistoryAwareAgent<T> {
         Self {
             inner_agent,
             dialogue_history: Arc::new(Mutex::new(Vec::new())),
+            self_name: None,
+            self_role: None,
+        }
+    }
+
+    /// Creates a new history-aware agent with identity information.
+    ///
+    /// This allows the agent to properly attribute its responses in the conversation
+    /// history with the given name and role.
+    ///
+    /// # Arguments
+    ///
+    /// * `inner_agent` - The agent to wrap with history tracking
+    /// * `name` - The name of this agent
+    /// * `role` - The role of this agent
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use llm_toolkit::agent::history::HistoryAwareAgent;
+    ///
+    /// let agent = HistoryAwareAgent::new_with_identity(
+    ///     base_agent,
+    ///     "Alice".to_string(),
+    ///     "PM".to_string()
+    /// );
+    /// ```
+    pub fn new_with_identity(
+        inner_agent: T,
+        name: impl Into<String>,
+        role: impl Into<String>,
+    ) -> Self {
+        Self {
+            inner_agent,
+            dialogue_history: Arc::new(Mutex::new(Vec::new())),
+            self_name: Some(name.into()),
+            self_role: Some(role.into()),
         }
     }
 }
@@ -69,11 +157,19 @@ where
         let history_prompt = if history.is_empty() {
             String::new()
         } else {
-            format!("# Previous Conversation\n{}\n\n", history.join("\n"))
+            let formatted_history = history
+                .iter()
+                .map(|entry| entry.format())
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("# Previous Conversation\n{}\n\n", formatted_history)
         };
         drop(history);
 
-        // Get user request text
+        // Extract current messages from intent
+        let current_messages = intent.to_messages();
+
+        // Get text for backward compatibility with agents that don't support messages
         let user_request = intent.to_text();
 
         // Create combined prompt with history context
@@ -83,9 +179,15 @@ where
             format!("{}{}", history_prompt, user_request)
         };
 
-        // Create new payload with combined prompt while preserving attachments
+        // Create new payload with combined prompt while preserving messages and attachments
         let mut final_payload = Payload::text(combined_prompt);
 
+        // Preserve messages structure
+        for (speaker, content) in &current_messages {
+            final_payload = final_payload.with_message(speaker.clone(), content.clone());
+        }
+
+        // Preserve attachments
         for content in intent.contents() {
             if let PayloadContent::Attachment(attachment) = content {
                 final_payload = final_payload.with_attachment(attachment.clone());
@@ -95,13 +197,26 @@ where
         // Execute the inner agent
         let response = self.inner_agent.execute(final_payload).await?;
 
-        // Add to history after execution
+        // Add current messages to history
         let mut history = self.dialogue_history.lock().await;
-        history.push(format!("User: {}", user_request));
-        history.push(format!(
-            "Assistant: {}",
-            format_response_for_history(&response)
-        ));
+        for (speaker, content) in current_messages {
+            history.push(HistoryEntry::new(speaker, content));
+        }
+
+        // Add assistant response to history with proper attribution
+        let response_entry = match (&self.self_name, &self.self_role) {
+            (Some(name), Some(role)) => {
+                HistoryEntry::new(
+                    Speaker::agent(name.clone(), role.clone()),
+                    format_response_for_history(&response),
+                )
+            }
+            _ => {
+                // Fallback to System if no identity is set
+                HistoryEntry::system(format_response_for_history(&response))
+            }
+        };
+        history.push(response_entry);
 
         Ok(response)
     }
@@ -171,8 +286,8 @@ mod tests {
         let base_agent = RecordingAgent::new(String::from("Response 1"));
         let history_agent = HistoryAwareAgent::new(base_agent.clone());
 
-        // First call
-        let payload1 = Payload::text("What is Rust?");
+        // First call - use from_messages instead of text
+        let payload1 = Payload::from_messages(vec![(Speaker::user("User", "User"), "What is Rust?".to_string())]);
         let response1 = history_agent.execute(payload1).await.unwrap();
         assert_eq!(response1, "Response 1");
 
@@ -184,9 +299,11 @@ mod tests {
         let history_agent2 = HistoryAwareAgent {
             inner_agent: base_agent2.clone(),
             dialogue_history: history_agent.dialogue_history.clone(),
+            self_name: None,
+            self_role: None,
         };
 
-        let payload2 = Payload::text("Tell me more");
+        let payload2 = Payload::from_messages(vec![(Speaker::user("User", "User"), "Tell me more".to_string())]);
         let response2 = history_agent2.execute(payload2).await.unwrap();
         assert_eq!(response2, "Response 2");
 
@@ -197,8 +314,8 @@ mod tests {
 
         // The second call should include the previous conversation
         assert!(received_text.contains("Previous Conversation"));
-        assert!(received_text.contains("User: What is Rust?"));
-        assert!(received_text.contains("Assistant: \"Response 1\""));
+        assert!(received_text.contains("[User]: What is Rust?"));
+        assert!(received_text.contains("[System]: \"Response 1\""));
         assert!(received_text.contains("Tell me more"));
     }
 
@@ -230,7 +347,7 @@ mod tests {
         let base_agent = RecordingAgent::new(String::from("First response"));
         let history_agent = HistoryAwareAgent::new(base_agent.clone());
 
-        let payload = Payload::text("Hello");
+        let payload = Payload::from_messages(vec![(Speaker::user("User", "User"), "Hello".to_string())]);
         let _ = history_agent.execute(payload).await.unwrap();
 
         // First call should not have history prefix
@@ -240,7 +357,7 @@ mod tests {
 
         // Should not contain "Previous Conversation" since it's the first call
         assert!(!received_text.contains("Previous Conversation"));
-        assert_eq!(received_text, "Hello");
+        assert!(received_text.contains("Hello"));
     }
 
     #[tokio::test]
