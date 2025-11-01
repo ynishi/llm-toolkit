@@ -480,8 +480,7 @@ mod tests {
 
     #[test]
     fn test_prepend_system() {
-        let payload = Payload::text("User question")
-            .prepend_system("IMPORTANT: Be concise.");
+        let payload = Payload::text("User question").prepend_system("IMPORTANT: Be concise.");
 
         assert_eq!(payload.contents().len(), 2);
         // First element should be a System message
