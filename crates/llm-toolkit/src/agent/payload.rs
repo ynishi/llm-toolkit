@@ -156,6 +156,57 @@ impl Payload {
         }
     }
 
+    /// Prepends a dialogue message to the beginning of this payload.
+    ///
+    /// This is useful for adding system instructions or context messages
+    /// with explicit speaker attribution before the existing content.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::agent::dialogue::Speaker;
+    ///
+    /// let payload = Payload::text("User question")
+    ///     .prepend_message(Speaker::System, "Keep responses concise.");
+    /// ```
+    pub fn prepend_message(
+        self,
+        speaker: crate::agent::dialogue::Speaker,
+        content: impl Into<String>,
+    ) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.insert(
+            0,
+            PayloadContent::Message {
+                speaker,
+                content: content.into(),
+            },
+        );
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
+    }
+
+    /// Prepends a system message to the beginning of this payload.
+    ///
+    /// This is a convenience method equivalent to `prepend_message(Speaker::System, content)`.
+    /// Useful for adding system-level instructions or constraints.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// let payload = Payload::text("User question")
+    ///     .prepend_system("IMPORTANT: Keep responses under 300 characters.");
+    /// ```
+    pub fn prepend_system(self, instruction: impl Into<String>) -> Self {
+        self.prepend_message(crate::agent::dialogue::Speaker::System, instruction)
+    }
+
     /// Merges another payload's contents into this one.
     ///
     /// This appends all content items from the other payload to the end of this payload's
@@ -403,6 +454,78 @@ mod tests {
         assert!(matches!(
             &payload.contents()[0],
             PayloadContent::Text(s) if s == "System instructions"
+        ));
+    }
+
+    #[test]
+    fn test_prepend_message() {
+        use crate::agent::dialogue::Speaker;
+
+        let payload = Payload::text("User question")
+            .prepend_message(Speaker::System, "Keep responses concise.");
+
+        assert_eq!(payload.contents().len(), 2);
+        // First element should be the prepended message
+        assert!(matches!(
+            &payload.contents()[0],
+            PayloadContent::Message { speaker, content }
+                if matches!(speaker, Speaker::System) && content == "Keep responses concise."
+        ));
+        // Second element should be the original text
+        assert!(matches!(
+            &payload.contents()[1],
+            PayloadContent::Text(s) if s == "User question"
+        ));
+    }
+
+    #[test]
+    fn test_prepend_system() {
+        let payload = Payload::text("User question")
+            .prepend_system("IMPORTANT: Be concise.");
+
+        assert_eq!(payload.contents().len(), 2);
+        // First element should be a System message
+        assert!(matches!(
+            &payload.contents()[0],
+            PayloadContent::Message { speaker, content }
+                if matches!(speaker, crate::agent::dialogue::Speaker::System)
+                && content == "IMPORTANT: Be concise."
+        ));
+    }
+
+    #[test]
+    fn test_prepend_message_with_attachments() {
+        use crate::agent::dialogue::Speaker;
+        use crate::attachment::Attachment;
+
+        let payload = Payload::text("User question")
+            .with_attachment(Attachment::local("/test.png"))
+            .prepend_message(Speaker::System, "Analyze this image concisely.");
+
+        assert_eq!(payload.contents().len(), 3);
+        assert!(payload.has_attachments());
+        // First element should be the prepended message
+        assert!(matches!(
+            &payload.contents()[0],
+            PayloadContent::Message { speaker, .. } if matches!(speaker, Speaker::System)
+        ));
+    }
+
+    #[test]
+    fn test_prepend_system_chain() {
+        let payload = Payload::text("User question")
+            .prepend_system("Second instruction")
+            .prepend_system("First instruction");
+
+        assert_eq!(payload.contents().len(), 3);
+        // Should be in FIFO order: First, Second, User question
+        assert!(matches!(
+            &payload.contents()[0],
+            PayloadContent::Message { content, .. } if content == "First instruction"
+        ));
+        assert!(matches!(
+            &payload.contents()[1],
+            PayloadContent::Message { content, .. } if content == "Second instruction"
         ));
     }
 
