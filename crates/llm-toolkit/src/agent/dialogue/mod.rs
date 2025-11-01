@@ -788,13 +788,14 @@ impl Dialogue {
         initial_prompt: impl Into<Payload>,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
         let payload: Payload = initial_prompt.into();
-        let prompt_text = payload.to_text();
         let current_turn = self.message_store.current_turn() + 1;
 
-        // 1. Store system message
-        let system_message =
-            DialogueMessage::new(current_turn, Speaker::System, prompt_text.clone());
-        self.message_store.push(system_message);
+        // 1. Extract and store messages from payload
+        let (input_messages, prompt_text) = self.extract_messages_from_payload(&payload, current_turn);
+
+        for msg in input_messages {
+            self.message_store.push(msg);
+        }
 
         // 2. Build participant list
         let participants_info: Vec<ParticipantInfo> = self
@@ -908,13 +909,14 @@ impl Dialogue {
         initial_prompt: impl Into<Payload>,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
         let payload: Payload = initial_prompt.into();
-        let prompt_text = payload.to_text();
         let current_turn = self.message_store.current_turn() + 1;
 
-        // 1. Store system message
-        let system_message =
-            DialogueMessage::new(current_turn, Speaker::System, prompt_text.clone());
-        self.message_store.push(system_message);
+        // 1. Extract and store messages from payload
+        let (input_messages, prompt_text) = self.extract_messages_from_payload(&payload, current_turn);
+
+        for msg in input_messages {
+            self.message_store.push(msg);
+        }
 
         // 2. Chain through participants sequentially
         let mut current_input = prompt_text;
@@ -974,6 +976,63 @@ impl Dialogue {
             .map(|turn| format!("[{}]: {}", turn.speaker.name(), turn.content))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Extracts messages from a Payload and converts them to DialogueMessages.
+    ///
+    /// Returns a tuple of (messages, prompt_text) where:
+    /// - messages: Vec of DialogueMessages to store
+    /// - prompt_text: Combined text for agent execution
+    fn extract_messages_from_payload(
+        &self,
+        payload: &Payload,
+        turn: usize,
+    ) -> (Vec<DialogueMessage>, String) {
+        use crate::agent::PayloadContent;
+
+        let mut messages = Vec::new();
+        let mut text_parts = Vec::new();
+
+        for content in payload.contents() {
+            match content {
+                PayloadContent::Message { speaker, content } => {
+                    // Store as individual message with explicit speaker
+                    messages.push(DialogueMessage::new(
+                        turn,
+                        speaker.clone(),
+                        content.clone(),
+                    ));
+                    text_parts.push(content.as_str());
+                }
+                PayloadContent::Text(text) => {
+                    // Text without explicit speaker is treated as User input
+                    // TODO: Allow configuring default speaker (User vs System)
+                    messages.push(DialogueMessage::new(
+                        turn,
+                        Speaker::System, // For backward compatibility, treat as System
+                        text.clone(),
+                    ));
+                    text_parts.push(text.as_str());
+                }
+                PayloadContent::Attachment(_) => {
+                    // Attachments don't create messages, just pass through
+                }
+            }
+        }
+
+        // If no messages were extracted, create a default System message
+        if messages.is_empty() {
+            let prompt_text = payload.to_text();
+            messages.push(DialogueMessage::new(
+                turn,
+                Speaker::System,
+                prompt_text.clone(),
+            ));
+            return (messages, prompt_text);
+        }
+
+        let prompt_text = text_parts.join("\n");
+        (messages, prompt_text)
     }
 
     /// Returns a reference to the conversation history.
@@ -2407,5 +2466,122 @@ mod tests {
         // 1. Dialogue context: Context from other participants (## AgentName...)
         // 2. Agent history: HistoryAwareAgent's own conversation ("# Previous Conversation...")
         // Both are visible and serve different purposes - this is the intended design
+    }
+
+    #[tokio::test]
+    async fn test_multi_message_payload() {
+        use crate::agent::dialogue::message::Speaker;
+
+        // Test that Payload::from_messages() correctly stores multiple messages
+        // with proper speaker attribution
+
+        let mut dialogue = Dialogue::broadcast();
+        dialogue.add_participant(
+            Persona {
+                name: "Agent1".to_string(),
+                role: "Tester".to_string(),
+                background: "Test agent 1".to_string(),
+                communication_style: "Direct".to_string(),
+            },
+            MockAgent::new("Agent1", vec!["Response from Agent1".to_string()]),
+        );
+        dialogue.add_participant(
+            Persona {
+                name: "Agent2".to_string(),
+                role: "Tester".to_string(),
+                background: "Test agent 2".to_string(),
+                communication_style: "Direct".to_string(),
+            },
+            MockAgent::new("Agent2", vec!["Response from Agent2".to_string()]),
+        );
+
+        // Create multi-message payload with System + User messages
+        let payload = Payload::from_messages(vec![
+            (Speaker::System, "System: Initializing conversation".to_string()),
+            (
+                Speaker::user("Alice", "Product Manager"),
+                "User: What should we build?".to_string(),
+            ),
+        ]);
+
+        let _turns = dialogue.run(payload).await.unwrap();
+
+        // Verify all messages are stored in history
+        let history = dialogue.history();
+
+        // Should have: System message, User message, Agent1 response, Agent2 response
+        assert!(
+            history.len() >= 4,
+            "Expected at least 4 messages, got {}",
+            history.len()
+        );
+
+        // Verify first message is System
+        assert_eq!(history[0].speaker, Speaker::System);
+        assert_eq!(history[0].content, "System: Initializing conversation");
+
+        // Verify second message is User
+        assert_eq!(
+            history[1].speaker,
+            Speaker::user("Alice", "Product Manager")
+        );
+        assert_eq!(history[1].content, "User: What should we build?");
+
+        // Verify third and fourth are Agent responses
+        assert!(matches!(history[2].speaker, Speaker::Agent { .. }));
+        assert!(matches!(history[3].speaker, Speaker::Agent { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_multi_message_payload_sequential() {
+        use crate::agent::dialogue::message::Speaker;
+
+        // Test multi-message payload in sequential mode
+        let mut dialogue = Dialogue::sequential();
+        dialogue.add_participant(
+            Persona {
+                name: "Agent1".to_string(),
+                role: "Analyzer".to_string(),
+                background: "First agent".to_string(),
+                communication_style: "Analytical".to_string(),
+            },
+            MockAgent::new("Agent1", vec!["Analysis result".to_string()]),
+        );
+        dialogue.add_participant(
+            Persona {
+                name: "Agent2".to_string(),
+                role: "Reviewer".to_string(),
+                background: "Second agent".to_string(),
+                communication_style: "Critical".to_string(),
+            },
+            MockAgent::new("Agent2", vec!["Review complete".to_string()]),
+        );
+
+        // Create payload with multiple speakers
+        let payload = Payload::from_messages(vec![
+            (Speaker::System, "Context: Project initialization".to_string()),
+            (
+                Speaker::user("Bob", "Engineer"),
+                "Request: Analyze architecture".to_string(),
+            ),
+        ]);
+
+        let turns = dialogue.run(payload).await.unwrap();
+
+        // Sequential mode returns only final agent's turn
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].speaker.name(), "Agent2");
+
+        // But history should contain all messages
+        let history = dialogue.history();
+        assert!(
+            history.len() >= 4,
+            "Expected at least 4 messages in history, got {}",
+            history.len()
+        );
+
+        // Verify input messages are preserved
+        assert_eq!(history[0].speaker, Speaker::System);
+        assert_eq!(history[1].speaker, Speaker::user("Bob", "Engineer"));
     }
 }
