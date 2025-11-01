@@ -6,6 +6,8 @@
 **Priority:** {{ priority }}
 
 ### Team Members:
-{{ team_members }}
+{% for member in team_members %}
+- {{ member %}
+{% endfor %}
 
 Project "{{ name }}" is currently {{ status }} with {{ priority }} priority.

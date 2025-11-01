@@ -1,4 +1,13 @@
-.PHONY: preflight publish test-examples test-examples-offline
+.PHONY: preflight publish test-examples test-examples-offline test
+
+# Run specific test with features
+# Usage: make test TARGET=test_full_dialogue_context_simple_format
+test:
+	@if [ -z "$(TARGET)" ]; then \
+		echo "Error: TARGET is required. Usage: make test TARGET=test_name"; \
+		exit 1; \
+	fi
+	cargo test --package llm-toolkit --lib --features=agent $(TARGET) -- --nocapture
 
 # 全Example（外部API依存含む）
 EXAMPLES := \

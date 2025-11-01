@@ -4,52 +4,11 @@
 //! - Load templates from external files using `template_file`
 //! - Enable template validation with the `validate` flag
 //! - Use Jinja2 syntax in external templates
+//!
+//! Note: Template files are located in `examples/templates/` directory.
 
 use llm_toolkit::ToPrompt;
 use serde::Serialize;
-use std::fs;
-use std::path::Path;
-
-// First, let's create a template file for this example
-fn setup_template_files() {
-    let template_dir = Path::new("examples/templates");
-    if !template_dir.exists() {
-        fs::create_dir_all(template_dir).expect("Failed to create templates directory");
-    }
-
-    // Create a user profile template
-    let profile_template = r#"=== User Profile ===
-Name: {{ name }}
-Email: {{ email }}
-Role: {{ role }}
-Years of Experience: {{ years_experience }}
-
-Bio:
-{{ bio }}
-
-This profile is for {{ name }}, who works as a {{ role }}."#;
-
-    fs::write("examples/templates/profile.jinja", profile_template)
-        .expect("Failed to write profile template");
-
-    // Create a project template
-    let project_template = r#"## Project: {{ name }}
-
-**Description:** {{ description }}
-
-**Status:** {{ status }}
-**Priority:** {{ priority }}
-
-### Team Members:
-{% for member in team_members %}
-- {{ member }}
-{% endfor %}
-
-Project "{{ name }}" is currently {{ status }} with {{ priority }} priority."#;
-
-    fs::write("examples/templates/project.jinja", project_template)
-        .expect("Failed to write project template");
-}
 
 #[derive(Debug, Serialize, ToPrompt)]
 #[prompt(template_file = "examples/templates/profile.jinja")]
@@ -71,9 +30,6 @@ struct Project {
 }
 
 fn main() {
-    // Setup template files
-    setup_template_files();
-
     // Example 1: User Profile with external template
     let user = UserProfile {
         name: "Alice Johnson".to_string(),
@@ -106,7 +62,4 @@ fn main() {
     for (i, part) in parts.iter().enumerate() {
         println!("Part {}: {:?}", i + 1, part);
     }
-
-    // Clean up (optional - you might want to keep the templates)
-    // fs::remove_dir_all("examples/templates").ok();
 }
