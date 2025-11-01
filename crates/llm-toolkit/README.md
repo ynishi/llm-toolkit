@@ -36,6 +36,7 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **Auto-JSON Enforcement** | Automatically add JSON schema instructions to agent prompts for better LLM compliance. | `#[derive(Agent)]` with `ToPrompt::prompt_schema()` integration | Implemented |
 | **Built-in Retry** | Intelligent retry with 3-priority delay system: server retry_after (Priority 1), 429 exponential backoff (Priority 2), linear backoff (Priority 3). Includes RetryAgent decorator and Full Jitter. | `max_retries` attribute, `RetryAgent`, `retry_after` field | Implemented |
 | **Multi-Modal Payload** | Pass text and images to agents and dialogues through a unified `Payload` interface with backward compatibility. | `Payload`, `PayloadContent` types, `impl Into<Payload>` | Implemented |
+| **Dynamic Payload Instructions** | Prepend turn-specific instructions or constraints to payloads without modifying Persona definitions. | `prepend_message()`, `prepend_system()` | Implemented |
 | **Multi-Agent Orchestration** | Coordinate multiple agents to execute complex workflows with adaptive error recovery. | `Orchestrator`, `BlueprintWorkflow`, `StrategyMap` | Implemented |
 | **Execution Profiles** | Declaratively configure agent behavior (Creative/Balanced/Deterministic) via semantic profiles. | `ExecutionProfile` enum, `profile` attribute, `.with_execution_profile()` | Implemented (v0.13.0) |
 | **Template File Validation** | Compile-time validation of template file paths with helpful error messages. | `template_file` attribute validation | Implemented (v0.13.0) |
@@ -1447,6 +1448,37 @@ This enables:
 - ✅ **Role Preservation**: User and Agent roles are preserved in history
 - ✅ **Complex Conversations**: Support multi-speaker turns with System + User messages
 - ✅ **Session Resumption**: Full speaker context is maintained across save/load cycles
+
+**Dynamic Instructions with Prepend Methods:**
+
+Control agent behavior on a per-turn basis by prepending instructions to payloads without modifying `Persona` definitions:
+
+```rust
+use llm_toolkit::agent::Payload;
+use llm_toolkit::agent::dialogue::Speaker;
+
+// Prepend a system instruction for this specific turn
+let payload = Payload::text("Discuss the architecture")
+    .prepend_system("IMPORTANT: Keep responses under 300 characters. Be concise.");
+
+dialogue.run(payload).await?;
+
+// Or use prepend_message for custom speaker attribution
+let payload = Payload::text("User question")
+    .prepend_message(Speaker::System, "Answer in bullet points only.");
+```
+
+This enables:
+- ✅ **Dynamic Constraints**: Add turn-specific constraints (e.g., "be concise", "be detailed")
+- ✅ **Temporary Instructions**: Inject context-specific guidance without permanent changes
+- ✅ **Conversation Control**: Prevent verbosity escalation in multi-agent dialogues
+- ✅ **Chaining Support**: Multiple `prepend_*` calls apply in FIFO order
+
+**Use Cases:**
+- **Verbosity Control**: Add "Keep responses under 300 characters" when agents start getting too verbose
+- **Mode Switching**: Switch between detailed and concise modes based on user preference
+- **Context-Specific Behavior**: "Analyze this image concisely" for image attachments
+- **Multi-Agent Coordination**: Prevent agents from repeating what others have said
 
 **Enhanced Context Formatting:**
 
