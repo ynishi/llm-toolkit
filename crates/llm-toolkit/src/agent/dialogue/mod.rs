@@ -683,9 +683,18 @@ impl Dialogue {
                         participants_info.clone(),
                         name.clone(),
                     );
+
+                    // Create payload with Messages (for structured dialogue history)
+                    let messages = turn_input.to_messages();
+                    let mut input_payload = Payload::from_messages(messages);
+
+                    // Add formatted text for agents that use to_text()
                     let formatted_input =
                         turn_input.to_prompt_with_formatter(&*self.context_formatter);
-                    let input_payload = Payload::text(formatted_input);
+                    input_payload = input_payload.with_text(formatted_input);
+
+                    // Add Participants metadata
+                    input_payload = input_payload.with_participants(participants_info.clone());
 
                     // Copy attachments from original payload if any
                     let final_payload = if payload.has_attachments() {
@@ -922,7 +931,20 @@ impl Dialogue {
             self.message_store.push(msg);
         }
 
-        // 2. Chain through participants sequentially
+        // 2. Build participant list
+        let participants_info: Vec<ParticipantInfo> = self
+            .participants
+            .iter()
+            .map(|p| {
+                ParticipantInfo::new(
+                    p.persona.name.clone(),
+                    p.persona.role.clone(),
+                    p.persona.background.clone(),
+                )
+            })
+            .collect();
+
+        // 3. Chain through participants sequentially
         let mut current_input = prompt_text;
         let mut final_turn = None;
 
@@ -930,8 +952,15 @@ impl Dialogue {
             let agent = &participant.agent;
             let name = participant.name().to_string();
 
-            // Create payload with current input
-            let input_payload = Payload::text(current_input.clone());
+            // Create payload with Message (for history tracking) + Text (for to_text())
+            let mut input_payload = Payload::from_messages(vec![(
+                Speaker::System,
+                current_input.clone(),
+            )])
+            .with_text(current_input.clone());
+
+            // Add Participants metadata
+            input_payload = input_payload.with_participants(participants_info.clone());
 
             // For first agent, copy attachments from original payload if any
             let final_payload = if idx == 0 && payload.has_attachments() {

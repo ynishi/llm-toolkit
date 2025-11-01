@@ -170,7 +170,16 @@ where
         let current_messages = intent.to_messages();
 
         // Get text for backward compatibility with agents that don't support messages
-        let user_request = intent.to_text();
+        // If no text is available, format messages as text
+        let user_request = if intent.to_text().is_empty() && !current_messages.is_empty() {
+            current_messages
+                .iter()
+                .map(|(speaker, content)| format!("[{}]: {}", speaker.name(), content))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            intent.to_text()
+        };
 
         // Create combined prompt with history context
         let combined_prompt = if history_prompt.is_empty() {

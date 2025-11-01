@@ -232,15 +232,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_chat_builder_with_history() {
+        use crate::agent::dialogue::Speaker;
+
         let test_agent = TestAgent::new("response");
         let chat = Chat::new(test_agent.clone()).build();
 
-        // First call
-        let result1 = chat.execute(Payload::text("Hello")).await.unwrap();
+        // First call - use from_messages instead of text
+        let result1 = chat
+            .execute(Payload::from_messages(vec![(
+                Speaker::user("User", "User"),
+                "Hello".to_string(),
+            )]))
+            .await
+            .unwrap();
         assert_eq!(result1, "response");
 
         // Second call should include history
-        let result2 = chat.execute(Payload::text("How are you?")).await.unwrap();
+        let result2 = chat
+            .execute(Payload::from_messages(vec![(
+                Speaker::user("User", "User"),
+                "How are you?".to_string(),
+            )]))
+            .await
+            .unwrap();
         assert_eq!(result2, "response");
 
         // The inner agent should have been called twice
@@ -302,6 +316,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_chat_builder_with_persona_and_history() {
+        use crate::agent::dialogue::Speaker;
+
         let test_agent = TestAgent::new("response");
         let persona = Persona {
             name: "Alice".to_string(),
@@ -312,14 +328,29 @@ mod tests {
 
         let chat = Chat::new(test_agent.clone()).with_persona(persona).build();
 
-        // First call
-        let _ = chat.execute(Payload::text("Hi")).await.unwrap();
+        // First call - use from_messages
+        let _ = chat
+            .execute(Payload::from_messages(vec![(
+                Speaker::user("User", "User"),
+                "Hi".to_string(),
+            )]))
+            .await
+            .unwrap();
 
         // Second call should have both persona and history
-        let _ = chat.execute(Payload::text("Bye")).await.unwrap();
+        let _ = chat
+            .execute(Payload::from_messages(vec![(
+                Speaker::user("User", "User"),
+                "Bye".to_string(),
+            )]))
+            .await
+            .unwrap();
 
         let calls = test_agent.get_calls().await;
         assert_eq!(calls.len(), 2);
+
+        // Debug: print second call content
+        println!("=== Second call ===\n{}\n=== End ===", calls[1]);
 
         // Second call should include both persona and history
         assert!(calls[1].contains("Previous Conversation"));

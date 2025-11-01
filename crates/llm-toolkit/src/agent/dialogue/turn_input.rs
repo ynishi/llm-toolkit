@@ -122,6 +122,32 @@ impl TurnInput {
     pub fn to_prompt_with_formatter(&self, formatter: &dyn ContextFormatter) -> String {
         formatter.format(self)
     }
+
+    /// Converts this TurnInput into a vector of Messages for structured dialogue.
+    ///
+    /// This extracts:
+    /// - System message with user_prompt
+    /// - Context messages from other participants (converted to Speaker + content)
+    pub fn to_messages(&self) -> Vec<(crate::agent::dialogue::Speaker, String)> {
+        use crate::agent::dialogue::Speaker;
+
+        let mut messages = Vec::new();
+
+        // Add context messages first (history from other participants)
+        for ctx in &self.context {
+            let speaker = if ctx.speaker_role == "System" {
+                Speaker::System
+            } else {
+                Speaker::agent(&ctx.speaker_name, &ctx.speaker_role)
+            };
+            messages.push((speaker, ctx.content.clone()));
+        }
+
+        // Add current user prompt as System message
+        messages.push((Speaker::System, self.user_prompt.clone()));
+
+        messages
+    }
 }
 
 /// Context message from another participant in the dialogue.
