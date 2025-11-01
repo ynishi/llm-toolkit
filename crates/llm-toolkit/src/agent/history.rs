@@ -55,6 +55,14 @@ where
         self.inner_agent.expertise()
     }
 
+    #[crate::tracing::instrument(
+        name = "history_aware_agent.execute",
+        skip(self, intent),
+        fields(
+            agent.expertise = self.inner_agent.expertise(),
+            has_history = !self.dialogue_history.try_lock().map(|h| h.is_empty()).unwrap_or(true),
+        )
+    )]
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         // Lock history and build context
         let history = self.dialogue_history.lock().await;

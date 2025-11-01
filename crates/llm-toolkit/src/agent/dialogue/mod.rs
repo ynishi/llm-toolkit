@@ -771,6 +771,14 @@ impl Dialogue {
     ///     .with_attachment(Attachment::local("image.png"));
     /// let final_turn = dialogue.run(payload).await?;
     /// ```
+    #[crate::tracing::instrument(
+        name = "dialogue.run",
+        skip(self, initial_prompt),
+        fields(
+            execution_model = ?self.execution_model,
+            participants_count = self.participants.len(),
+        )
+    )]
     pub async fn run(
         &mut self,
         initial_prompt: impl Into<Payload>,

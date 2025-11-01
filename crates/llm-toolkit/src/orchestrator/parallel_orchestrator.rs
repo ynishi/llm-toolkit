@@ -401,6 +401,14 @@ impl ParallelOrchestrator {
     /// # Returns
     ///
     /// An `ParallelOrchestrationResult` containing execution status and context
+    #[crate::tracing::instrument(
+        name = "parallel_orchestrator.execute",
+        skip(self, cancellation_token, resume_from, save_state_to),
+        fields(
+            task = %task,
+            has_strategy = self.strategy.is_some(),
+        )
+    )]
     pub async fn execute(
         &mut self,
         task: &str,
