@@ -98,10 +98,12 @@ impl MessageStore {
     ///
     /// This is used to get agent responses from previous turns that need to be
     /// distributed as context to other agents in the next turn.
+    ///
+    /// Only returns Agent messages (excludes System and User messages).
     pub fn unsent_messages(&self) -> Vec<&DialogueMessage> {
         self.all_messages()
             .into_iter()
-            .filter(|msg| !msg.sent_to_agents)
+            .filter(|msg| !msg.sent_to_agents && matches!(msg.speaker, Speaker::Agent { .. }))
             .collect()
     }
 
