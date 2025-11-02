@@ -130,6 +130,18 @@ impl Payload {
         }
     }
 
+    /// Set text content to this payload, replacing existing text contents.
+    pub fn set_text(self, text: impl Into<String>) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.retain(|c| !matches!(c, PayloadContent::Text(_)));
+        new_contents.push(PayloadContent::Text(text.into()));
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
+    }
+
     /// Adds an attachment to this payload.
     ///
     /// # Examples
@@ -523,6 +535,36 @@ mod tests {
             .with_attachment(Attachment::local("/test.png"));
 
         assert_eq!(payload.to_text(), "First line\nSecond line");
+    }
+
+    #[test]
+    fn test_payload_set_text() {
+        let payload = Payload::text("Old text")
+            .with_text("Another old text")
+            .with_attachment(Attachment::local("/test.png"))
+            .set_text("New text");
+
+        assert_eq!(payload.contents().len(), 2);
+        let texts: Vec<&str> = payload
+            .contents()
+            .iter()
+            .filter_map(|c| match c {
+                PayloadContent::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.contains(&"New text"));
+        assert!(!texts.contains(&"Another old text"));
+        assert!(!texts.contains(&"Old text"));
+        let attachments: Vec<&Attachment> = payload
+            .contents()
+            .iter()
+            .filter_map(|c| match c {
+                PayloadContent::Attachment(a) => Some(a),
+                _ => None,
+            })
+            .collect();
+        assert!(!attachments.is_empty());
     }
 
     #[test]

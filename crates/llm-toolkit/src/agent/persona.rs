@@ -1,5 +1,5 @@
 use super::dialogue::ExecutionModel;
-use super::{Agent, AgentError, Payload, PayloadContent, RelatedParticipant, participant_relation};
+use super::{Agent, AgentError, Payload, RelatedParticipant, participant_relation};
 use crate::ToPrompt;
 use crate::agent::payload_message::format_messages_with_relation;
 use async_trait::async_trait;
@@ -327,7 +327,7 @@ where
         let current_messages_text =
             format_messages_with_relation(&messages, &self.persona.name, total_content_count);
 
-        // 5. Build structured prompt
+        // 4. Build structured prompt
         let prompt_struct = PersonaAgentPrompt {
             persona: self.persona.clone(),
             participants: participants_text,
@@ -335,7 +335,7 @@ where
             current_content: current_messages_text,
         };
 
-        // 6. Convert to text
+        // 5. Convert to text
         let prompt_text = prompt_struct.to_prompt();
 
         // Debug log the generated prompt
@@ -351,21 +351,8 @@ where
             prompt_text
         );
 
-        // 7. Create payload with Text + Messages (preserved)
-        let mut final_payload = Payload::text(prompt_text);
-
-        // Preserve messages structure
-        for message in messages {
-            final_payload = final_payload.with_message(message.speaker, message.content);
-        }
-
-        // Preserve attachments
-        for content in intent.contents() {
-            if let PayloadContent::Attachment(attachment) = content {
-                final_payload = final_payload.with_attachment(attachment.clone());
-            }
-        }
-
+        // 6. Create payload with Text + Messages (preserved)
+        let final_payload = intent.clone().set_text(prompt_text);
         self.inner_agent.execute(final_payload).await
     }
 }
