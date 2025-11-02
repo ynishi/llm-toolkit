@@ -366,6 +366,12 @@ impl Agent for GeminiAgent {
             final_prompt.len()
         );
 
+        crate::tracing::trace!(
+            target: "llm_toolkit::agent::gemini",
+            "\n========== GEMINI PROMPT ==========\n{}\n====================================",
+            final_prompt
+        );
+
         let mut cmd = self.build_command(&final_prompt)?;
 
         debug!(

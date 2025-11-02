@@ -186,6 +186,7 @@ where
         let mut final_payload = Payload::from_messages(current_messages.clone());
 
         // Add history as text (if exists)
+        let history_length = history_prompt.len();
         if !history_prompt.is_empty() {
             final_payload = final_payload.with_text(history_prompt);
         }
@@ -201,6 +202,20 @@ where
                 final_payload = final_payload.with_attachment(attachment.clone());
             }
         }
+
+        // Debug log the final payload
+        crate::tracing::debug!(
+            target: "llm_toolkit::agent::history",
+            expertise = self.inner_agent.expertise(),
+            history_length = history_length,
+            message_count = current_messages.len(),
+            "Sending payload with history to inner agent"
+        );
+        crate::tracing::trace!(
+            target: "llm_toolkit::agent::history",
+            "\n========== HISTORY CONTEXT ==========\n{}\n====================================",
+            final_payload.to_text()
+        );
 
         // Execute the inner agent
         let response = self.inner_agent.execute(final_payload).await?;

@@ -378,6 +378,12 @@ impl Agent for ClaudeCodeAgent {
             "Building claude command with prompt length: {}", final_prompt.len()
         );
 
+        crate::tracing::trace!(
+            target: "llm_toolkit::agent::claude_code",
+            "\n========== CLAUDE CODE PROMPT ==========\n{}\n====================================",
+            final_prompt
+        );
+
         let mut cmd = self.build_command(&final_prompt)?;
 
         debug!(

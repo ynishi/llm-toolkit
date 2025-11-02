@@ -354,6 +354,19 @@ where
         // 6. Convert to text
         let prompt_text = prompt_struct.to_prompt();
 
+        // Debug log the generated prompt
+        crate::tracing::debug!(
+            target: "llm_toolkit::agent::persona",
+            persona_name = %self.persona.name,
+            prompt_length = prompt_text.len(),
+            "Generated persona prompt"
+        );
+        crate::tracing::trace!(
+            target: "llm_toolkit::agent::persona",
+            "\n========== PERSONA PROMPT ==========\n{}\n====================================",
+            prompt_text
+        );
+
         // 7. Create payload with Text + Messages (preserved)
         let mut final_payload = Payload::text(prompt_text);
 
