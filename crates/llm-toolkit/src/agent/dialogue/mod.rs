@@ -627,79 +627,8 @@ impl Dialogue {
         let model = self.execution_model;
         let state = match model {
             ExecutionModel::Broadcast => {
-                // Build participant list
-                let participants_info: Vec<ParticipantInfo> = self
-                    .participants
-                    .iter()
-                    .map(|p| {
-                        ParticipantInfo::new(
-                            p.persona.name.clone(),
-                            p.persona.role.clone(),
-                            p.persona.background.clone(),
-                        )
-                    })
-                    .collect();
-
-                // Get context from previous turn (for multi-turn dialogues)
-                let context = if current_turn > 1 {
-                    self.message_store
-                        .messages_for_turn(current_turn - 1)
-                        .into_iter()
-                        .filter_map(|msg| {
-                            if let Speaker::Agent { name, role } = &msg.speaker {
-                                Some(ContextMessage::with_metadata(
-                                    name.clone(),
-                                    role.clone(),
-                                    msg.content.clone(),
-                                    msg.turn,
-                                    msg.timestamp,
-                                ))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-
-                let mut pending = JoinSet::new();
-
-                for (idx, participant) in self.participants.iter().enumerate() {
-                    let agent = Arc::clone(&participant.agent);
-                    let name = participant.name().to_string();
-
-                    // Create TurnInput with participant-specific information
-                    let turn_input = TurnInput::with_dialogue_context(
-                        prompt_text.clone(),
-                        context.clone(),
-                        participants_info.clone(),
-                        name.clone(),
-                    );
-
-                    // Create payload with Messages (for structured dialogue history)
-                    let messages = turn_input.to_messages();
-                    let mut input_payload = Payload::from_messages(messages);
-
-                    // Add Participants metadata
-                    input_payload = input_payload.with_participants(participants_info.clone());
-
-                    // Copy attachments from original payload if any
-                    let final_payload = if payload.has_attachments() {
-                        let mut p = input_payload;
-                        for attachment in payload.attachments() {
-                            p = p.with_attachment(attachment.clone());
-                        }
-                        p
-                    } else {
-                        input_payload
-                    };
-
-                    pending.spawn(async move {
-                        let result = agent.execute(final_payload).await;
-                        (idx, name, result)
-                    });
-                }
+                // Spawn broadcast tasks using helper method
+                let pending = self.spawn_broadcast_tasks(current_turn, prompt_text.clone(), &payload);
 
                 SessionState::Broadcast(BroadcastState::new(
                     pending,
@@ -787,23 +716,16 @@ impl Dialogue {
         }
     }
 
-    /// New broadcast implementation using MessageStore and TurnInput.
-    async fn run_broadcast_new(
-        &mut self,
-        initial_prompt: impl Into<Payload>,
-    ) -> Result<Vec<DialogueTurn>, AgentError> {
-        let payload: Payload = initial_prompt.into();
-        let current_turn = self.message_store.current_turn() + 1;
-
-        // 1. Extract and store messages from payload
-        let (input_messages, prompt_text) =
-            self.extract_messages_from_payload(&payload, current_turn);
-
-        for msg in input_messages {
-            self.message_store.push(msg);
-        }
-
-        // 2. Build participant list
+    /// Helper method to spawn broadcast tasks for all participants.
+    ///
+    /// Returns a JoinSet with pending agent executions.
+    fn spawn_broadcast_tasks(
+        &self,
+        current_turn: usize,
+        prompt_text: String,
+        payload: &Payload,
+    ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
+        // Build participant list
         let participants_info: Vec<ParticipantInfo> = self
             .participants
             .iter()
@@ -816,7 +738,7 @@ impl Dialogue {
             })
             .collect();
 
-        // 3. Get context from previous turn (other agents' responses)
+        // Get context from previous turn (other agents' responses)
         let context = if current_turn > 1 {
             self.message_store
                 .messages_for_turn(current_turn - 1)
@@ -839,7 +761,6 @@ impl Dialogue {
             Vec::new()
         };
 
-        // 4. Broadcast to all agents (each with their own TurnInput)
         let mut pending = JoinSet::new();
 
         for (idx, participant) in self.participants.iter().enumerate() {
@@ -878,7 +799,29 @@ impl Dialogue {
             });
         }
 
-        // 5. Collect responses and create message entities
+        pending
+    }
+
+    /// New broadcast implementation using MessageStore and TurnInput.
+    async fn run_broadcast_new(
+        &mut self,
+        initial_prompt: impl Into<Payload>,
+    ) -> Result<Vec<DialogueTurn>, AgentError> {
+        let payload: Payload = initial_prompt.into();
+        let current_turn = self.message_store.current_turn() + 1;
+
+        // 1. Extract and store messages from payload
+        let (input_messages, prompt_text) =
+            self.extract_messages_from_payload(&payload, current_turn);
+
+        for msg in input_messages {
+            self.message_store.push(msg);
+        }
+
+        // 2. Spawn broadcast tasks using helper method
+        let mut pending = self.spawn_broadcast_tasks(current_turn, prompt_text, &payload);
+
+        // 3. Collect responses and create message entities
         let mut dialogue_turns = Vec::new();
 
         while let Some(Ok((idx, name, result))) = pending.join_next().await {
