@@ -3,6 +3,7 @@
 //! This module defines the data structures for distributing messages
 //! to agents, including context from other participants.
 
+use crate::agent::payload_message::PayloadMessage;
 use serde::{Deserialize, Serialize};
 
 /// Information about a dialogue participant.
@@ -104,7 +105,7 @@ impl TurnInput {
     /// This extracts:
     /// - System message with user_prompt
     /// - Context messages from other participants (converted to Speaker + content)
-    pub fn to_messages(&self) -> Vec<(crate::agent::dialogue::Speaker, String)> {
+    pub fn to_messages(&self) -> Vec<PayloadMessage> {
         use crate::agent::dialogue::Speaker;
 
         let mut messages = Vec::new();
@@ -116,11 +117,11 @@ impl TurnInput {
             } else {
                 Speaker::agent(&ctx.speaker_name, &ctx.speaker_role)
             };
-            messages.push((speaker, ctx.content.clone()));
+            messages.push(PayloadMessage::new(speaker, ctx.content.clone()));
         }
 
         // Add current user prompt as System message
-        messages.push((Speaker::System, self.user_prompt.clone()));
+        messages.push(PayloadMessage::system(self.user_prompt.clone()));
 
         messages
     }
@@ -199,8 +200,8 @@ mod tests {
         // Verify to_messages conversion
         let messages = input.to_messages();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].0, Speaker::System);
-        assert_eq!(messages[0].1, "Test prompt");
+        assert_eq!(messages[0].speaker, Speaker::System);
+        assert_eq!(messages[0].content, "Test prompt");
     }
 
     #[test]
@@ -220,16 +221,16 @@ mod tests {
         assert_eq!(messages.len(), 3); // 2 context + 1 current
 
         // First context message
-        assert_eq!(messages[0].0, Speaker::agent("Alice", "Engineer"));
-        assert_eq!(messages[0].1, "I think we should use Rust");
+        assert_eq!(messages[0].speaker, Speaker::agent("Alice", "Engineer"));
+        assert_eq!(messages[0].content, "I think we should use Rust");
 
         // Second context message
-        assert_eq!(messages[1].0, Speaker::agent("Bob", "Designer"));
-        assert_eq!(messages[1].1, "The UI needs to be simple");
+        assert_eq!(messages[1].speaker, Speaker::agent("Bob", "Designer"));
+        assert_eq!(messages[1].content, "The UI needs to be simple");
 
         // Current prompt as System message
-        assert_eq!(messages[2].0, Speaker::System);
-        assert_eq!(messages[2].1, "Discuss implementation");
+        assert_eq!(messages[2].speaker, Speaker::System);
+        assert_eq!(messages[2].content, "Discuss implementation");
     }
 
     #[test]
@@ -261,13 +262,13 @@ mod tests {
         // Verify to_messages conversion
         let messages = turn_input.to_messages();
         assert_eq!(messages.len(), 2); // 1 context + 1 current
-        assert_eq!(messages[0].0, Speaker::agent("Alice", "Engineer"));
+        assert_eq!(messages[0].speaker, Speaker::agent("Alice", "Engineer"));
         assert_eq!(
-            messages[0].1,
+            messages[0].content,
             "I think we should use microservices architecture"
         );
-        assert_eq!(messages[1].0, Speaker::System);
-        assert_eq!(messages[1].1, "Discuss the implementation plan");
+        assert_eq!(messages[1].speaker, Speaker::System);
+        assert_eq!(messages[1].content, "Discuss the implementation plan");
     }
 
     #[test]

@@ -192,6 +192,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::PayloadMessage;
     use async_trait::async_trait;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -232,16 +233,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_chat_builder_with_history() {
-        use crate::agent::dialogue::Speaker;
-
         let test_agent = TestAgent::new("response");
         let chat = Chat::new(test_agent.clone()).build();
 
         // First call - use from_messages instead of text
         let result1 = chat
-            .execute(Payload::from_messages(vec![(
-                Speaker::user("User", "User"),
-                "Hello".to_string(),
+            .execute(Payload::from_messages(vec![PayloadMessage::user(
+                "User", "User", "Hello",
             )]))
             .await
             .unwrap();
@@ -249,9 +247,10 @@ mod tests {
 
         // Second call should include history
         let result2 = chat
-            .execute(Payload::from_messages(vec![(
-                Speaker::user("User", "User"),
-                "How are you?".to_string(),
+            .execute(Payload::from_messages(vec![PayloadMessage::user(
+                "User",
+                "User",
+                "How are you?",
             )]))
             .await
             .unwrap();
@@ -316,8 +315,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_chat_builder_with_persona_and_history() {
-        use crate::agent::dialogue::Speaker;
-
         let test_agent = TestAgent::new("response");
         let persona = Persona {
             name: "Alice".to_string(),
@@ -330,18 +327,16 @@ mod tests {
 
         // First call - use from_messages
         let _ = chat
-            .execute(Payload::from_messages(vec![(
-                Speaker::user("User", "User"),
-                "Hi".to_string(),
+            .execute(Payload::from_messages(vec![PayloadMessage::user(
+                "User", "User", "Hi",
             )]))
             .await
             .unwrap();
 
         // Second call should have both persona and history
         let _ = chat
-            .execute(Payload::from_messages(vec![(
-                Speaker::user("User", "User"),
-                "Bye".to_string(),
+            .execute(Payload::from_messages(vec![PayloadMessage::user(
+                "User", "User", "Bye",
             )]))
             .await
             .unwrap();

@@ -97,7 +97,7 @@ pub mod turn_input;
 use crate::ToPrompt;
 use crate::agent::chat::Chat;
 use crate::agent::persona::{Persona, PersonaTeam, PersonaTeamGenerationRequest};
-use crate::agent::{Agent, AgentError, Payload};
+use crate::agent::{Agent, AgentError, Payload, PayloadMessage};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -628,7 +628,8 @@ impl Dialogue {
         let state = match model {
             ExecutionModel::Broadcast => {
                 // Spawn broadcast tasks using helper method
-                let pending = self.spawn_broadcast_tasks(current_turn, prompt_text.clone(), &payload);
+                let pending =
+                    self.spawn_broadcast_tasks(current_turn, prompt_text.clone(), &payload);
 
                 SessionState::Broadcast(BroadcastState::new(
                     pending,
@@ -890,7 +891,7 @@ impl Dialogue {
 
             // Create payload with Message (for history tracking) + Text (for to_text())
             let mut input_payload =
-                Payload::from_messages(vec![(Speaker::System, current_input.clone())])
+                Payload::from_messages(vec![PayloadMessage::system(current_input.clone())])
                     .with_text(current_input.clone());
 
             // Add Participants metadata
@@ -2473,14 +2474,8 @@ mod tests {
 
         // Create multi-message payload with System + User messages
         let payload = Payload::from_messages(vec![
-            (
-                Speaker::System,
-                "System: Initializing conversation".to_string(),
-            ),
-            (
-                Speaker::user("Alice", "Product Manager"),
-                "User: What should we build?".to_string(),
-            ),
+            PayloadMessage::system("System: Initializing conversation"),
+            PayloadMessage::user("Alice", "Product Manager", "User: What should we build?"),
         ]);
 
         let _turns = dialogue.run(payload).await.unwrap();
@@ -2538,14 +2533,8 @@ mod tests {
 
         // Create payload with multiple speakers
         let payload = Payload::from_messages(vec![
-            (
-                Speaker::System,
-                "Context: Project initialization".to_string(),
-            ),
-            (
-                Speaker::user("Bob", "Engineer"),
-                "Request: Analyze architecture".to_string(),
-            ),
+            PayloadMessage::system("Context: Project initialization"),
+            PayloadMessage::user("Bob", "Engineer", "Request: Analyze architecture"),
         ]);
 
         let turns = dialogue.run(payload).await.unwrap();

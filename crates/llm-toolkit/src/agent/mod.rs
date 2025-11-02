@@ -229,6 +229,9 @@ pub mod persona;
 pub mod history;
 
 #[cfg(feature = "agent")]
+pub mod payload_message;
+
+#[cfg(feature = "agent")]
 pub mod chat;
 
 #[cfg(feature = "agent")]
@@ -251,6 +254,8 @@ pub enum ExecutionProfile {
 
 pub use error::AgentError;
 pub use payload::{Payload, PayloadContent};
+#[cfg(feature = "agent")]
+pub use payload_message::PayloadMessage;
 
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};

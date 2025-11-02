@@ -1416,13 +1416,17 @@ This design enables:
 The `Dialogue` API supports multi-message payloads with explicit speaker attribution, enabling complex conversation structures with System prompts, User inputs, and Agent responses.
 
 ```rust
-use llm_toolkit::agent::Payload;
+use llm_toolkit::agent::{Payload, PayloadMessage};
 use llm_toolkit::agent::dialogue::message::Speaker;
 
 // Create a payload with multiple messages from different speakers
 let payload = Payload::from_messages(vec![
-    (Speaker::System, "Context: Project planning meeting".to_string()),
-    (Speaker::user("Alice", "Product Manager"), "What features should we prioritize?".to_string()),
+    PayloadMessage::system("Context: Project planning meeting"),
+    PayloadMessage::user(
+        "Alice",
+        "Product Manager",
+        "What features should we prioritize?",
+    ),
 ]);
 
 // All messages are stored with proper speaker attribution

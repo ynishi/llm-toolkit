@@ -3,6 +3,7 @@
 //! This module provides abstractions for passing different types of content
 //! (text, images, etc.) to agents in a unified way.
 
+use super::payload_message::PayloadMessage;
 use crate::attachment::Attachment;
 use std::fmt;
 use std::sync::Arc;
@@ -280,14 +281,17 @@ impl Payload {
     /// use llm_toolkit::agent::dialogue::Speaker;
     ///
     /// let payload = Payload::from_messages(vec![
-    ///     (Speaker::System, "You are a helpful assistant".to_string()),
-    ///     (Speaker::user("user1"), "What is Rust?".to_string()),
+    ///     PayloadMessage::system("You are a helpful assistant"),
+    ///     PayloadMessage::user("user1", "User", "What is Rust?"),
     /// ]);
     /// ```
-    pub fn from_messages(messages: Vec<(crate::agent::dialogue::Speaker, String)>) -> Self {
+    pub fn from_messages(messages: Vec<PayloadMessage>) -> Self {
         let contents = messages
             .into_iter()
-            .map(|(speaker, content)| PayloadContent::Message { speaker, content })
+            .map(|message| PayloadContent::Message {
+                speaker: message.speaker,
+                content: message.content,
+            })
             .collect();
 
         Self {
@@ -365,10 +369,10 @@ impl Payload {
             .join("\n")
     }
 
-    /// Returns all messages (both Text and Message variants) as a vector of tuples.
+    /// Returns all structured messages (both Text and Message variants) as `PayloadMessage`.
     ///
     /// This preserves the structure of dialogue messages with speaker information.
-    /// - `Text` variants are converted to `(Speaker::System, content)`
+    /// - `Text` variants are converted to `PayloadMessage::system`
     /// - `Message` variants preserve their original speaker and content
     /// - `Attachment` variants are not included
     ///
@@ -388,16 +392,16 @@ impl Payload {
     ///
     /// let messages = payload.to_messages();
     /// assert_eq!(messages.len(), 2);
-    /// assert_eq!(messages[0].0, Speaker::System);
-    /// assert_eq!(messages[1].0, Speaker::user("Alice", "PM"));
+    /// assert_eq!(messages[0].speaker, Speaker::System);
+    /// assert_eq!(messages[1].speaker, Speaker::user("Alice", "PM"));
     /// ```
-    pub fn to_messages(&self) -> Vec<(crate::agent::dialogue::Speaker, String)> {
+    pub fn to_messages(&self) -> Vec<PayloadMessage> {
         self.inner
             .contents
             .iter()
             .filter_map(|c| match c {
                 PayloadContent::Message { speaker, content } => {
-                    Some((speaker.clone(), content.clone()))
+                    Some(PayloadMessage::new(speaker.clone(), content.clone()))
                 }
                 PayloadContent::Text(_)
                 | PayloadContent::Attachment(_)
@@ -789,16 +793,16 @@ mod tests {
         use crate::agent::dialogue::Speaker;
 
         let payload = Payload::from_messages(vec![
-            (Speaker::System, "System message".to_string()),
-            (Speaker::user("Alice", "PM"), "User message".to_string()),
+            PayloadMessage::system("System message"),
+            PayloadMessage::user("Alice", "PM", "User message"),
         ]);
 
         let messages = payload.to_messages();
         assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].0, Speaker::System);
-        assert_eq!(messages[0].1, "System message");
-        assert_eq!(messages[1].0, Speaker::user("Alice", "PM"));
-        assert_eq!(messages[1].1, "User message");
+        assert_eq!(messages[0].speaker, Speaker::System);
+        assert_eq!(messages[0].content, "System message");
+        assert_eq!(messages[1].speaker, Speaker::user("Alice", "PM"));
+        assert_eq!(messages[1].content, "User message");
     }
 
     #[test]
@@ -814,8 +818,8 @@ mod tests {
         // to_messages() returns only Message variants (Text and Attachment excluded)
         let messages = payload.to_messages();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].0, Speaker::user("Bob", "Dev"));
-        assert_eq!(messages[0].1, "User input");
+        assert_eq!(messages[0].speaker, Speaker::user("Bob", "Dev"));
+        assert_eq!(messages[0].content, "User input");
 
         // to_text() returns only Text variants
         assert_eq!(payload.to_text(), "Plain text\nMore text");
@@ -823,11 +827,9 @@ mod tests {
 
     #[test]
     fn test_to_text_does_not_include_messages() {
-        use crate::agent::dialogue::Speaker;
-
         let payload = Payload::from_messages(vec![
-            (Speaker::System, "System message".to_string()),
-            (Speaker::user("Alice", "PM"), "User message".to_string()),
+            PayloadMessage::system("System message"),
+            PayloadMessage::user("Alice", "PM", "User message"),
         ]);
 
         // to_text() should return empty string (only Text variants)
@@ -848,7 +850,7 @@ mod tests {
         // to_messages() returns only Message variants (Text excluded)
         let messages = payload.to_messages();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].0, Speaker::System);
-        assert_eq!(messages[0].1, "Message 1");
+        assert_eq!(messages[0].speaker, Speaker::System);
+        assert_eq!(messages[0].content, "Message 1");
     }
 }

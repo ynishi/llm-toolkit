@@ -1,47 +1,9 @@
-use super::dialogue::Speaker;
+use super::payload_message::PayloadMessage;
 use super::{Agent, AgentError, Payload, PayloadContent};
 use async_trait::async_trait;
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-
-/// A single entry in the conversation history.
-///
-/// Each entry represents one message in the dialogue, with speaker information
-/// and the message content.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HistoryEntry {
-    pub speaker: Speaker,
-    pub content: String,
-}
-
-impl HistoryEntry {
-    /// Creates a new history entry.
-    pub fn new(speaker: Speaker, content: String) -> Self {
-        Self { speaker, content }
-    }
-
-    /// Creates a history entry for a user message.
-    pub fn user(name: impl Into<String>, role: impl Into<String>, content: String) -> Self {
-        Self {
-            speaker: Speaker::user(name, role),
-            content,
-        }
-    }
-
-    /// Creates a history entry for a system message.
-    pub fn system(content: String) -> Self {
-        Self {
-            speaker: Speaker::System,
-            content,
-        }
-    }
-
-    /// Formats this entry for display in conversation history.
-    pub fn format(&self) -> String {
-        format!("[{}]: {}", self.speaker.name(), self.content)
-    }
-}
 
 /// An agent wrapper that maintains dialogue history across multiple executions.
 ///
@@ -69,7 +31,7 @@ impl HistoryEntry {
 /// ```
 pub struct HistoryAwareAgent<T: Agent> {
     inner_agent: T,
-    dialogue_history: Arc<Mutex<Vec<HistoryEntry>>>,
+    dialogue_history: Arc<Mutex<Vec<PayloadMessage>>>,
     /// Name of this agent (for attributing responses in history)
     self_name: Option<String>,
     /// Role of this agent (for attributing responses in history)
@@ -227,14 +189,14 @@ where
             "[HistoryAwareAgent] Adding {} messages to history",
             current_messages.len()
         );
-        for (speaker, content) in current_messages {
+        for message in current_messages {
             #[cfg(test)]
             eprintln!(
                 "[HistoryAwareAgent] Adding to history: [{}: {}]",
-                speaker.name(),
-                content
+                message.speaker.name(),
+                &message.content
             );
-            history.push(HistoryEntry::new(speaker, content));
+            history.push(message);
         }
         #[cfg(test)]
         eprintln!(
@@ -244,13 +206,14 @@ where
 
         // Add assistant response to history with proper attribution
         let response_entry = match (&self.self_name, &self.self_role) {
-            (Some(name), Some(role)) => HistoryEntry::new(
-                Speaker::agent(name.clone(), role.clone()),
+            (Some(name), Some(role)) => PayloadMessage::agent(
+                name.clone(),
+                role.clone(),
                 format_response_for_history(&response),
             ),
             _ => {
                 // Fallback to System if no identity is set
-                HistoryEntry::system(format_response_for_history(&response))
+                PayloadMessage::system(format_response_for_history(&response))
             }
         };
         history.push(response_entry);
@@ -271,6 +234,7 @@ fn format_response_for_history<T: Serialize>(output: &T) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::dialogue::Speaker;
     use crate::agent::{Agent, AgentError, Payload};
     use async_trait::async_trait;
     use serde::de::DeserializeOwned;
@@ -324,10 +288,8 @@ mod tests {
         let history_agent = HistoryAwareAgent::new(base_agent.clone());
 
         // First call - use from_messages instead of text
-        let payload1 = Payload::from_messages(vec![(
-            Speaker::user("User", "User"),
-            "What is Rust?".to_string(),
-        )]);
+        let payload1 =
+            Payload::from_messages(vec![PayloadMessage::user("User", "User", "What is Rust?")]);
         let response1 = history_agent.execute(payload1).await.unwrap();
         assert_eq!(response1, "Response 1");
 
@@ -343,10 +305,8 @@ mod tests {
             self_role: None,
         };
 
-        let payload2 = Payload::from_messages(vec![(
-            Speaker::user("User", "User"),
-            "Tell me more".to_string(),
-        )]);
+        let payload2 =
+            Payload::from_messages(vec![PayloadMessage::user("User", "User", "Tell me more")]);
         let response2 = history_agent2.execute(payload2).await.unwrap();
         assert_eq!(response2, "Response 2");
 
@@ -363,8 +323,8 @@ mod tests {
 
         // Current message should be in messages structure
         assert_eq!(received_messages.len(), 1);
-        assert_eq!(received_messages[0].0, Speaker::user("User", "User"));
-        assert_eq!(received_messages[0].1, "Tell me more");
+        assert_eq!(received_messages[0].speaker, Speaker::user("User", "User"));
+        assert_eq!(received_messages[0].content, "Tell me more");
     }
 
     #[tokio::test]
@@ -395,8 +355,7 @@ mod tests {
         let base_agent = RecordingAgent::new(String::from("First response"));
         let history_agent = HistoryAwareAgent::new(base_agent.clone());
 
-        let payload =
-            Payload::from_messages(vec![(Speaker::user("User", "User"), "Hello".to_string())]);
+        let payload = Payload::from_messages(vec![PayloadMessage::user("User", "User", "Hello")]);
         let _ = history_agent.execute(payload).await.unwrap();
 
         // First call should not have history prefix
@@ -410,8 +369,8 @@ mod tests {
 
         // Current message should be in messages structure
         assert_eq!(received_messages.len(), 1);
-        assert_eq!(received_messages[0].0, Speaker::user("User", "User"));
-        assert_eq!(received_messages[0].1, "Hello");
+        assert_eq!(received_messages[0].speaker, Speaker::user("User", "User"));
+        assert_eq!(received_messages[0].content, "Hello");
     }
 
     #[tokio::test]

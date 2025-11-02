@@ -1,5 +1,5 @@
 use super::dialogue::ExecutionModel;
-use super::{Agent, AgentError, Payload, PayloadContent};
+use super::{Agent, AgentError, Payload, PayloadContent, PayloadMessage};
 use crate::ToPrompt;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -238,17 +238,14 @@ fn format_participants_with_relation(
 ///
 /// Each message is formatted as "[Speaker]: content" or "[Speaker (YOU)]: content"
 /// based on whether the speaker is the current persona.
-fn format_messages_with_relation(
-    messages: &[(super::dialogue::Speaker, String)],
-    self_name: &str,
-) -> String {
+fn format_messages_with_relation(messages: &[PayloadMessage], self_name: &str) -> String {
     messages
         .iter()
-        .map(|(speaker, content)| {
-            if speaker.name() == self_name {
-                format!("[{} (YOU)]: {}", speaker.name(), content)
+        .map(|message| {
+            if message.speaker.name() == self_name {
+                format!("[{} (YOU)]: {}", message.speaker.name(), &message.content)
             } else {
-                format!("[{}]: {}", speaker.name(), content)
+                format!("[{}]: {}", message.speaker.name(), &message.content)
             }
         })
         .collect::<Vec<_>>()
@@ -371,8 +368,8 @@ where
         let mut final_payload = Payload::text(prompt_text);
 
         // Preserve messages structure
-        for (speaker, content) in messages {
-            final_payload = final_payload.with_message(speaker, content);
+        for message in messages {
+            final_payload = final_payload.with_message(message.speaker, message.content);
         }
 
         // Preserve attachments
@@ -706,8 +703,6 @@ mod tests {
 
     #[tokio::test]
     async fn persona_agent_formats_messages() {
-        use crate::agent::dialogue::Speaker;
-
         let persona = Persona {
             name: "Agent".to_string(),
             role: "Assistant".to_string(),
@@ -719,8 +714,8 @@ mod tests {
         let persona_agent = PersonaAgent::new(base_agent.clone(), persona);
 
         let payload = Payload::from_messages(vec![
-            (Speaker::System, "System instruction".to_string()),
-            (Speaker::user("Alice", "PM"), "User message".to_string()),
+            PayloadMessage::system("System instruction"),
+            PayloadMessage::user("Alice", "PM", "User message"),
         ]);
 
         let _ = persona_agent.execute(payload).await.unwrap();
@@ -748,8 +743,8 @@ mod tests {
         let persona_agent = PersonaAgent::new(base_agent.clone(), persona);
 
         let original_messages = vec![
-            (Speaker::System, "System msg".to_string()),
-            (Speaker::user("Alice", "PM"), "User msg".to_string()),
+            PayloadMessage::system("System msg"),
+            PayloadMessage::user("Alice", "PM", "User msg"),
         ];
 
         let payload = Payload::from_messages(original_messages.clone());
@@ -761,10 +756,10 @@ mod tests {
 
         // Messages should be preserved in the payload
         assert_eq!(received_messages.len(), original_messages.len());
-        assert_eq!(received_messages[0].0, Speaker::System);
-        assert_eq!(received_messages[0].1, "System msg");
-        assert_eq!(received_messages[1].0, Speaker::user("Alice", "PM"));
-        assert_eq!(received_messages[1].1, "User msg");
+        assert_eq!(received_messages[0].speaker, Speaker::System);
+        assert_eq!(received_messages[0].content, "System msg");
+        assert_eq!(received_messages[1].speaker, Speaker::user("Alice", "PM"));
+        assert_eq!(received_messages[1].content, "User msg");
     }
 
     #[tokio::test]
@@ -792,11 +787,8 @@ mod tests {
         ];
 
         let messages = vec![
-            (Speaker::System, "Discuss feature priorities".to_string()),
-            (
-                Speaker::user("Bob", "Engineer"),
-                "I suggest we focus on performance".to_string(),
-            ),
+            PayloadMessage::system("Discuss feature priorities"),
+            PayloadMessage::user("Bob", "Engineer", "I suggest we focus on performance"),
         ];
 
         let base_agent = RecordingAgent::new("Good idea".to_string());
@@ -826,9 +818,15 @@ mod tests {
         // Verify messages are preserved (Text is excluded, only Message variants)
         let received_messages = call.to_messages();
         assert_eq!(received_messages.len(), 2);
-        assert_eq!(received_messages[0].0, Speaker::System);
-        assert_eq!(received_messages[0].1, "Discuss feature priorities");
-        assert_eq!(received_messages[1].0, Speaker::user("Bob", "Engineer"));
-        assert_eq!(received_messages[1].1, "I suggest we focus on performance");
+        assert_eq!(received_messages[0].speaker, Speaker::System);
+        assert_eq!(received_messages[0].content, "Discuss feature priorities");
+        assert_eq!(
+            received_messages[1].speaker,
+            Speaker::user("Bob", "Engineer")
+        );
+        assert_eq!(
+            received_messages[1].content,
+            "I suggest we focus on performance"
+        );
     }
 }
