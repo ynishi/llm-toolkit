@@ -114,6 +114,14 @@ pub struct DialogueMessage {
     /// Optional metadata
     #[serde(default)]
     pub metadata: MessageMetadata,
+
+    /// Whether this message has been sent to agents as context
+    ///
+    /// This flag tracks if the message has been included in the context
+    /// passed to other agents in subsequent turns. It ensures each agent
+    /// receives other agents' responses exactly once as context.
+    #[serde(default)]
+    pub sent_to_agents: bool,
 }
 
 impl DialogueMessage {
@@ -126,6 +134,7 @@ impl DialogueMessage {
             content,
             timestamp: current_unix_timestamp(),
             metadata: MessageMetadata::default(),
+            sent_to_agents: false,
         }
     }
 

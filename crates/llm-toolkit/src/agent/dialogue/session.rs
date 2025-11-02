@@ -8,7 +8,6 @@ use super::super::{AgentError, Payload};
 use super::message::{DialogueMessage, Speaker};
 use super::state::SessionState;
 use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel};
-use crate::agent::PayloadMessage;
 use tracing::{error, info};
 
 /// Represents an in-flight dialogue execution that can yield turns incrementally.
@@ -277,43 +276,6 @@ impl<'a> DialogueSession<'a> {
                     };
                 }
                 SessionState::Completed => return None,
-            }
-        }
-    }
-}
-
-impl<'a> Drop for DialogueSession<'a> {
-    fn drop(&mut self) {
-        if let SessionState::Broadcast(state) = &mut self.state {
-            match state.order {
-                BroadcastOrder::Completion => {
-                    for (entry, (idx, participant_name)) in
-                        state.buffered.iter().zip(state.completion_metadata.iter())
-                    {
-                        if let Some(Ok(content)) = entry {
-                            let participant = &self.dialogue.participants[*idx];
-                            let pending = PayloadMessage::agent(
-                                participant_name.clone(),
-                                participant.persona.role.clone(),
-                                content.clone(),
-                            );
-                            self.dialogue.pending_intent_prefix.push(pending);
-                        }
-                    }
-                }
-                BroadcastOrder::ParticipantOrder => {
-                    for (idx, maybe_result) in state.buffered.iter().enumerate() {
-                        if let Some(Ok(content)) = maybe_result {
-                            let participant = &self.dialogue.participants[idx];
-                            let pending = PayloadMessage::agent(
-                                participant.name().to_string(),
-                                participant.persona.role.clone(),
-                                content.clone(),
-                            );
-                            self.dialogue.pending_intent_prefix.push(pending);
-                        }
-                    }
-                }
             }
         }
     }

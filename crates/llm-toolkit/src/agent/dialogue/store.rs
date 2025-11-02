@@ -93,6 +93,34 @@ impl MessageStore {
         self.messages_by_id.clear();
         self.message_order.clear();
     }
+
+    /// Returns messages that have not been sent to agents as context yet.
+    ///
+    /// This is used to get agent responses from previous turns that need to be
+    /// distributed as context to other agents in the next turn.
+    pub fn unsent_messages(&self) -> Vec<&DialogueMessage> {
+        self.all_messages()
+            .into_iter()
+            .filter(|msg| !msg.sent_to_agents)
+            .collect()
+    }
+
+    /// Marks a message as sent to agents.
+    ///
+    /// This should be called after a message has been included in the context
+    /// passed to agents in a subsequent turn.
+    pub fn mark_as_sent(&mut self, id: MessageId) {
+        if let Some(msg) = self.messages_by_id.get_mut(&id) {
+            msg.sent_to_agents = true;
+        }
+    }
+
+    /// Marks multiple messages as sent to agents.
+    pub fn mark_all_as_sent(&mut self, ids: &[MessageId]) {
+        for id in ids {
+            self.mark_as_sent(*id);
+        }
+    }
 }
 
 impl Default for MessageStore {

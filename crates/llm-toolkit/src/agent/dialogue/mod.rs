@@ -101,7 +101,7 @@ use crate::agent::{Agent, AgentError, Payload, PayloadMessage};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::task::JoinSet;
-use tracing::debug;
+use tracing::{debug, trace};
 
 // Re-export key types
 pub use message::{
@@ -265,10 +265,6 @@ pub struct Dialogue {
     /// Message store for all dialogue messages
     pub(super) message_store: MessageStore,
 
-    /// Responses that were produced but not surfaced before the previous session ended.
-    /// These are injected at the front of the next turn's intent messages.
-    pending_intent_prefix: Vec<PayloadMessage>,
-
     pub(super) execution_model: ExecutionModel,
 }
 
@@ -280,7 +276,6 @@ impl Dialogue {
         Self {
             participants: Vec::new(),
             message_store: MessageStore::new(),
-            pending_intent_prefix: Vec::new(),
             execution_model,
         }
     }
@@ -370,6 +365,7 @@ impl Dialogue {
                 content: dialogue_turn.content,
                 timestamp: message::current_unix_timestamp(),
                 metadata: Default::default(),
+                sent_to_agents: true, // Historical messages are considered already sent
             };
 
             self.message_store.push(message);
@@ -847,7 +843,31 @@ impl Dialogue {
         };
 
         // Responses that were produced in a previous session but not surfaced yet.
-        let pending_prefix = std::mem::take(&mut self.pending_intent_prefix);
+        // Get unsent messages from MessageStore (responses from previous turns not yet sent to agents)
+        let unsent_messages: Vec<PayloadMessage> = self
+            .message_store
+            .unsent_messages()
+            .iter()
+            .map(|msg| PayloadMessage::new(msg.speaker.clone(), msg.content.clone()))
+            .collect();
+
+        // Collect message IDs to mark as sent after spawning tasks
+        let unsent_message_ids: Vec<_> = self
+            .message_store
+            .unsent_messages()
+            .iter()
+            .map(|msg| msg.id)
+            .collect();
+
+        if !unsent_messages.is_empty() {
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                unsent_count = unsent_messages.len(),
+                total_messages = self.message_store.len(),
+                "Retrieved unsent messages from MessageStore to distribute as context"
+            );
+        }
 
         let mut pending = JoinSet::new();
 
@@ -855,17 +875,17 @@ impl Dialogue {
             let agent = Arc::clone(&participant.agent);
             let name = participant.name().to_string();
 
-            // Combine: [old agent responses (excluding self)] + [pending responses (excluding self)] + [new intent]
+            // Combine: [old agent responses (excluding self)] + [unsent messages (excluding self)] + [new intent]
             let mut current_messages = prev_agent_messages
                 .iter()
                 .filter(|msg| msg.speaker.name() != name)
                 .cloned()
                 .collect::<Vec<_>>();
 
-            // Add pending prefix, but exclude self
-            if !pending_prefix.is_empty() {
+            // Add unsent messages, but exclude self
+            if !unsent_messages.is_empty() {
                 current_messages.extend(
-                    pending_prefix
+                    unsent_messages
                         .iter()
                         .filter(|msg| msg.speaker.name() != name)
                         .cloned(),
@@ -916,6 +936,17 @@ impl Dialogue {
                 let result = agent.execute(final_payload).await;
                 (idx, name, result)
             });
+        }
+
+        // Mark unsent messages as sent to agents
+        self.message_store.mark_all_as_sent(&unsent_message_ids);
+
+        if !unsent_message_ids.is_empty() {
+            trace!(
+                target = "llm_toolkit::dialogue",
+                marked_sent_count = unsent_message_ids.len(),
+                "Marked messages as sent_to_agents in MessageStore"
+            );
         }
 
         pending
