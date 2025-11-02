@@ -1,9 +1,24 @@
+use crate::ToPrompt;
+use crate::agent::payload_message::format_messages_with_relation;
+
 use super::payload_message::PayloadMessage;
-use super::{Agent, AgentError, Payload, PayloadContent};
+use super::{Agent, AgentError, Payload};
 use async_trait::async_trait;
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+#[derive(Serialize, ToPrompt)]
+#[prompt(template = r#"
+{% if history %}
+Previous Conversation (most recent last) {{ history_length }} messages:
+{{ history }}
+{% endif %}
+"#)]
+struct HistoryPromptDto {
+    history_length: usize,
+    history: String,
+}
 
 /// An agent wrapper that maintains dialogue history across multiple executions.
 ///
@@ -105,6 +120,11 @@ where
         self.inner_agent.expertise()
     }
 
+    /// History-aware execution of the agent.
+    /// 1. Retrieves and provide text-formatted history to the inner agent.
+    /// 2. Executes the inner agent with the augmented payload.
+    /// 3. Updates the history with the current messages and the agent's response.
+    /// **Note**: This method not change current payload's messages or attachments.
     #[crate::tracing::instrument(
         name = "history_aware_agent.execute",
         skip(self, intent),
@@ -116,67 +136,35 @@ where
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         // Lock history and build context
         let history = self.dialogue_history.lock().await;
-        #[cfg(test)]
-        eprintln!(
-            "[HistoryAwareAgent] History size at start: {}",
-            history.len()
+        let history_len = history.len();
+        let history_string = format_messages_with_relation(
+            &history,
+            self.self_name.as_deref().unwrap_or("System"), // Default to System if no name
+            intent.total_content_count() + history.iter().map(|m| m.content.len()).sum::<usize>(),
         );
-        let history_prompt = if history.is_empty() {
-            String::new()
-        } else {
-            let formatted_history = history
-                .iter()
-                .map(|entry| entry.format())
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!("# Previous Conversation\n{}\n\n", formatted_history)
-        };
+
+        let history_prompt = HistoryPromptDto {
+            history_length: history_len,
+            history: history_string.clone(),
+        }
+        .to_prompt();
         #[cfg(test)]
         eprintln!("[HistoryAwareAgent] history_prompt: '{}'", history_prompt);
         drop(history);
 
-        // Extract current messages from intent (these are the diff to be stored)
-        let current_messages = intent.to_messages();
-
-        #[cfg(test)]
-        eprintln!(
-            "[HistoryAwareAgent] current_messages count: {}",
-            current_messages.len()
-        );
-
-        // Create payload: start with messages (preserving structure)
-        let mut final_payload = Payload::from_messages(current_messages.clone());
-
-        // Add history as text (if exists)
-        let history_length = history_prompt.len();
-        if !history_prompt.is_empty() {
-            final_payload = final_payload.with_text(history_prompt);
-        }
-
-        // Preserve participants
-        if let Some(participants) = intent.participants() {
-            final_payload = final_payload.with_participants(participants.clone());
-        }
-
-        // Preserve attachments
-        for content in intent.contents() {
-            if let PayloadContent::Attachment(attachment) = content {
-                final_payload = final_payload.with_attachment(attachment.clone());
-            }
-        }
+        let final_payload = intent.clone().with_text(history_prompt);
 
         // Debug log the final payload
         crate::tracing::debug!(
             target: "llm_toolkit::agent::history",
             expertise = self.inner_agent.expertise(),
-            history_length = history_length,
-            message_count = current_messages.len(),
+            history_length = history_len,
             "Sending payload with history to inner agent"
         );
         crate::tracing::trace!(
             target: "llm_toolkit::agent::history",
             "\n========== HISTORY CONTEXT ==========\n{}\n====================================",
-            final_payload.to_text()
+            final_payload.to_text().as_str()
         );
 
         // Execute the inner agent
@@ -184,25 +172,11 @@ where
 
         // Add current messages to history
         let mut history = self.dialogue_history.lock().await;
-        #[cfg(test)]
-        eprintln!(
-            "[HistoryAwareAgent] Adding {} messages to history",
-            current_messages.len()
-        );
+        let current_messages = intent.to_messages();
+
         for message in current_messages {
-            #[cfg(test)]
-            eprintln!(
-                "[HistoryAwareAgent] Adding to history: [{}: {}]",
-                message.speaker.name(),
-                &message.content
-            );
             history.push(message);
         }
-        #[cfg(test)]
-        eprintln!(
-            "[HistoryAwareAgent] History size after adding: {}",
-            history.len()
-        );
 
         // Add assistant response to history with proper attribution
         let response_entry = match (&self.self_name, &self.self_role) {
@@ -217,6 +191,12 @@ where
             }
         };
         history.push(response_entry);
+        crate::tracing::debug!(
+            target: "llm_toolkit::agent::history",
+            expertise = self.inner_agent.expertise(),
+            history_length = history.len(),
+            "Updated dialogue history with latest interaction"
+        );
 
         Ok(response)
     }
@@ -282,6 +262,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn history_prompt_dto_renders_history() {
+        let dto = HistoryPromptDto {
+            history_length: 2,
+            history: "[User]: Hello\n[Agent]: Hi there".to_string(),
+        };
+        let rendered = dto.to_prompt();
+        assert!(rendered.contains("Previous Conversation (most recent last) 2 messages:"));
+        assert!(rendered.contains("[User]: Hello"));
+    }
+
+    #[test]
+    fn history_prompt_dto_renders_empty_history_as_empty_string() {
+        let dto = HistoryPromptDto {
+            history_length: 0,
+            history: String::new(),
+        };
+        assert!(dto.to_prompt().trim().is_empty());
+    }
+
     #[tokio::test]
     async fn test_history_tracking_across_multiple_calls() {
         let base_agent = RecordingAgent::new(String::from("Response 1"));
@@ -319,7 +319,7 @@ mod tests {
         // The second call should include the previous conversation in text
         assert!(received_text.contains("Previous Conversation"));
         assert!(received_text.contains("[User]: What is Rust?"));
-        assert!(received_text.contains("[System]: \"Response 1\""));
+        assert!(received_text.contains("[System (YOU)]: \"Response 1\""));
 
         // Current message should be in messages structure
         assert_eq!(received_messages.len(), 1);

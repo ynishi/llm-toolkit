@@ -1,4 +1,4 @@
-.PHONY: preflight publish test-examples test-examples-offline test
+.PHONY: preflight publish test-examples test-examples-offline test test-all
 
 # Run specific test with features
 # Usage: make test TARGET=test_full_dialogue_context_simple_format
@@ -8,6 +8,10 @@ test:
 		exit 1; \
 	fi
 	cargo test --package llm-toolkit --lib --features=agent $(TARGET) -- --nocapture
+
+test-all:
+	cargo test --package llm-toolkit --lib --features=agent -- --nocapture
+
 
 # 全Example（外部API依存含む）
 EXAMPLES := \

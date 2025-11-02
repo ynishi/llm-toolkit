@@ -255,7 +255,10 @@ pub enum ExecutionProfile {
 pub use error::AgentError;
 pub use payload::{Payload, PayloadContent};
 #[cfg(feature = "agent")]
-pub use payload_message::PayloadMessage;
+pub use payload_message::{
+    PayloadMessage, RelatedParticipant, RelatedPayloadMessage, SpeakerRelation,
+    participant_relation,
+};
 
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};

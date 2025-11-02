@@ -107,6 +107,18 @@ impl Payload {
         &self.inner.contents
     }
 
+    /// Returns the count of total content's text length in this payload.
+    pub fn total_content_count(&self) -> usize {
+        self.inner.contents.iter().fold(0, |acc, content| {
+            match content {
+                PayloadContent::Text(text) => acc + text.len(),
+                PayloadContent::Message { content, .. } => acc + content.len(),
+                PayloadContent::Attachment(_) => acc + 1, // Count each attachment as 1
+                PayloadContent::Participants(participants) => acc + participants.len(),
+            }
+        })
+    }
+
     /// Adds text content to this payload.
     pub fn with_text(self, text: impl Into<String>) -> Self {
         let mut new_contents = self.inner.contents.clone();

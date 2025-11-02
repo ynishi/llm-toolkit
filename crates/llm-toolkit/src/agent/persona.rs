@@ -1,6 +1,7 @@
 use super::dialogue::ExecutionModel;
-use super::{Agent, AgentError, Payload, PayloadContent, PayloadMessage};
+use super::{Agent, AgentError, Payload, PayloadContent, RelatedParticipant, participant_relation};
 use crate::ToPrompt;
+use crate::agent::payload_message::format_messages_with_relation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -217,37 +218,27 @@ impl PersonaTeam {
 ///
 /// * `participants` - List of all participants in the dialogue
 /// * `self_name` - Name of the current agent (persona)
+fn relate_participants<'a>(
+    participants: impl IntoIterator<Item = &'a super::dialogue::ParticipantInfo>,
+    self_name: &str,
+) -> Vec<RelatedParticipant> {
+    participants
+        .into_iter()
+        .cloned()
+        .map(|participant| {
+            let relation = participant_relation(&participant, self_name);
+            RelatedParticipant::new(participant, relation)
+        })
+        .collect()
+}
+
 fn format_participants_with_relation(
     participants: &[super::dialogue::ParticipantInfo],
     self_name: &str,
 ) -> String {
-    participants
-        .iter()
-        .map(|p| {
-            if p.name == self_name {
-                format!("- **{} (YOU)** - {}: {}", p.name, p.role, p.description)
-            } else {
-                format!("- **{}** - {}: {}", p.name, p.role, p.description)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Formats messages with speaker information and YOU/ME marking.
-///
-/// Each message is formatted as "[Speaker]: content" or "[Speaker (YOU)]: content"
-/// based on whether the speaker is the current persona.
-fn format_messages_with_relation(messages: &[PayloadMessage], self_name: &str) -> String {
-    messages
-        .iter()
-        .map(|message| {
-            if message.speaker.name() == self_name {
-                format!("[{} (YOU)]: {}", message.speaker.name(), &message.content)
-            } else {
-                format!("[{}]: {}", message.speaker.name(), &message.content)
-            }
-        })
+    relate_participants(participants.iter(), self_name)
+        .into_iter()
+        .map(|participant| participant.format_line())
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -258,18 +249,28 @@ fn format_messages_with_relation(messages: &[PayloadMessage], self_name: &str) -
 /// This structure allows PersonaAgent to build prompts in a type-safe way
 /// and defer the actual text formatting until needed.
 #[derive(ToPrompt, Serialize)]
-#[prompt(template = r#"{{persona}}{% if participants %}
+#[prompt(template = r#"YOU ARE A PERSONA-DRIVEN AI AGENT.
+YOU ARE {{ persona.name }} WHO SERVES AS {{ persona.role }}.
+
+{{persona}}{% if participants %}
 
 # Participants
 {{participants}}
+{% endif %}{% if context %}
+
+# Conversation Context (History)
+{{context}}
 {% endif %}{% if current_content %}
 
+# Current Messages
 {{current_content}}
 {% endif %}"#)]
 struct PersonaAgentPrompt {
     persona: Persona,
     #[serde(skip_serializing_if = "String::is_empty")]
     participants: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    context: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     current_content: String,
 }
@@ -312,40 +313,26 @@ where
     )]
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
         // 1. Extract and format participants with relation interpretation (YOU/ME marking)
-        let participants_text = if let Some(participants) = intent.participants() {
-            format_participants_with_relation(participants, &self.persona.name)
-        } else {
-            String::new()
-        };
+        let participants_text = intent
+            .participants()
+            .map(|participants| format_participants_with_relation(participants, &self.persona.name))
+            .unwrap_or_default();
 
-        // 2. Get history text from HistoryAwareAgent (if provided)
-        let history_text = intent.to_text();
+        // 2. Get context text from HistoryAwareAgent (if provided)
+        let context_text = intent.to_text();
 
         // 3. Extract and format current messages (the diff) with YOU/ME marking
         let messages = intent.to_messages();
-        let current_messages_text = if !messages.is_empty() {
-            format!(
-                "# Current Messages\n{}",
-                format_messages_with_relation(&messages, &self.persona.name)
-            )
-        } else {
-            String::new()
-        };
-
-        // 4. Combine: History (from HistoryAwareAgent) + Current Messages (formatted here)
-        let current_content = if !history_text.is_empty() && !current_messages_text.is_empty() {
-            format!("{}\n\n{}", history_text, current_messages_text)
-        } else if !history_text.is_empty() {
-            history_text
-        } else {
-            current_messages_text
-        };
+        let total_content_count = intent.total_content_count();
+        let current_messages_text =
+            format_messages_with_relation(&messages, &self.persona.name, total_content_count);
 
         // 5. Build structured prompt
         let prompt_struct = PersonaAgentPrompt {
             persona: self.persona.clone(),
             participants: participants_text,
-            current_content,
+            context: context_text,
+            current_content: current_messages_text,
         };
 
         // 6. Convert to text
@@ -386,7 +373,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{Agent, AgentError, Payload};
+    use crate::agent::{Agent, AgentError, Payload, PayloadMessage};
     use crate::attachment::Attachment;
     use async_trait::async_trait;
     use serde::de::DeserializeOwned;
@@ -551,6 +538,7 @@ mod tests {
         let prompt_struct = PersonaAgentPrompt {
             persona: persona.clone(),
             participants: "- Bob (Developer)\n- Charlie (Designer)".to_string(),
+            context: String::new(),
             current_content: "Please review the code".to_string(),
         };
 
@@ -697,7 +685,7 @@ mod tests {
         // Alice should be marked as "YOU"
         assert!(call_text.contains("Alice (YOU)"));
         // Bob should not be marked as "YOU"
-        assert!(call_text.contains("**Bob**"));
+        assert!(call_text.contains("Bob"));
         assert!(!call_text.contains("Bob (YOU)"));
     }
 
@@ -809,8 +797,8 @@ mod tests {
         assert!(call_text.contains("# Persona Profile"));
         assert!(call_text.contains("**Name**: Alice"));
         assert!(call_text.contains("# Participants"));
-        assert!(call_text.contains("Alice (YOU)"));
-        assert!(call_text.contains("**Bob**"));
+        assert!(call_text.contains("**Alice (YOU)**"));
+        assert!(call_text.contains("**Bob (ALLY)**"));
         assert!(call_text.contains("# Current Messages"));
         assert!(call_text.contains("[System]: Discuss feature priorities"));
         assert!(call_text.contains("[Bob]: I suggest we focus on performance"));
