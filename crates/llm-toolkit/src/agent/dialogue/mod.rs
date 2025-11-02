@@ -412,6 +412,23 @@ impl Dialogue {
             .collect()
     }
 
+    /// Returns participant information for all participants in the dialogue.
+    ///
+    /// This helper method extracts name, role, and background from each
+    /// participant's persona for use in context distribution.
+    fn get_participants_info(&self) -> Vec<ParticipantInfo> {
+        self.participants
+            .iter()
+            .map(|p| {
+                ParticipantInfo::new(
+                    p.persona.name.clone(),
+                    p.persona.role.clone(),
+                    p.persona.background.clone(),
+                )
+            })
+            .collect()
+    }
+
     /// Creates a Dialogue from a blueprint.
     ///
     /// If the blueprint contains pre-defined participants, they are used directly.
@@ -801,17 +818,7 @@ impl Dialogue {
         payload: &Payload,
     ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
         // Build participant list
-        let participants_info: Vec<ParticipantInfo> = self
-            .participants
-            .iter()
-            .map(|p| {
-                ParticipantInfo::new(
-                    p.persona.name.clone(),
-                    p.persona.role.clone(),
-                    p.persona.background.clone(),
-                )
-            })
-            .collect();
+        let participants_info = self.get_participants_info();
 
         // Get previous agent responses as PayloadMessages
         let prev_agent_messages: Vec<PayloadMessage> = if current_turn > 1 {
@@ -1034,17 +1041,7 @@ impl Dialogue {
         }
 
         // 2. Build participant list
-        let participants_info: Vec<ParticipantInfo> = self
-            .participants
-            .iter()
-            .map(|p| {
-                ParticipantInfo::new(
-                    p.persona.name.clone(),
-                    p.persona.role.clone(),
-                    p.persona.background.clone(),
-                )
-            })
-            .collect();
+        let participants_info = self.get_participants_info();
 
         // 3. Chain through participants sequentially
         let mut current_input = prompt_text;

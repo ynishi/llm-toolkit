@@ -140,7 +140,7 @@ impl RelatedPayloadMessage {
     /// Formats a banner style header useful for long-form sections.
     pub fn format_banner(&self) -> String {
         format!(
-            "======= {} =======\n{}==================\n",
+            "======= {} =======\n{}\n==================\n",
             self.display_label(),
             self.message.content
         )

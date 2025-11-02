@@ -238,4 +238,178 @@ mod tests {
         assert_eq!(store.len(), 0);
         assert!(store.is_empty());
     }
+
+    #[test]
+    fn test_unsent_messages_only_returns_agent_messages() {
+        let mut store = MessageStore::new();
+
+        // Add various message types
+        let msg1 = DialogueMessage::new(1, Speaker::System, "System prompt".to_string());
+        let msg2 =
+            DialogueMessage::new(1, Speaker::user("User", "Human"), "User input".to_string());
+        let msg3 = DialogueMessage::new(
+            1,
+            Speaker::agent("Alice", "Engineer"),
+            "Alice response".to_string(),
+        );
+        let msg4 = DialogueMessage::new(
+            1,
+            Speaker::agent("Bob", "Designer"),
+            "Bob response".to_string(),
+        );
+
+        store.push(msg1);
+        store.push(msg2);
+        store.push(msg3);
+        store.push(msg4);
+
+        // unsent_messages should only return Agent messages (Alice and Bob)
+        let unsent = store.unsent_messages();
+        assert_eq!(unsent.len(), 2);
+        assert_eq!(unsent[0].content, "Alice response");
+        assert_eq!(unsent[1].content, "Bob response");
+    }
+
+    #[test]
+    fn test_unsent_messages_respects_sent_flag() {
+        let mut store = MessageStore::new();
+
+        let msg1 = DialogueMessage::new(
+            1,
+            Speaker::agent("Alice", "Engineer"),
+            "Alice response".to_string(),
+        );
+        let msg1_id = msg1.id;
+        let msg2 = DialogueMessage::new(
+            1,
+            Speaker::agent("Bob", "Designer"),
+            "Bob response".to_string(),
+        );
+        let msg2_id = msg2.id;
+
+        store.push(msg1);
+        store.push(msg2);
+
+        // Initially, both are unsent
+        assert_eq!(store.unsent_messages().len(), 2);
+
+        // Mark Alice's message as sent
+        store.mark_as_sent(msg1_id);
+
+        // Now only Bob's message should be unsent
+        let unsent = store.unsent_messages();
+        assert_eq!(unsent.len(), 1);
+        assert_eq!(unsent[0].content, "Bob response");
+
+        // Mark Bob's message as sent
+        store.mark_as_sent(msg2_id);
+
+        // Now no messages are unsent
+        assert_eq!(store.unsent_messages().len(), 0);
+    }
+
+    #[test]
+    fn test_mark_all_as_sent() {
+        let mut store = MessageStore::new();
+
+        let msg1 = DialogueMessage::new(
+            1,
+            Speaker::agent("Alice", "Engineer"),
+            "Alice response".to_string(),
+        );
+        let msg1_id = msg1.id;
+        let msg2 = DialogueMessage::new(
+            1,
+            Speaker::agent("Bob", "Designer"),
+            "Bob response".to_string(),
+        );
+        let msg2_id = msg2.id;
+        let msg3 = DialogueMessage::new(
+            1,
+            Speaker::agent("Charlie", "Manager"),
+            "Charlie response".to_string(),
+        );
+        let msg3_id = msg3.id;
+
+        store.push(msg1);
+        store.push(msg2);
+        store.push(msg3);
+
+        // Initially all are unsent
+        assert_eq!(store.unsent_messages().len(), 3);
+
+        // Mark Alice and Bob as sent
+        store.mark_all_as_sent(&[msg1_id, msg2_id]);
+
+        // Only Charlie should be unsent
+        let unsent = store.unsent_messages();
+        assert_eq!(unsent.len(), 1);
+        assert_eq!(unsent[0].content, "Charlie response");
+
+        // Verify Alice and Bob are marked as sent
+        assert!(store.get(msg1_id).unwrap().sent_to_agents);
+        assert!(store.get(msg2_id).unwrap().sent_to_agents);
+        assert!(!store.get(msg3_id).unwrap().sent_to_agents);
+    }
+
+    #[test]
+    fn test_unsent_messages_excludes_user_and_system() {
+        let mut store = MessageStore::new();
+
+        // Add messages in Turn 1
+        store.push(DialogueMessage::new(
+            1,
+            Speaker::System,
+            "Turn 1 prompt".to_string(),
+        ));
+        store.push(DialogueMessage::new(
+            1,
+            Speaker::agent("Alice", "Engineer"),
+            "Turn 1 Alice".to_string(),
+        ));
+
+        // Add messages in Turn 2 (including User message)
+        store.push(DialogueMessage::new(
+            2,
+            Speaker::user("User", "Human"),
+            "Turn 2 user input".to_string(),
+        ));
+        store.push(DialogueMessage::new(
+            2,
+            Speaker::agent("Bob", "Designer"),
+            "Turn 2 Bob".to_string(),
+        ));
+
+        // unsent_messages should only return Agent messages (Alice and Bob)
+        let unsent = store.unsent_messages();
+        assert_eq!(unsent.len(), 2);
+
+        // Verify it's only agent messages
+        for msg in &unsent {
+            assert!(matches!(msg.speaker, Speaker::Agent { .. }));
+        }
+    }
+
+    #[test]
+    fn test_mark_as_sent_nonexistent_id() {
+        let mut store = MessageStore::new();
+
+        let msg = DialogueMessage::new(
+            1,
+            Speaker::agent("Alice", "Engineer"),
+            "Response".to_string(),
+        );
+        let msg_id = msg.id;
+        store.push(msg);
+
+        // Create a fake ID that doesn't exist
+        let fake_id = MessageId::new();
+
+        // Marking a non-existent ID should not panic
+        store.mark_as_sent(fake_id);
+
+        // The real message should still be unsent
+        assert_eq!(store.unsent_messages().len(), 1);
+        assert!(!store.get(msg_id).unwrap().sent_to_agents);
+    }
 }
