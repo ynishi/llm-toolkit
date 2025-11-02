@@ -1,7 +1,7 @@
+use async_trait::async_trait;
 use llm_toolkit::agent::dialogue::Dialogue;
 use llm_toolkit::agent::persona::Persona;
 use llm_toolkit::agent::{Agent, AgentError, Payload};
-use async_trait::async_trait;
 
 #[derive(Clone)]
 struct SimpleAgent {
@@ -50,8 +50,18 @@ async fn main() {
     };
 
     dialogue
-        .add_participant(persona_a, SimpleAgent { name: "AgentA".to_string() })
-        .add_participant(persona_b, SimpleAgent { name: "AgentB".to_string() });
+        .add_participant(
+            persona_a,
+            SimpleAgent {
+                name: "AgentA".to_string(),
+            },
+        )
+        .add_participant(
+            persona_b,
+            SimpleAgent {
+                name: "AgentB".to_string(),
+            },
+        );
 
     println!("\n=== Turn 1 ===");
     dialogue.run("First message").await.unwrap();

@@ -44,7 +44,8 @@ EXAMPLES := \
 	test_type_output \
 	orchestrator_streaming \
 	persona_dialogue \
-	persona_macro_test
+	persona_macro_test \
+	test_dialogue_logging
 
 # 外部API依存なしのExample（E2Eテストとして実行可能）
 # Note: check_agent_availability と codex_agent_basic は外部CLIチェック用なので除外
