@@ -132,7 +132,57 @@ pub struct DialogueBlueprint {
     pub execution_strategy: Option<ExecutionModel>,
 }
 
-/// Represents a single turn in the dialogue.
+/// Represents a single turn in the dialogue (public API).
+///
+/// This is a lightweight Data Transfer Object (DTO) used for:
+/// - **Streaming results**: Returned by `next_turn()` as each agent completes
+/// - **Batch results**: Returned by `run()` as a collection of all turns
+/// - **History snapshot**: Returned by `history()` for backward compatibility
+/// - **Serialization**: Can be saved/loaded as JSON for dialogue persistence
+///
+/// # Relationship to DialogueMessage
+///
+/// `DialogueTurn` is the **public-facing** representation of a dialogue turn,
+/// containing only the essential information (speaker and content).
+///
+/// Internally, the dialogue system uses [`DialogueMessage`](message::DialogueMessage),
+/// which is an **internal entity** stored in [`MessageStore`](store::MessageStore).
+/// `DialogueMessage` includes additional metadata like:
+/// - Unique message ID
+/// - Turn number
+/// - Creation timestamp
+/// - Custom metadata
+///
+/// This separation follows the DTO pattern and provides:
+/// - **Lightweight streaming**: No overhead from IDs/timestamps during real-time emission
+/// - **Clean public API**: Users don't need to manage internal details
+/// - **Flexibility**: Internal storage format can evolve without breaking changes
+///
+/// # Conversion
+///
+/// - **From DialogueMessage**: Use [`Dialogue::history()`] to convert internal messages to public turns
+/// - **To DialogueMessage**: Use [`Dialogue::with_history()`] to load turns into MessageStore
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // Streaming turns as they complete
+/// let mut session = dialogue.partial_session("Discuss the topic");
+/// while let Some(result) = session.next_turn().await {
+///     let turn = result?;
+///     println!("{}: {}", turn.speaker.name(), turn.content);
+/// }
+///
+/// // Batch execution
+/// let turns = dialogue.run("Discuss the topic").await?;
+/// for turn in turns {
+///     println!("{}: {}", turn.speaker.name(), turn.content);
+/// }
+///
+/// // Save/load dialogue history
+/// let history = dialogue.history();
+/// std::fs::write("dialogue.json", serde_json::to_string(&history)?)?;
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DialogueTurn {
     /// Who spoke in this turn

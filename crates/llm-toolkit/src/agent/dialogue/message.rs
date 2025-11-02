@@ -48,17 +48,52 @@ impl Default for MessageId {
     }
 }
 
-/// A single message in a dialogue (Entity).
+/// A single message in a dialogue (Internal Entity).
 ///
-/// This represents the canonical message that exists once in the system
-/// and is referenced from multiple contexts (Dialogue, History, Agent).
+/// This represents the canonical message entity stored in [`MessageStore`](super::store::MessageStore).
+/// It contains complete metadata for persistence, querying, and history reconstruction.
+///
+/// # Relationship to DialogueTurn
+///
+/// `DialogueMessage` is the **internal representation** of a dialogue message,
+/// with full metadata for storage and tracking.
+///
+/// The public API uses [`DialogueTurn`](super::DialogueTurn), which is a **lightweight DTO**
+/// containing only speaker and content. This separation provides:
+/// - **Internal flexibility**: Can add/modify metadata without breaking public API
+/// - **Efficient storage**: Full tracking with ID, turn number, timestamp
+/// - **Query support**: Can filter/search by turn, speaker, timestamp
+///
+/// # Conversion
+///
+/// - **To DialogueTurn**: Use [`Dialogue::history()`](super::Dialogue::history) - strips metadata
+/// - **From DialogueTurn**: Use [`Dialogue::with_history()`](super::Dialogue::with_history) - generates new metadata
 ///
 /// # Design Notes
 ///
 /// - **Entity**: Messages have identity via `MessageId`
-/// - **Immutable**: Once created, messages should not be modified
-/// - **Turn-based**: Messages are organized by turn number
-/// - **Timestamped**: Each message records when it was created
+/// - **Immutable**: Once created, messages should not be modified (event sourcing pattern)
+/// - **Turn-based**: Messages are organized by turn number for context retrieval
+/// - **Timestamped**: Each message records when it was created for audit/debugging
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use llm_toolkit::agent::dialogue::message::DialogueMessage;
+/// use llm_toolkit::agent::dialogue::Speaker;
+///
+/// // Create a new message
+/// let message = DialogueMessage::new(
+///     1, // turn number
+///     Speaker::agent("Alice", "Engineer"),
+///     "Let's use Rust for this project".to_string(),
+/// );
+///
+/// // Access metadata
+/// println!("Message ID: {}", message.id.as_u64());
+/// println!("Turn: {}", message.turn);
+/// println!("Timestamp: {}", message.timestamp);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DialogueMessage {
     /// Unique identifier (Entity identity)
