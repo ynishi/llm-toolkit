@@ -264,6 +264,10 @@ pub struct Dialogue {
     /// Message store for all dialogue messages
     pub(super) message_store: MessageStore,
 
+    /// Responses that were produced but not surfaced before the previous session ended.
+    /// These are injected at the front of the next turn's intent messages.
+    pending_intent_prefix: Vec<PayloadMessage>,
+
     pub(super) execution_model: ExecutionModel,
 }
 
@@ -275,6 +279,7 @@ impl Dialogue {
         Self {
             participants: Vec::new(),
             message_store: MessageStore::new(),
+            pending_intent_prefix: Vec::new(),
             execution_model,
         }
     }
@@ -674,6 +679,15 @@ impl Dialogue {
         let payload: Payload = initial_prompt.into();
         let current_turn = self.message_store.current_turn() + 1;
 
+        trace!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            execution_model = ?self.execution_model,
+            broadcast_order = ?broadcast_order,
+            participant_count = self.participants.len(),
+            "Starting partial_session"
+        );
+
         // Store messages in MessageStore
         // If payload has Messages, store them individually; otherwise store Text as System
         let messages = payload.to_messages();
@@ -793,7 +807,7 @@ impl Dialogue {
     ///
     /// Returns a JoinSet with pending agent executions.
     pub(super) fn spawn_broadcast_tasks(
-        &self,
+        &mut self,
         current_turn: usize,
         payload: &Payload,
     ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
@@ -839,18 +853,32 @@ impl Dialogue {
             }
         };
 
+        // Responses that were produced in a previous session but not surfaced yet.
+        let pending_prefix = std::mem::take(&mut self.pending_intent_prefix);
+
         let mut pending = JoinSet::new();
 
         for (idx, participant) in self.participants.iter().enumerate() {
             let agent = Arc::clone(&participant.agent);
             let name = participant.name().to_string();
 
-            // Combine: [old agent responses (excluding self)] + [new intent]
+            // Combine: [old agent responses (excluding self)] + [pending responses (excluding self)] + [new intent]
             let mut current_messages = prev_agent_messages
                 .iter()
                 .filter(|msg| msg.speaker.name() != name)
                 .cloned()
                 .collect::<Vec<_>>();
+
+            // Add pending prefix, but exclude self
+            if !pending_prefix.is_empty() {
+                current_messages.extend(
+                    pending_prefix
+                        .iter()
+                        .filter(|msg| msg.speaker.name() != name)
+                        .cloned(),
+                );
+            }
+
             current_messages.extend(new_messages.clone());
 
             // Create TurnInput based on whether we have structured messages or text
@@ -908,6 +936,14 @@ impl Dialogue {
         let payload: Payload = initial_prompt.into();
         let current_turn = self.message_store.current_turn() + 1;
 
+        debug!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            execution_model = "broadcast",
+            participant_count = self.participants.len(),
+            "Starting dialogue.run() in broadcast mode"
+        );
+
         // 1. Extract and store messages from payload
         let (input_messages, _prompt_text) =
             self.extract_messages_from_payload(&payload, current_turn);
@@ -956,6 +992,14 @@ impl Dialogue {
     ) -> Result<Vec<DialogueTurn>, AgentError> {
         let payload: Payload = initial_prompt.into();
         let current_turn = self.message_store.current_turn() + 1;
+
+        debug!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            execution_model = "sequential",
+            participant_count = self.participants.len(),
+            "Starting dialogue.run() in sequential mode"
+        );
 
         // 1. Extract and store messages from payload
         let (input_messages, prompt_text) =
