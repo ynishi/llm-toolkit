@@ -327,6 +327,39 @@ impl Dialogue {
         self
     }
 
+    /// Creates a single Participant from a Persona and LLM agent.
+    ///
+    /// This is a private helper that encapsulates the standard participant
+    /// creation pattern used throughout the module.
+    fn create_participant<T>(persona: Persona, llm_agent: T) -> Participant
+    where
+        T: Agent<Output = String> + 'static,
+    {
+        let chat_agent = Chat::new(llm_agent)
+            .with_persona(persona.clone())
+            .with_history(true)
+            .build();
+
+        Participant {
+            persona,
+            agent: Arc::new(chat_agent),
+        }
+    }
+
+    /// Creates multiple Participants from a list of Personas.
+    ///
+    /// This helper converts a Vec<Persona> into Vec<Participant> by
+    /// creating a Chat agent for each persona with the provided base agent.
+    fn create_participants<T>(personas: Vec<Persona>, llm_agent: T) -> Vec<Participant>
+    where
+        T: Agent<Output = String> + Clone + 'static,
+    {
+        personas
+            .into_iter()
+            .map(|persona| Self::create_participant(persona, llm_agent.clone()))
+            .collect()
+    }
+
     /// Creates a Dialogue from a blueprint.
     ///
     /// If the blueprint contains pre-defined participants, they are used directly.
@@ -391,17 +424,7 @@ impl Dialogue {
         };
 
         // Build participants from personas
-        for persona in personas {
-            let chat_agent = Chat::new(dialogue_agent.clone())
-                .with_persona(persona.clone())
-                .with_history(true)
-                .build();
-
-            dialogue.participants.push(Participant {
-                persona,
-                agent: Arc::new(chat_agent),
-            });
-        }
+        dialogue.participants = Self::create_participants(personas, dialogue_agent);
 
         Ok(dialogue)
     }
@@ -447,17 +470,7 @@ impl Dialogue {
         };
 
         // Build participants from personas
-        for persona in team.personas {
-            let chat_agent = Chat::new(llm_agent.clone())
-                .with_persona(persona.clone())
-                .with_history(true)
-                .build();
-
-            dialogue.participants.push(Participant {
-                persona,
-                agent: Arc::new(chat_agent),
-            });
-        }
+        dialogue.participants = Self::create_participants(team.personas, llm_agent);
 
         Ok(dialogue)
     }
@@ -496,15 +509,8 @@ impl Dialogue {
     where
         T: Agent<Output = String> + 'static,
     {
-        let chat_agent = Chat::new(llm_agent)
-            .with_persona(persona.clone())
-            .with_history(true)
-            .build();
-
-        self.participants.push(Participant {
-            persona,
-            agent: Arc::new(chat_agent),
-        });
+        self.participants
+            .push(Self::create_participant(persona, llm_agent));
 
         self
     }

@@ -115,50 +115,46 @@ impl<'a> DialogueSession<'a> {
                         Some(Ok((idx, name, result))) => {
                             let participant_name = name;
                             match state.order {
-                                BroadcastOrder::Completion => match result {
-                                    Ok(content) => {
-                                        // Store in MessageStore
-                                        let participant = &self.dialogue.participants[idx];
-                                        let message = DialogueMessage::new(
-                                            current_turn,
-                                            Speaker::agent(
-                                                participant_name.clone(),
-                                                participant.persona.role.clone(),
-                                            ),
-                                            content.clone(),
-                                        );
-                                        self.dialogue.message_store.push(message);
+                                BroadcastOrder::Completion => {
+                                    match &result {
+                                        Ok(content) => {
+                                            // Store in MessageStore
+                                            let participant = &self.dialogue.participants[idx];
+                                            let message = DialogueMessage::new(
+                                                current_turn,
+                                                Speaker::agent(
+                                                    participant_name.clone(),
+                                                    participant.persona.role.clone(),
+                                                ),
+                                                content.clone(),
+                                            );
+                                            self.dialogue.message_store.push(message);
 
-                                        let turn = DialogueTurn {
-                                            speaker: Speaker::agent(
-                                                participant_name.clone(),
-                                                participant.persona.role.clone(),
-                                            ),
-                                            content: content.clone(),
-                                        };
-                                        info!(
-                                            target = "llm_toolkit::dialogue",
-                                            mode = ?self.model,
-                                            participant = %participant_name,
-                                            participant_index = idx,
-                                            total_participants = participant_total,
-                                            event = "dialogue_turn_completed"
-                                        );
-                                        return Some(Ok(turn));
+                                            info!(
+                                                target = "llm_toolkit::dialogue",
+                                                mode = ?self.model,
+                                                participant = %participant_name,
+                                                participant_index = idx,
+                                                total_participants = participant_total,
+                                                event = "dialogue_turn_completed"
+                                            );
+                                        }
+                                        Err(err) => {
+                                            error!(
+                                                target = "llm_toolkit::dialogue",
+                                                mode = ?self.model,
+                                                participant = %participant_name,
+                                                participant_index = idx,
+                                                total_participants = participant_total,
+                                                error = %err,
+                                                event = "dialogue_turn_failed"
+                                            );
+                                        }
                                     }
-                                    Err(err) => {
-                                        error!(
-                                            target = "llm_toolkit::dialogue",
-                                            mode = ?self.model,
-                                            participant = %participant_name,
-                                            participant_index = idx,
-                                            total_participants = participant_total,
-                                            error = %err,
-                                            event = "dialogue_turn_failed"
-                                        );
-                                        return Some(Err(err));
-                                    }
-                                },
+                                    // Record result and continue to collect all responses
+                                    state.record_result(idx, participant_name, result);
+                                    continue;
+                                }
                                 BroadcastOrder::ParticipantOrder => {
                                     match &result {
                                         Ok(_) => {
@@ -183,7 +179,7 @@ impl<'a> DialogueSession<'a> {
                                             );
                                         }
                                     }
-                                    state.record_result(idx, result);
+                                    state.record_result(idx, participant_name, result);
                                     continue;
                                 }
                             }

@@ -16,6 +16,8 @@ pub(super) struct BroadcastState {
     pub(super) buffered: Vec<Option<Result<String, AgentError>>>,
     pub(super) next_emit: usize,
     pub(super) current_turn: usize,
+    /// For Completion mode: stores (participant_idx, participant_name) for each buffered result
+    pub(super) completion_metadata: Vec<(usize, String)>,
 }
 
 impl BroadcastState {
@@ -38,12 +40,27 @@ impl BroadcastState {
             buffered,
             next_emit: 0,
             current_turn,
+            completion_metadata: Vec::new(),
         }
     }
 
-    pub(super) fn record_result(&mut self, idx: usize, result: Result<String, AgentError>) {
-        if matches!(self.order, BroadcastOrder::ParticipantOrder) && idx < self.buffered.len() {
-            self.buffered[idx] = Some(result);
+    pub(super) fn record_result(
+        &mut self,
+        idx: usize,
+        participant_name: String,
+        result: Result<String, AgentError>,
+    ) {
+        match self.order {
+            BroadcastOrder::Completion => {
+                // For Completion mode, append to buffered with metadata
+                self.buffered.push(Some(result));
+                self.completion_metadata.push((idx, participant_name));
+            }
+            BroadcastOrder::ParticipantOrder => {
+                if idx < self.buffered.len() {
+                    self.buffered[idx] = Some(result);
+                }
+            }
         }
     }
 
@@ -51,61 +68,99 @@ impl BroadcastState {
         &mut self,
         dialogue: &mut Dialogue,
     ) -> Option<Result<DialogueTurn, AgentError>> {
-        if self.order != BroadcastOrder::ParticipantOrder {
-            return None;
-        }
+        match self.order {
+            BroadcastOrder::Completion => {
+                // For Completion mode, emit results in completion order
+                if self.buffered.is_empty() {
+                    return None;
+                }
 
-        let participant_total = dialogue.participants.len();
+                // Pop from front (FIFO - first completed, first emitted)
+                let result = self.buffered.remove(0).expect("checked is_empty");
+                let (idx, participant_name) = self.completion_metadata.remove(0);
 
-        if self.next_emit >= participant_total {
-            return None;
-        }
-
-        let idx = self.next_emit;
-        let slot_ready = self
-            .buffered
-            .get(idx)
-            .and_then(|slot| slot.as_ref())
-            .is_some();
-
-        if !slot_ready {
-            return None;
-        }
-
-        let result = self.buffered[idx].take().expect("checked is_some");
-        self.next_emit += 1;
-
-        match result {
-            Ok(content) => {
-                let participant = &dialogue.participants[idx];
-                let participant_name = participant.name().to_string();
-
-                // Store in MessageStore
-                let message = DialogueMessage::new(
-                    self.current_turn,
-                    Speaker::agent(participant_name.clone(), participant.persona.role.clone()),
-                    content.clone(),
-                );
-                dialogue.message_store.push(message);
-
-                let turn = DialogueTurn {
-                    speaker: Speaker::agent(
-                        participant_name.clone(),
-                        participant.persona.role.clone(),
-                    ),
-                    content: content.clone(),
-                };
-                info!(
-                    target = "llm_toolkit::dialogue",
-                    mode = ?ExecutionModel::Broadcast,
-                    participant = %participant_name,
-                    participant_index = idx,
-                    total_participants = participant_total,
-                    event = "dialogue_turn_emitted"
-                );
-                Some(Ok(turn))
+                match result {
+                    Ok(content) => {
+                        // Content is already stored in MessageStore by session.rs
+                        // Just create and return the DialogueTurn
+                        let participant = &dialogue.participants[idx];
+                        let turn = DialogueTurn {
+                            speaker: Speaker::agent(
+                                participant_name.clone(),
+                                participant.persona.role.clone(),
+                            ),
+                            content: content.clone(),
+                        };
+                        info!(
+                            target = "llm_toolkit::dialogue",
+                            mode = ?ExecutionModel::Broadcast,
+                            participant = %participant_name,
+                            participant_index = idx,
+                            total_participants = dialogue.participants.len(),
+                            event = "dialogue_turn_emitted"
+                        );
+                        Some(Ok(turn))
+                    }
+                    Err(err) => Some(Err(err)),
+                }
             }
-            Err(err) => Some(Err(err)),
+            BroadcastOrder::ParticipantOrder => {
+                let participant_total = dialogue.participants.len();
+
+                if self.next_emit >= participant_total {
+                    return None;
+                }
+
+                let idx = self.next_emit;
+                let slot_ready = self
+                    .buffered
+                    .get(idx)
+                    .and_then(|slot| slot.as_ref())
+                    .is_some();
+
+                if !slot_ready {
+                    return None;
+                }
+
+                let result = self.buffered[idx].take().expect("checked is_some");
+                self.next_emit += 1;
+
+                match result {
+                    Ok(content) => {
+                        let participant = &dialogue.participants[idx];
+                        let participant_name = participant.name().to_string();
+
+                        // Store in MessageStore
+                        let message = DialogueMessage::new(
+                            self.current_turn,
+                            Speaker::agent(
+                                participant_name.clone(),
+                                participant.persona.role.clone(),
+                            ),
+                            content.clone(),
+                        );
+                        dialogue.message_store.push(message);
+
+                        let turn = DialogueTurn {
+                            speaker: Speaker::agent(
+                                participant_name.clone(),
+                                participant.persona.role.clone(),
+                            ),
+                            content: content.clone(),
+                        };
+                        info!(
+                            target = "llm_toolkit::dialogue",
+                            mode = ?ExecutionModel::Broadcast,
+                            participant = %participant_name,
+                            participant_index = idx,
+                            total_participants = participant_total,
+                            event = "dialogue_turn_emitted"
+                        );
+                        Some(Ok(turn))
+                    }
+                    Err(err) => Some(Err(err)),
+                }
+            }
         }
     }
 }
