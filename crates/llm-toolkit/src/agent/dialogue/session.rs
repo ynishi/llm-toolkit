@@ -287,10 +287,8 @@ impl<'a> Drop for DialogueSession<'a> {
         if let SessionState::Broadcast(state) = &mut self.state {
             match state.order {
                 BroadcastOrder::Completion => {
-                    for (entry, (idx, participant_name)) in state
-                        .buffered
-                        .iter()
-                        .zip(state.completion_metadata.iter())
+                    for (entry, (idx, participant_name)) in
+                        state.buffered.iter().zip(state.completion_metadata.iter())
                     {
                         if let Some(Ok(content)) = entry {
                             let participant = &self.dialogue.participants[*idx];

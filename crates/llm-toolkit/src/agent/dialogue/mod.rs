@@ -101,6 +101,7 @@ use crate::agent::{Agent, AgentError, Payload, PayloadMessage};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::task::JoinSet;
+use tracing::debug;
 
 // Re-export key types
 pub use message::{
@@ -460,11 +461,7 @@ impl Dialogue {
             .execution_strategy
             .unwrap_or(ExecutionModel::Broadcast);
 
-        let mut dialogue = Self {
-            participants: Vec::new(),
-            message_store: MessageStore::new(),
-            execution_model,
-        };
+        let mut dialogue = Self::new(execution_model);
 
         // Use provided participants or generate them
         let personas = match blueprint.participants {
@@ -518,11 +515,7 @@ impl Dialogue {
         // Determine execution model from team hint
         let execution_model = team.execution_strategy.unwrap_or(ExecutionModel::Broadcast);
 
-        let mut dialogue = Self {
-            participants: Vec::new(),
-            message_store: MessageStore::new(),
-            execution_model,
-        };
+        let mut dialogue = Self::new(execution_model);
 
         // Build participants from personas
         dialogue.participants = Self::create_participants(team.personas, llm_agent);
@@ -679,7 +672,7 @@ impl Dialogue {
         let payload: Payload = initial_prompt.into();
         let current_turn = self.message_store.current_turn() + 1;
 
-        trace!(
+        crate::tracing::trace!(
             target = "llm_toolkit::dialogue",
             turn = current_turn,
             execution_model = ?self.execution_model,
@@ -1495,6 +1488,7 @@ mod tests {
         assert_eq!(second.content, "S2 output");
 
         assert!(session.next_turn().await.is_none());
+        drop(session);
 
         assert_eq!(dialogue.history().len(), 3);
         assert_eq!(dialogue.history()[0].speaker.name(), "System");
@@ -2024,6 +2018,7 @@ mod tests {
         let turn = session.next_turn().await.unwrap().unwrap();
         assert_eq!(turn.speaker.name(), "Analyst");
         assert_eq!(turn.content, "Image analysis complete");
+        drop(session);
 
         // Verify history contains text representation
         assert_eq!(dialogue.history().len(), 2);
@@ -2748,6 +2743,7 @@ mod tests {
 
         assert_eq!(turn1_results.len(), 1);
         assert!(turn1_results[0].content.contains("First message"));
+        drop(session1);
 
         // Verify Turn 1 is stored in history
         assert_eq!(dialogue.history().len(), 2); // System + Agent1
@@ -2768,6 +2764,7 @@ mod tests {
         // The agent should see context from other participants (in this case, none because solo)
         // but the current task should be "Second message"
         assert!(turn2_results[0].content.contains("Second message"));
+        drop(session2);
 
         // Verify complete history contains both turns
         assert_eq!(dialogue.history().len(), 4); // System + Agent1 + System + Agent1
@@ -2857,6 +2854,7 @@ mod tests {
         assert_eq!(turn1_results.len(), 2); // Two agents
         assert_eq!(turn1_results[0].content, "[AgentA]");
         assert_eq!(turn1_results[1].content, "[AgentB]");
+        drop(session1);
 
         // Verify Turn 1 history: System + AgentA + AgentB
         assert_eq!(dialogue.history().len(), 3);
@@ -2881,6 +2879,7 @@ mod tests {
         }
 
         assert_eq!(turn2_results.len(), 2); // Two agents
+        drop(session2);
 
         // Verify Turn 2 history: previous 3 + new 3 messages + 2 agent responses
         // Total: 3 (turn1) + 3 (turn2 input) + 2 (turn2 responses) = 8
@@ -2969,9 +2968,11 @@ mod tests {
 
         let mut session1 = dialogue_partial.partial_session("Turn 1");
         while (session1.next_turn().await).is_some() {}
+        drop(session1);
 
         let mut session2 = dialogue_partial.partial_session("Turn 2");
         while (session2.next_turn().await).is_some() {}
+        drop(session2);
 
         let history_partial = dialogue_partial.history();
 
@@ -3065,6 +3066,9 @@ mod tests {
         assert_eq!(turn2_responses.len(), 2);
         assert_eq!(turn2_responses[0].content, "Turn2-Response1");
         assert_eq!(turn2_responses[1].content, "Turn2-Response2");
+
+        // Drop session to release mutable borrow
+        drop(session);
 
         // Verify history contains all turns
         // System(turn1) + 2 agents(turn1) + User(turn2) + 2 agents(turn2) = 6 messages

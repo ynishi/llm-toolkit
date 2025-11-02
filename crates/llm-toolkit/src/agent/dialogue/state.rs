@@ -7,7 +7,7 @@ use super::super::AgentError;
 use super::message::{DialogueMessage, Speaker};
 use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel};
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{info, trace};
 
 /// Internal state for broadcast execution.
 pub(super) struct BroadcastState {
@@ -53,11 +53,31 @@ impl BroadcastState {
         match self.order {
             BroadcastOrder::Completion => {
                 // For Completion mode, append to buffered with metadata
+                let content_len = result.as_ref().map(|s| s.len()).unwrap_or(0);
+                trace!(
+                    target = "llm_toolkit::dialogue",
+                    participant = %participant_name,
+                    participant_index = idx,
+                    content_length = content_len,
+                    is_error = result.is_err(),
+                    turn = self.current_turn,
+                    "Recording result to buffered (Completion mode)"
+                );
                 self.buffered.push(Some(result));
                 self.completion_metadata.push((idx, participant_name));
             }
             BroadcastOrder::ParticipantOrder => {
                 if idx < self.buffered.len() {
+                    let content_len = result.as_ref().map(|s| s.len()).unwrap_or(0);
+                    trace!(
+                        target = "llm_toolkit::dialogue",
+                        participant = %participant_name,
+                        participant_index = idx,
+                        content_length = content_len,
+                        is_error = result.is_err(),
+                        turn = self.current_turn,
+                        "Recording result to buffered (ParticipantOrder mode)"
+                    );
                     self.buffered[idx] = Some(result);
                 }
             }
