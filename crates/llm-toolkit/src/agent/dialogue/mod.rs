@@ -736,7 +736,7 @@ impl Dialogue {
     /// Helper method to spawn broadcast tasks for all participants.
     ///
     /// Returns a JoinSet with pending agent executions.
-    fn spawn_broadcast_tasks(
+    pub(super) fn spawn_broadcast_tasks(
         &self,
         current_turn: usize,
         payload: &Payload,
@@ -2755,5 +2755,83 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_dialogue_session_continue_with() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona1 = Persona {
+            name: "Agent1".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent 1".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Agent2".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent 2".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona1,
+                MockAgent::new(
+                    "Agent1",
+                    vec!["Turn1-Response1".to_string(), "Turn2-Response1".to_string()],
+                ),
+            )
+            .add_participant(
+                persona2,
+                MockAgent::new(
+                    "Agent2",
+                    vec!["Turn1-Response2".to_string(), "Turn2-Response2".to_string()],
+                ),
+            );
+
+        // Start first turn
+        let mut session = dialogue.partial_session("First question");
+
+        // Collect first turn responses
+        let mut turn1_responses = Vec::new();
+        while let Some(result) = session.next_turn().await {
+            let turn = result.unwrap();
+            turn1_responses.push(turn);
+        }
+
+        // Should have 2 responses from first turn
+        assert_eq!(turn1_responses.len(), 2);
+        assert_eq!(turn1_responses[0].content, "Turn1-Response1");
+        assert_eq!(turn1_responses[1].content, "Turn1-Response2");
+
+        // Continue with second turn
+        session.continue_with("Second question").unwrap();
+
+        // Collect second turn responses
+        let mut turn2_responses = Vec::new();
+        while let Some(result) = session.next_turn().await {
+            let turn = result.unwrap();
+            turn2_responses.push(turn);
+        }
+
+        // Should have 2 responses from second turn
+        assert_eq!(turn2_responses.len(), 2);
+        assert_eq!(turn2_responses[0].content, "Turn2-Response1");
+        assert_eq!(turn2_responses[1].content, "Turn2-Response2");
+
+        // Verify history contains all turns
+        // System(turn1) + 2 agents(turn1) + User(turn2) + 2 agents(turn2) = 6 messages
+        let history = dialogue.history();
+        assert_eq!(history.len(), 6);
+        assert_eq!(history[0].speaker.name(), "System"); // Turn 1 user input
+        assert_eq!(history[1].speaker.name(), "Agent1"); // Turn 1 response 1
+        assert_eq!(history[2].speaker.name(), "Agent2"); // Turn 1 response 2
+        assert_eq!(history[3].speaker.name(), "User"); // Turn 2 user input
+        assert_eq!(history[4].speaker.name(), "Agent1"); // Turn 2 response 1
+        assert_eq!(history[5].speaker.name(), "Agent2"); // Turn 2 response 2
     }
 }

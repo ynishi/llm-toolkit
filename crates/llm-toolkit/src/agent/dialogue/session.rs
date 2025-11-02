@@ -23,6 +23,80 @@ impl<'a> DialogueSession<'a> {
         self.model
     }
 
+    /// Starts a new turn in the dialogue with fresh user input.
+    ///
+    /// This method allows continuing a multi-turn conversation within the same session.
+    /// The new input will be combined with context from previous turns (other agents' responses)
+    /// automatically.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_input` - The new user input/intent for this turn
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the new turn was started successfully, or an error if:
+    /// - The session is still processing a previous turn (not completed)
+    /// - The dialogue is in sequential mode (not supported for multi-turn within session)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let mut session = dialogue.partial_session("First question");
+    /// while let Some(turn) = session.next_turn().await {
+    ///     // Process first round of responses
+    /// }
+    ///
+    /// // Continue with a new turn
+    /// session.continue_with("Follow-up question")?;
+    /// while let Some(turn) = session.next_turn().await {
+    ///     // Process second round of responses
+    /// }
+    /// ```
+    pub fn continue_with(&mut self, new_input: impl Into<Payload>) -> Result<(), AgentError> {
+        // Only allow continuing if the current session is completed
+        if !matches!(self.state, SessionState::Completed) {
+            return Err(AgentError::ExecutionFailed(
+                "Cannot start new turn: previous turn is still in progress".to_string(),
+            ));
+        }
+
+        // Only supported for broadcast mode currently
+        match self.model {
+            ExecutionModel::Broadcast => {
+                let payload: Payload = new_input.into();
+                let current_turn = self.dialogue.message_store.current_turn() + 1;
+
+                // Record user input in message store
+                let user_message = DialogueMessage::new(
+                    current_turn,
+                    Speaker::user("User", "Human"),
+                    payload.to_text(),
+                );
+                self.dialogue.message_store.push(user_message);
+
+                // Spawn new broadcast tasks
+                let pending = self.dialogue.spawn_broadcast_tasks(current_turn, &payload);
+
+                // Get the broadcast order from the previous state if it was broadcast,
+                // otherwise use default (Completion)
+                let broadcast_order = BroadcastOrder::Completion;
+
+                self.state = SessionState::Broadcast(super::state::BroadcastState::new(
+                    pending,
+                    broadcast_order,
+                    self.dialogue.participants.len(),
+                    current_turn,
+                ));
+
+                Ok(())
+            }
+            ExecutionModel::Sequential => Err(AgentError::ExecutionFailed(
+                "Multi-turn within session is not yet supported for sequential mode".to_string(),
+            )),
+        }
+    }
+
     /// Retrieves the next available dialogue turn.
     ///
     /// Returns `None` when the session is complete.
