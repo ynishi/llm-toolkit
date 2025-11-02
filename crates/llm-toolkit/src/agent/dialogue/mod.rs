@@ -616,20 +616,36 @@ impl Dialogue {
     ) -> DialogueSession<'_> {
         // Convert to Payload first
         let payload: Payload = initial_prompt.into();
-        let prompt_text = payload.to_text();
         let current_turn = self.message_store.current_turn() + 1;
 
-        // Store system message in MessageStore
-        let system_message =
-            DialogueMessage::new(current_turn, Speaker::System, prompt_text.clone());
-        self.message_store.push(system_message);
+        // Store messages in MessageStore
+        // If payload has Messages, store them individually; otherwise store Text as System
+        let messages = payload.to_messages();
+        let prompt_text = if !messages.is_empty() {
+            // Store each message individually
+            for msg in &messages {
+                let dialogue_msg =
+                    DialogueMessage::new(current_turn, msg.speaker.clone(), msg.content.clone());
+                self.message_store.push(dialogue_msg);
+            }
+            // For Sequential mode, we need a text representation
+            payload.to_text()
+        } else {
+            // Legacy: store text as single System message (skip if empty)
+            let text = payload.to_text();
+            if !text.is_empty() {
+                let system_message =
+                    DialogueMessage::new(current_turn, Speaker::System, text.clone());
+                self.message_store.push(system_message);
+            }
+            text
+        };
 
         let model = self.execution_model;
         let state = match model {
             ExecutionModel::Broadcast => {
                 // Spawn broadcast tasks using helper method
-                let pending =
-                    self.spawn_broadcast_tasks(current_turn, prompt_text.clone(), &payload);
+                let pending = self.spawn_broadcast_tasks(current_turn, &payload);
 
                 SessionState::Broadcast(BroadcastState::new(
                     pending,
@@ -723,7 +739,6 @@ impl Dialogue {
     fn spawn_broadcast_tasks(
         &self,
         current_turn: usize,
-        prompt_text: String,
         payload: &Payload,
     ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
         // Build participant list
@@ -768,13 +783,28 @@ impl Dialogue {
             let agent = Arc::clone(&participant.agent);
             let name = participant.name().to_string();
 
-            // Create TurnInput with participant-specific information
-            let turn_input = TurnInput::with_dialogue_context(
-                prompt_text.clone(),
-                context.clone(),
-                participants_info.clone(),
-                name.clone(),
-            );
+            // Extract current messages or text from payload
+            let current_messages = payload.to_messages();
+
+            // Create TurnInput based on whether we have structured messages or text
+            let turn_input = if !current_messages.is_empty() {
+                // New path: use structured messages
+                TurnInput::with_messages_and_context(
+                    current_messages,
+                    context.clone(),
+                    participants_info.clone(),
+                    name.clone(),
+                )
+            } else {
+                // Legacy path: use text as single prompt
+                let prompt_text = payload.to_text();
+                TurnInput::with_dialogue_context(
+                    prompt_text,
+                    context.clone(),
+                    participants_info.clone(),
+                    name.clone(),
+                )
+            };
 
             // Create payload with Messages (for structured dialogue history)
             let messages = turn_input.to_messages();
@@ -812,7 +842,7 @@ impl Dialogue {
         let current_turn = self.message_store.current_turn() + 1;
 
         // 1. Extract and store messages from payload
-        let (input_messages, prompt_text) =
+        let (input_messages, _prompt_text) =
             self.extract_messages_from_payload(&payload, current_turn);
 
         for msg in input_messages {
@@ -820,7 +850,7 @@ impl Dialogue {
         }
 
         // 2. Spawn broadcast tasks using helper method
-        let mut pending = self.spawn_broadcast_tasks(current_turn, prompt_text, &payload);
+        let mut pending = self.spawn_broadcast_tasks(current_turn, &payload);
 
         // 3. Collect responses and create message entities
         let mut dialogue_turns = Vec::new();
@@ -889,23 +919,15 @@ impl Dialogue {
             let agent = &participant.agent;
             let name = participant.name().to_string();
 
-            // Create payload with Message (for history tracking) + Text (for to_text())
-            let mut input_payload =
-                Payload::from_messages(vec![PayloadMessage::system(current_input.clone())])
-                    .with_text(current_input.clone());
-
-            // Add Participants metadata
-            input_payload = input_payload.with_participants(participants_info.clone());
-
-            // For first agent, copy attachments from original payload if any
-            let final_payload = if idx == 0 && payload.has_attachments() {
-                let mut p = input_payload;
-                for attachment in payload.attachments() {
-                    p = p.with_attachment(attachment.clone());
-                }
-                p
+            // Create payload based on whether this is the first agent or not
+            let final_payload = if idx == 0 {
+                // First agent: use original payload to preserve Messages structure
+                // (includes attachments if any)
+                payload.clone().with_participants(participants_info.clone())
             } else {
-                input_payload
+                // Subsequent agents: use previous agent's output as System message
+                Payload::from_messages(vec![PayloadMessage::system(current_input.clone())])
+                    .with_participants(participants_info.clone())
             };
 
             // Execute agent

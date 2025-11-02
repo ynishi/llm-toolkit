@@ -38,7 +38,8 @@ impl ParticipantInfo {
 ///
 /// # Design
 ///
-/// - `user_prompt`: The current system/user prompt for this turn
+/// - `user_prompt`: The current system/user prompt for this turn (legacy, single text)
+/// - `current_messages`: Multiple structured messages for this turn (new)
 /// - `context`: Messages from other participants (recent history)
 /// - `participants`: All dialogue participants (who is in the conversation)
 /// - `current_participant`: The name of the agent receiving this input
@@ -46,10 +47,19 @@ impl ParticipantInfo {
 /// This DTO separates the agent's own conversation history
 /// (managed by HistoryAwareAgent) from the dialogue context
 /// (managed by Dialogue).
+///
+/// # Migration
+///
+/// When `current_messages` is non-empty, it takes precedence over `user_prompt`.
+/// This allows backward compatibility while supporting structured multi-message turns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnInput {
-    /// The current user/system prompt for this turn
+    /// The current user/system prompt for this turn (legacy)
     pub user_prompt: String,
+
+    /// Multiple structured messages for this turn (takes precedence over user_prompt)
+    #[serde(default)]
+    pub current_messages: Vec<PayloadMessage>,
 
     /// Context messages from other participants (recent history)
     #[serde(default)]
@@ -69,6 +79,7 @@ impl TurnInput {
     pub fn new(user_prompt: impl Into<String>) -> Self {
         Self {
             user_prompt: user_prompt.into(),
+            current_messages: Vec::new(),
             context: Vec::new(),
             participants: Vec::new(),
             current_participant: String::new(),
@@ -79,6 +90,7 @@ impl TurnInput {
     pub fn with_context(user_prompt: impl Into<String>, context: Vec<ContextMessage>) -> Self {
         Self {
             user_prompt: user_prompt.into(),
+            current_messages: Vec::new(),
             context,
             participants: Vec::new(),
             current_participant: String::new(),
@@ -94,6 +106,42 @@ impl TurnInput {
     ) -> Self {
         Self {
             user_prompt: user_prompt.into(),
+            current_messages: Vec::new(),
+            context,
+            participants,
+            current_participant: current_participant.into(),
+        }
+    }
+
+    /// Creates a turn input with structured messages and full dialogue context.
+    ///
+    /// This is the new API for supporting multiple messages in a single turn,
+    /// such as multiple system notifications or a conversation history snippet.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let messages = vec![
+    ///     PayloadMessage::system("Alice joined"),
+    ///     PayloadMessage::system("Bob joined"),
+    ///     PayloadMessage::system("Discuss the topic"),
+    /// ];
+    /// let input = TurnInput::with_messages_and_context(
+    ///     messages,
+    ///     context,
+    ///     participants,
+    ///     "Alice"
+    /// );
+    /// ```
+    pub fn with_messages_and_context(
+        current_messages: Vec<PayloadMessage>,
+        context: Vec<ContextMessage>,
+        participants: Vec<ParticipantInfo>,
+        current_participant: impl Into<String>,
+    ) -> Self {
+        Self {
+            user_prompt: String::new(),
+            current_messages,
             context,
             participants,
             current_participant: current_participant.into(),
@@ -103,8 +151,9 @@ impl TurnInput {
     /// Converts this TurnInput into a vector of Messages for structured dialogue.
     ///
     /// This extracts:
-    /// - System message with user_prompt
     /// - Context messages from other participants (converted to Speaker + content)
+    /// - Current messages (if `current_messages` is non-empty, it takes precedence)
+    /// - Otherwise, `user_prompt` as a single System message (legacy)
     pub fn to_messages(&self) -> Vec<PayloadMessage> {
         use crate::agent::dialogue::Speaker;
 
@@ -120,8 +169,14 @@ impl TurnInput {
             messages.push(PayloadMessage::new(speaker, ctx.content.clone()));
         }
 
-        // Add current user prompt as System message
-        messages.push(PayloadMessage::system(self.user_prompt.clone()));
+        // Add current messages or user_prompt
+        if !self.current_messages.is_empty() {
+            // New: use structured messages
+            messages.extend(self.current_messages.clone());
+        } else if !self.user_prompt.is_empty() {
+            // Legacy: use single user_prompt as System message
+            messages.push(PayloadMessage::system(self.user_prompt.clone()));
+        }
 
         messages
     }

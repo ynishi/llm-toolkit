@@ -153,6 +153,11 @@ where
         drop(history);
 
         let final_payload = intent.clone().with_text(history_prompt);
+        #[cfg(test)]
+        eprintln!(
+            "[HistoryAwareAgent] final_payload text: '{:?}'",
+            final_payload
+        );
 
         // Debug log the final payload
         crate::tracing::debug!(
@@ -163,8 +168,9 @@ where
         );
         crate::tracing::trace!(
             target: "llm_toolkit::agent::history",
-            "\n========== HISTORY CONTEXT ==========\n{}\n====================================",
-            final_payload.to_text().as_str()
+            "\n========== HISTORY CONTEXT ==========\n{}\n====================================\n========== FULL PROMPT(in History) =========={:?}\n====================================",
+            final_payload.to_text().as_str(),
+            final_payload.clone(),
         );
 
         // Execute the inner agent
@@ -289,7 +295,8 @@ mod tests {
 
         // First call - use from_messages instead of text
         let payload1 =
-            Payload::from_messages(vec![PayloadMessage::user("User", "User", "What is Rust?")]);
+            Payload::from_messages(vec![PayloadMessage::user("User", "User", "What is Rust?")])
+                .with_attachment(crate::attachment::Attachment::in_memory(vec![1, 2, 3]));
         let response1 = history_agent.execute(payload1).await.unwrap();
         assert_eq!(response1, "Response 1");
 

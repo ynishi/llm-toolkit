@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use super::dialogue::{ParticipantInfo, Speaker};
 
 /// Lightweight message record used when constructing payloads and tracking history.
@@ -5,7 +7,7 @@ use super::dialogue::{ParticipantInfo, Speaker};
 /// This replaces the ad-hoc `(Speaker, String)` tuple usage to provide a named
 /// type for structured dialogue messages that do not require the additional
 /// metadata stored in `DialogueMessage`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PayloadMessage {
     /// Speaker for this message.
     pub speaker: Speaker,

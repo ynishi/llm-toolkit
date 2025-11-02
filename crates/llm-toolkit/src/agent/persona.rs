@@ -352,7 +352,12 @@ where
         );
 
         // 6. Create payload with Text + Messages (preserved)
-        let final_payload = intent.clone().set_text(prompt_text);
+        let final_payload = intent.clone().set_text(prompt_text.clone());
+        #[cfg(test)]
+        eprintln!(
+            "[PersonaAgent] final_payload text: '{:?}'\n prompt_text: '{}'",
+            final_payload, prompt_text,
+        );
         self.inner_agent.execute(final_payload).await
     }
 }
@@ -360,6 +365,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::dialogue::Speaker;
     use crate::agent::{Agent, AgentError, Payload, PayloadMessage};
     use crate::attachment::Attachment;
     use async_trait::async_trait;
@@ -442,7 +448,16 @@ mod tests {
         let base_agent = RecordingAgent::new(String::from("response"));
         let persona_agent = PersonaAgent::new(base_agent.clone(), persona);
 
-        let result = persona_agent.execute(Payload::text("Hello")).await.unwrap();
+        let result = persona_agent
+            .execute(Payload::text("Initial conversation").with_message(
+                Speaker::User {
+                    name: "User1".to_string(),
+                    role: "User".to_string(),
+                },
+                "additional context here".to_string(),
+            ))
+            .await
+            .unwrap();
         assert_eq!(result, "response");
 
         let call = base_agent.last_call().await.expect("call recorded");
@@ -525,14 +540,43 @@ mod tests {
         let prompt_struct = PersonaAgentPrompt {
             persona: persona.clone(),
             participants: "- Bob (Developer)\n- Charlie (Designer)".to_string(),
-            context: String::new(),
+            context: "additional context here".to_string(),
             current_content: "Please review the code".to_string(),
         };
 
         let prompt = prompt_struct.to_prompt();
-        println!(
+        eprintln!(
             "=== Generated PersonaAgentPrompt ===\n{}\n=== End ===",
             prompt
+        );
+        assert_eq!(
+            prompt,
+            r#"YOU ARE A PERSONA-DRIVEN AI AGENT.
+YOU ARE  WHO SERVES AS .
+
+
+# Persona Profile
+**Name**: Alice
+**Role**: Engineer
+
+## Background
+Senior software engineer
+
+## Communication Style
+Direct and clear
+
+# Participants
+- Bob (Developer)
+- Charlie (Designer)
+
+
+# Conversation Context (History)
+additional context here
+
+
+# Current Messages
+Please review the code
+"#
         );
 
         // The issue: when we use {{persona}} in template, it gets JSON serialized
