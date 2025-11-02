@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::dialogue::message::DialogueMessage;
 use super::dialogue::{ParticipantInfo, Speaker};
 
 /// Lightweight message record used when constructing payloads and tracking history.
@@ -68,6 +69,12 @@ impl PayloadMessage {
     /// Attaches a relation flag to this message, producing a related message view.
     pub fn with_relation(self, relation: SpeakerRelation) -> RelatedPayloadMessage {
         RelatedPayloadMessage::new(self, relation)
+    }
+}
+
+impl From<&DialogueMessage> for PayloadMessage {
+    fn from(msg: &DialogueMessage) -> Self {
+        PayloadMessage::new(msg.speaker.clone(), msg.content.clone())
     }
 }
 

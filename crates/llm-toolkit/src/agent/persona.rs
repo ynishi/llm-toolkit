@@ -250,8 +250,6 @@ fn format_participants_with_relation(
 /// and defer the actual text formatting until needed.
 #[derive(ToPrompt, Serialize)]
 #[prompt(template = r#"YOU ARE A PERSONA-DRIVEN AI AGENT.
-YOU ARE {{ persona.name }} WHO SERVES AS {{ persona.role }}.
-
 {{persona}}{% if participants %}
 
 # Participants
@@ -552,8 +550,6 @@ mod tests {
         assert_eq!(
             prompt,
             r#"YOU ARE A PERSONA-DRIVEN AI AGENT.
-YOU ARE  WHO SERVES AS .
-
 
 # Persona Profile
 **Name**: Alice

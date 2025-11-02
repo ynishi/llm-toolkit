@@ -754,27 +754,33 @@ impl Dialogue {
             })
             .collect();
 
-        // Get context from previous turn (other agents' responses)
-        let context = if current_turn > 1 {
+        // Get previous agent responses as PayloadMessages
+        let prev_agent_messages: Vec<PayloadMessage> = if current_turn > 1 {
             self.message_store
                 .messages_for_turn(current_turn - 1)
                 .into_iter()
-                .filter_map(|msg| {
-                    if let Speaker::Agent { name, role } = &msg.speaker {
-                        Some(ContextMessage::with_metadata(
-                            name.clone(),
-                            role.clone(),
-                            msg.content.clone(),
-                            msg.turn,
-                            msg.timestamp,
-                        ))
-                    } else {
-                        None
-                    }
-                })
+                .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
+                .map(PayloadMessage::from)
                 .collect()
         } else {
             Vec::new()
+        };
+
+        // Current intent from payload
+        // First try to get structured messages, otherwise get from MessageStore (current turn)
+        let new_messages = {
+            let payload_messages = payload.to_messages();
+            if !payload_messages.is_empty() {
+                payload_messages
+            } else {
+                // Fallback: get current turn messages from MessageStore (for text-only payloads)
+                self.message_store
+                    .messages_for_turn(current_turn)
+                    .into_iter()
+                    .filter(|msg| !matches!(msg.speaker, Speaker::Agent { .. }))
+                    .map(PayloadMessage::from)
+                    .collect()
+            }
         };
 
         let mut pending = JoinSet::new();
@@ -783,15 +789,20 @@ impl Dialogue {
             let agent = Arc::clone(&participant.agent);
             let name = participant.name().to_string();
 
-            // Extract current messages or text from payload
-            let current_messages = payload.to_messages();
+            // Combine: [old agent responses (excluding self)] + [new intent]
+            let mut current_messages = prev_agent_messages
+                .iter()
+                .filter(|msg| msg.speaker.name() != name)
+                .cloned()
+                .collect::<Vec<_>>();
+            current_messages.extend(new_messages.clone());
 
             // Create TurnInput based on whether we have structured messages or text
             let turn_input = if !current_messages.is_empty() {
                 // New path: use structured messages
                 TurnInput::with_messages_and_context(
                     current_messages,
-                    context.clone(),
+                    vec![], // context is now integrated into current_messages
                     participants_info.clone(),
                     name.clone(),
                 )
@@ -800,7 +811,7 @@ impl Dialogue {
                 let prompt_text = payload.to_text();
                 TurnInput::with_dialogue_context(
                     prompt_text,
-                    context.clone(),
+                    vec![], // no separate context in legacy mode
                     participants_info.clone(),
                     name.clone(),
                 )
@@ -2224,7 +2235,11 @@ mod tests {
 
             async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
                 // Echo back the input to verify what history was received
-                Ok(format!("{} received: {}", self.name, payload.to_text()))
+                Ok(format!(
+                    "[EchoAgent]{} received: {}",
+                    self.name,
+                    payload.to_text()
+                ))
             }
         }
 
@@ -2662,6 +2677,134 @@ mod tests {
         assert_eq!(dialogue.history()[2].speaker.name(), "System");
         assert_eq!(dialogue.history()[2].content, "Second message");
         assert_eq!(dialogue.history()[3].speaker.name(), "Agent1");
+
+        // Verify current_turn increments correctly
+        assert_eq!(dialogue.message_store.current_turn(), 2);
+    }
+
+    /// Test partial_session with broadcast mode, multiple agents, and both Text and Messages.
+    ///
+    /// This test verifies:
+    /// 1. Multiple agents in broadcast mode with partial_session
+    /// 2. Text-only payloads are correctly recorded
+    /// 3. Structured Messages (Payload::from_messages) are correctly recorded
+    /// 4. All messages (System, User, Agent) are stored in MessageStore
+    /// 5. Agents see each other's responses in subsequent turns
+    #[tokio::test]
+    async fn test_partial_session_broadcast_multi_agent_with_messages() {
+        use crate::agent::persona::Persona;
+
+        // Create an echo agent that shows what it receives
+        #[derive(Clone)]
+        struct EchoAgent {
+            name: String,
+        }
+
+        #[async_trait]
+        impl Agent for EchoAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Echo agent"
+            }
+
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+
+            async fn execute(&self, _payload: Payload) -> Result<Self::Output, AgentError> {
+                Ok(format!("[{}]", self.name))
+            }
+        }
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona_a = Persona {
+            name: "AgentA".to_string(),
+            role: "TesterA".to_string(),
+            background: "Test agent A".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona_b = Persona {
+            name: "AgentB".to_string(),
+            role: "TesterB".to_string(),
+            background: "Test agent B".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona_a,
+                EchoAgent {
+                    name: "AgentA".to_string(),
+                },
+            )
+            .add_participant(
+                persona_b,
+                EchoAgent {
+                    name: "AgentB".to_string(),
+                },
+            );
+
+        // Turn 1: Text-only payload
+        let mut session1 = dialogue.partial_session("First text message");
+        let mut turn1_results = Vec::new();
+        while let Some(Ok(turn)) = session1.next_turn().await {
+            turn1_results.push(turn);
+        }
+
+        assert_eq!(turn1_results.len(), 2); // Two agents
+        assert_eq!(turn1_results[0].content, "[AgentA]");
+        assert_eq!(turn1_results[1].content, "[AgentB]");
+
+        // Verify Turn 1 history: System + AgentA + AgentB
+        assert_eq!(dialogue.history().len(), 3);
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
+        assert_eq!(dialogue.history()[0].content, "First text message");
+        assert_eq!(dialogue.history()[1].speaker.name(), "AgentA");
+        assert_eq!(dialogue.history()[1].content, "[AgentA]");
+        assert_eq!(dialogue.history()[2].speaker.name(), "AgentB");
+        assert_eq!(dialogue.history()[2].content, "[AgentB]");
+
+        // Turn 2: Structured Messages (multiple messages in one payload)
+        let payload2 = Payload::from_messages(vec![
+            PayloadMessage::user("User1", "Human", "User message 1"),
+            PayloadMessage::system("System alert"),
+            PayloadMessage::user("User2", "Human", "User message 2"),
+        ]);
+
+        let mut session2 = dialogue.partial_session(payload2);
+        let mut turn2_results = Vec::new();
+        while let Some(Ok(turn)) = session2.next_turn().await {
+            turn2_results.push(turn);
+        }
+
+        assert_eq!(turn2_results.len(), 2); // Two agents
+
+        // Verify Turn 2 history: previous 3 + new 3 messages + 2 agent responses
+        // Total: 3 (turn1) + 3 (turn2 input) + 2 (turn2 responses) = 8
+        assert_eq!(dialogue.history().len(), 8);
+
+        // Turn 1 messages (unchanged)
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
+        assert_eq!(dialogue.history()[0].content, "First text message");
+        assert_eq!(dialogue.history()[1].speaker.name(), "AgentA");
+        assert_eq!(dialogue.history()[2].speaker.name(), "AgentB");
+
+        // Turn 2 input messages (structured)
+        assert_eq!(dialogue.history()[3].speaker.name(), "User1");
+        assert_eq!(dialogue.history()[3].content, "User message 1");
+        assert_eq!(dialogue.history()[4].speaker.name(), "System");
+        assert_eq!(dialogue.history()[4].content, "System alert");
+        assert_eq!(dialogue.history()[5].speaker.name(), "User2");
+        assert_eq!(dialogue.history()[5].content, "User message 2");
+
+        // Turn 2 agent responses
+        assert_eq!(dialogue.history()[6].speaker.name(), "AgentA");
+        assert_eq!(dialogue.history()[6].content, "[AgentA]");
+        assert_eq!(dialogue.history()[7].speaker.name(), "AgentB");
+        assert_eq!(dialogue.history()[7].content, "[AgentB]");
 
         // Verify current_turn increments correctly
         assert_eq!(dialogue.message_store.current_turn(), 2);
