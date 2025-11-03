@@ -3,9 +3,9 @@
 //! This module contains the state machine for managing dialogue sessions,
 //! including broadcast and sequential execution modes.
 
-use super::super::AgentError;
+use super::super::{AgentError, Payload, PayloadMessage};
 use super::message::{DialogueMessage, Speaker};
-use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel};
+use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel, ParticipantInfo};
 use tokio::task::JoinSet;
 use tracing::{info, trace};
 
@@ -190,8 +190,11 @@ pub(super) enum SessionState {
     Broadcast(BroadcastState),
     Sequential {
         next_index: usize,
-        current_input: String,
         current_turn: usize,
+        payload: Payload,
+        prev_agent_outputs: Vec<PayloadMessage>,
+        current_turn_outputs: Vec<PayloadMessage>,
+        participants_info: Vec<ParticipantInfo>,
     },
     Completed,
 }

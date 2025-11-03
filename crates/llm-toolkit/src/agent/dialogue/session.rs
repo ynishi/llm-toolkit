@@ -4,10 +4,10 @@
 //! dialogue turns one at a time as they complete, enabling streaming
 //! and responsive UIs.
 
-use super::super::{AgentError, Payload};
+use super::super::{AgentError, Payload, PayloadMessage};
 use super::message::{DialogueMessage, Speaker};
 use super::state::SessionState;
-use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel};
+use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel, ParticipantInfo};
 use tracing::{error, info};
 
 /// Represents an in-flight dialogue execution that can yield turns incrementally.
@@ -21,80 +21,6 @@ impl<'a> DialogueSession<'a> {
     /// Returns the execution model backing this session.
     pub fn execution_model(&self) -> ExecutionModel {
         self.model
-    }
-
-    /// Starts a new turn in the dialogue with fresh user input.
-    ///
-    /// This method allows continuing a multi-turn conversation within the same session.
-    /// The new input will be combined with context from previous turns (other agents' responses)
-    /// automatically.
-    ///
-    /// # Arguments
-    ///
-    /// * `new_input` - The new user input/intent for this turn
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` if the new turn was started successfully, or an error if:
-    /// - The session is still processing a previous turn (not completed)
-    /// - The dialogue is in sequential mode (not supported for multi-turn within session)
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let mut session = dialogue.partial_session("First question");
-    /// while let Some(turn) = session.next_turn().await {
-    ///     // Process first round of responses
-    /// }
-    ///
-    /// // Continue with a new turn
-    /// session.continue_with("Follow-up question")?;
-    /// while let Some(turn) = session.next_turn().await {
-    ///     // Process second round of responses
-    /// }
-    /// ```
-    pub fn continue_with(&mut self, new_input: impl Into<Payload>) -> Result<(), AgentError> {
-        // Only allow continuing if the current session is completed
-        if !matches!(self.state, SessionState::Completed) {
-            return Err(AgentError::ExecutionFailed(
-                "Cannot start new turn: previous turn is still in progress".to_string(),
-            ));
-        }
-
-        // Only supported for broadcast mode currently
-        match self.model {
-            ExecutionModel::Broadcast => {
-                let payload: Payload = new_input.into();
-                let current_turn = self.dialogue.message_store.current_turn() + 1;
-
-                // Record user input in message store
-                let user_message = DialogueMessage::new(
-                    current_turn,
-                    Speaker::user("User", "Human"),
-                    payload.to_text(),
-                );
-                self.dialogue.message_store.push(user_message);
-
-                // Spawn new broadcast tasks
-                let pending = self.dialogue.spawn_broadcast_tasks(current_turn, &payload);
-
-                // Get the broadcast order from the previous state if it was broadcast,
-                // otherwise use default (Completion)
-                let broadcast_order = BroadcastOrder::Completion;
-
-                self.state = SessionState::Broadcast(super::state::BroadcastState::new(
-                    pending,
-                    broadcast_order,
-                    self.dialogue.participants.len(),
-                    current_turn,
-                ));
-
-                Ok(())
-            }
-            ExecutionModel::Sequential => Err(AgentError::ExecutionFailed(
-                "Multi-turn within session is not yet supported for sequential mode".to_string(),
-            )),
-        }
     }
 
     /// Retrieves the next available dialogue turn.
@@ -207,8 +133,11 @@ impl<'a> DialogueSession<'a> {
                 }
                 SessionState::Sequential {
                     next_index,
-                    current_input,
                     current_turn,
+                    payload,
+                    prev_agent_outputs,
+                    current_turn_outputs,
+                    participants_info,
                 } => {
                     if *next_index >= self.dialogue.participants.len() {
                         self.state = SessionState::Completed;
@@ -220,36 +149,37 @@ impl<'a> DialogueSession<'a> {
                     *next_index += 1;
                     let step_number = idx + 1;
 
+                    let response_payload = build_sequential_payload(
+                        payload,
+                        prev_agent_outputs,
+                        current_turn_outputs,
+                        participants_info,
+                        idx,
+                    );
+
                     let response_result = {
                         let participant = &self.dialogue.participants[idx];
-                        let payload: Payload = current_input.clone().into();
-                        participant.agent.execute(payload).await
+                        participant.agent.execute(response_payload).await
                     };
 
                     return match response_result {
                         Ok(content) => {
-                            *current_input = content.clone();
                             let participant = &self.dialogue.participants[idx];
                             let participant_name = participant.name().to_string();
+                            let speaker = Speaker::agent(
+                                participant_name.clone(),
+                                participant.persona.role.clone(),
+                            );
 
                             // Store in MessageStore
-                            let message = DialogueMessage::new(
-                                turn,
-                                Speaker::agent(
-                                    participant_name.clone(),
-                                    participant.persona.role.clone(),
-                                ),
-                                content.clone(),
-                            );
+                            let message =
+                                DialogueMessage::new(turn, speaker.clone(), content.clone());
                             self.dialogue.message_store.push(message);
 
-                            let turn = DialogueTurn {
-                                speaker: Speaker::agent(
-                                    participant_name.clone(),
-                                    participant.persona.role.clone(),
-                                ),
-                                content,
-                            };
+                            current_turn_outputs
+                                .push(PayloadMessage::new(speaker.clone(), content.clone()));
+
+                            let turn = DialogueTurn { speaker, content };
                             info!(
                                 target = "llm_toolkit::dialogue",
                                 mode = ?self.model,
@@ -278,5 +208,27 @@ impl<'a> DialogueSession<'a> {
                 SessionState::Completed => return None,
             }
         }
+    }
+}
+
+fn build_sequential_payload(
+    base_payload: &Payload,
+    prev_agent_outputs: &Vec<PayloadMessage>,
+    current_turn_outputs: &Vec<PayloadMessage>,
+    participants_info: &Vec<ParticipantInfo>,
+    idx: usize,
+) -> Payload {
+    if idx == 0 {
+        let mut payload = base_payload.clone();
+
+        if !prev_agent_outputs.is_empty() {
+            payload = Payload::from_messages(prev_agent_outputs.clone()).merge(payload);
+        }
+
+        payload.with_participants(participants_info.clone())
+    } else {
+        Payload::from_messages(current_turn_outputs.clone())
+            .merge(base_payload.clone())
+            .with_participants(participants_info.clone())
     }
 }

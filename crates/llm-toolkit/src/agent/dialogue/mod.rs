@@ -318,8 +318,7 @@ pub enum DialogueContext {
 impl ToPrompt for DialogueContext {
     fn to_prompt(&self) -> String {
         match self {
-            Self::Brainstorm => {
-                r#"# Dialogue Context: Brainstorming Session
+            Self::Brainstorm => r#"# Dialogue Context: Brainstorming Session
 
 This is a creative brainstorming session. Your goal is to generate and explore ideas freely.
 
@@ -335,10 +334,9 @@ This is a creative brainstorming session. Your goal is to generate and explore i
 - Suggest multiple alternatives
 - Connect ideas in novel ways
 - Avoid criticizing or dismissing ideas prematurely
-"#.to_string()
-            }
-            Self::Casual => {
-                r#"# Dialogue Context: Casual Conversation
+"#
+            .to_string(),
+            Self::Casual => r#"# Dialogue Context: Casual Conversation
 
 This is a relaxed, friendly conversation. Be natural and approachable.
 
@@ -354,10 +352,9 @@ This is a relaxed, friendly conversation. Be natural and approachable.
 - Personal anecdotes when relevant
 - Follow-up questions to deepen discussion
 - Friendly and warm tone
-"#.to_string()
-            }
-            Self::DecisionMaking => {
-                r#"# Dialogue Context: Decision-Making Discussion
+"#
+            .to_string(),
+            Self::DecisionMaking => r#"# Dialogue Context: Decision-Making Discussion
 
 This is a decision-making discussion. Work systematically toward a clear conclusion.
 
@@ -374,10 +371,9 @@ This is a decision-making discussion. Work systematically toward a clear conclus
 - Acknowledgment of trade-offs
 - Concrete recommendations
 - Documentation of decision rationale
-"#.to_string()
-            }
-            Self::Debate => {
-                r#"# Dialogue Context: Debate
+"#
+            .to_string(),
+            Self::Debate => r#"# Dialogue Context: Debate
 
 This is a debate. Challenge ideas constructively and present diverse perspectives.
 
@@ -394,10 +390,9 @@ This is a debate. Challenge ideas constructively and present diverse perspective
 - Evidence-based arguments
 - Respectful disagreement
 - Synthesis of opposing views where possible
-"#.to_string()
-            }
-            Self::ProblemSolving => {
-                r#"# Dialogue Context: Problem-Solving Session
+"#
+            .to_string(),
+            Self::ProblemSolving => r#"# Dialogue Context: Problem-Solving Session
 
 This is a problem-solving session. Be systematic, practical, and solution-focused.
 
@@ -414,10 +409,9 @@ This is a problem-solving session. Be systematic, practical, and solution-focuse
 - Multiple solution options
 - Feasibility assessment
 - Actionable recommendations
-"#.to_string()
-            }
-            Self::Review => {
-                r#"# Dialogue Context: Review/Critique Session
+"#
+            .to_string(),
+            Self::Review => r#"# Dialogue Context: Review/Critique Session
 
 This is a review session. Provide constructive, detailed feedback.
 
@@ -434,10 +428,9 @@ This is a review session. Provide constructive, detailed feedback.
 - Clear explanations of reasoning
 - Concrete improvement suggestions
 - Supportive, constructive tone
-"#.to_string()
-            }
-            Self::Planning => {
-                r#"# Dialogue Context: Planning Session
+"#
+            .to_string(),
+            Self::Planning => r#"# Dialogue Context: Planning Session
 
 This is a planning session. Think ahead, structure goals, and create actionable plans.
 
@@ -454,8 +447,8 @@ This is a planning session. Think ahead, structure goals, and create actionable 
 - Resource and timeline consideration
 - Risk identification
 - Clear action items with next steps
-"#.to_string()
-            }
+"#
+            .to_string(),
             Self::Custom(instruction) => instruction.clone(),
         }
     }
@@ -990,7 +983,7 @@ impl Dialogue {
         // Store messages in MessageStore
         // If payload has Messages, store them individually; otherwise store Text as System
         let messages = payload.to_messages();
-        let prompt_text = if !messages.is_empty() {
+        let _prompt_text = if !messages.is_empty() {
             // Store each message individually
             for msg in &messages {
                 let dialogue_msg =
@@ -1023,11 +1016,29 @@ impl Dialogue {
                     current_turn,
                 ))
             }
-            ExecutionModel::Sequential => SessionState::Sequential {
-                next_index: 0,
-                current_input: prompt_text,
-                current_turn,
-            },
+            ExecutionModel::Sequential => {
+                let participants_info = self.get_participants_info();
+
+                let prev_agent_outputs: Vec<PayloadMessage> = if current_turn > 1 {
+                    self.message_store
+                        .messages_for_turn(current_turn - 1)
+                        .into_iter()
+                        .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
+                        .map(PayloadMessage::from)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                SessionState::Sequential {
+                    next_index: 0,
+                    current_turn,
+                    payload,
+                    prev_agent_outputs,
+                    current_turn_outputs: Vec::new(),
+                    participants_info,
+                }
+            }
         };
 
         DialogueSession {
@@ -1851,7 +1862,6 @@ mod tests {
         assert_eq!(second.content, "S2 output");
 
         assert!(session.next_turn().await.is_none());
-        drop(session);
 
         assert_eq!(dialogue.history().len(), 3);
         assert_eq!(dialogue.history()[0].speaker.name(), "System");
@@ -2381,7 +2391,6 @@ mod tests {
         let turn = session.next_turn().await.unwrap().unwrap();
         assert_eq!(turn.speaker.name(), "Analyst");
         assert_eq!(turn.content, "Image analysis complete");
-        drop(session);
 
         // Verify history contains text representation
         assert_eq!(dialogue.history().len(), 2);
@@ -3364,87 +3373,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_dialogue_session_continue_with() {
-        use crate::agent::persona::Persona;
-
-        let mut dialogue = Dialogue::broadcast();
-
-        let persona1 = Persona {
-            name: "Agent1".to_string(),
-            role: "Tester".to_string(),
-            background: "Test agent 1".to_string(),
-            communication_style: "Direct".to_string(),
-        };
-
-        let persona2 = Persona {
-            name: "Agent2".to_string(),
-            role: "Tester".to_string(),
-            background: "Test agent 2".to_string(),
-            communication_style: "Direct".to_string(),
-        };
-
-        dialogue
-            .add_participant(
-                persona1,
-                MockAgent::new(
-                    "Agent1",
-                    vec!["Turn1-Response1".to_string(), "Turn2-Response1".to_string()],
-                ),
-            )
-            .add_participant(
-                persona2,
-                MockAgent::new(
-                    "Agent2",
-                    vec!["Turn1-Response2".to_string(), "Turn2-Response2".to_string()],
-                ),
-            );
-
-        // Start first turn
-        let mut session = dialogue.partial_session("First question");
-
-        // Collect first turn responses
-        let mut turn1_responses = Vec::new();
-        while let Some(result) = session.next_turn().await {
-            let turn = result.unwrap();
-            turn1_responses.push(turn);
-        }
-
-        // Should have 2 responses from first turn
-        assert_eq!(turn1_responses.len(), 2);
-        assert_eq!(turn1_responses[0].content, "Turn1-Response1");
-        assert_eq!(turn1_responses[1].content, "Turn1-Response2");
-
-        // Continue with second turn
-        session.continue_with("Second question").unwrap();
-
-        // Collect second turn responses
-        let mut turn2_responses = Vec::new();
-        while let Some(result) = session.next_turn().await {
-            let turn = result.unwrap();
-            turn2_responses.push(turn);
-        }
-
-        // Should have 2 responses from second turn
-        assert_eq!(turn2_responses.len(), 2);
-        assert_eq!(turn2_responses[0].content, "Turn2-Response1");
-        assert_eq!(turn2_responses[1].content, "Turn2-Response2");
-
-        // Drop session to release mutable borrow
-        drop(session);
-
-        // Verify history contains all turns
-        // System(turn1) + 2 agents(turn1) + User(turn2) + 2 agents(turn2) = 6 messages
-        let history = dialogue.history();
-        assert_eq!(history.len(), 6);
-        assert_eq!(history[0].speaker.name(), "System"); // Turn 1 user input
-        assert_eq!(history[1].speaker.name(), "Agent1"); // Turn 1 response 1
-        assert_eq!(history[2].speaker.name(), "Agent2"); // Turn 1 response 2
-        assert_eq!(history[3].speaker.name(), "User"); // Turn 2 user input
-        assert_eq!(history[4].speaker.name(), "Agent1"); // Turn 2 response 1
-        assert_eq!(history[5].speaker.name(), "Agent2"); // Turn 2 response 2
-    }
-
     /// Test multi-turn sequential (2 members) to verify message flow across turns.
     ///
     /// Expected behavior for 2 members (AgentA, AgentB) in Sequential mode:
@@ -3617,6 +3545,168 @@ mod tests {
         assert_eq!(dialogue.history()[3].content, "Second message");
         assert_eq!(dialogue.history()[4].speaker.name(), "AgentA"); // Turn 2 AgentA
         assert_eq!(dialogue.history()[5].speaker.name(), "AgentB"); // Turn 2 AgentB (final)
+    }
+
+    /// Sequential session variant of the two-member multi-turn test using partial_session.
+    ///
+    /// Verifies that the streaming API exposes each intermediate turn while preserving the
+    /// same message flow guarantees checked in `test_multi_turn_sequential_2_members`.
+    #[tokio::test]
+    async fn test_multi_turn_sequential_session_2_members() {
+        use crate::agent::persona::Persona;
+        use tokio::sync::Mutex;
+
+        #[derive(Clone)]
+        struct TrackingAgent {
+            name: String,
+            responses: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl Agent for TrackingAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Tracking agent"
+            }
+
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                let input = payload.to_text();
+                let response = format!("[{}] received input", self.name);
+                self.responses.lock().await.push(input);
+                Ok(response)
+            }
+        }
+
+        let mut dialogue = Dialogue::sequential();
+
+        let persona_a = Persona {
+            name: "AgentA".to_string(),
+            role: "First".to_string(),
+            background: "First agent in chain".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona_b = Persona {
+            name: "AgentB".to_string(),
+            role: "Second".to_string(),
+            background: "Second agent in chain".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let agent_a_responses = Arc::new(Mutex::new(Vec::new()));
+        let agent_b_responses = Arc::new(Mutex::new(Vec::new()));
+
+        dialogue
+            .add_participant(
+                persona_a,
+                TrackingAgent {
+                    name: "AgentA".to_string(),
+                    responses: Arc::clone(&agent_a_responses),
+                },
+            )
+            .add_participant(
+                persona_b,
+                TrackingAgent {
+                    name: "AgentB".to_string(),
+                    responses: Arc::clone(&agent_b_responses),
+                },
+            );
+
+        // Turn 1: Stream sequential execution
+        let mut session1 = dialogue.partial_session("First message");
+        let mut turns1 = Vec::new();
+        while let Some(result) = session1.next_turn().await {
+            turns1.push(result.unwrap());
+        }
+        drop(session1);
+
+        assert_eq!(turns1.len(), 2);
+        assert_eq!(turns1[0].speaker.name(), "AgentA");
+        assert_eq!(turns1[0].content, "[AgentA] received input");
+        assert_eq!(turns1[1].speaker.name(), "AgentB");
+        assert_eq!(turns1[1].content, "[AgentB] received input");
+
+        let a_inputs_t1 = agent_a_responses.lock().await;
+        let b_inputs_t1 = agent_b_responses.lock().await;
+
+        assert!(
+            a_inputs_t1[0].contains("First message"),
+            "AgentA should see 'First message' in Turn 1. Got: {}",
+            a_inputs_t1[0]
+        );
+        assert!(
+            b_inputs_t1[0].contains("[AgentA] received input"),
+            "AgentB should see AgentA's output in Turn 1. Got: {}",
+            b_inputs_t1[0]
+        );
+
+        drop(a_inputs_t1);
+        drop(b_inputs_t1);
+
+        assert_eq!(dialogue.history().len(), 3);
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
+        assert_eq!(dialogue.history()[0].content, "First message");
+        assert_eq!(dialogue.history()[1].speaker.name(), "AgentA");
+        assert_eq!(dialogue.history()[1].content, "[AgentA] received input");
+        assert_eq!(dialogue.history()[2].speaker.name(), "AgentB");
+        assert_eq!(dialogue.history()[2].content, "[AgentB] received input");
+
+        // Turn 2: Stream sequential execution with prior context
+        let mut session2 = dialogue.partial_session("Second message");
+        let mut turns2 = Vec::new();
+        while let Some(result) = session2.next_turn().await {
+            turns2.push(result.unwrap());
+        }
+        drop(session2);
+
+        assert_eq!(turns2.len(), 2);
+        assert_eq!(turns2[0].speaker.name(), "AgentA");
+        assert_eq!(turns2[0].content, "[AgentA] received input");
+        assert_eq!(turns2[1].speaker.name(), "AgentB");
+        assert_eq!(turns2[1].content, "[AgentB] received input");
+
+        let a_inputs_t2 = agent_a_responses.lock().await;
+        let b_inputs_t2 = agent_b_responses.lock().await;
+
+        assert!(
+            a_inputs_t2[1].contains("[AgentA] received input"),
+            "AgentA should see its own Turn 1 output as context in Turn 2. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            a_inputs_t2[1].contains("[AgentB] received input"),
+            "AgentA should see AgentB's Turn 1 output as context in Turn 2. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            a_inputs_t2[1].contains("Second message"),
+            "AgentA should see new message in Turn 2. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            b_inputs_t2[1].contains("[AgentA] received input"),
+            "AgentB should see AgentA's Turn 2 output. Got: {}",
+            b_inputs_t2[1]
+        );
+        assert!(
+            b_inputs_t2[1].contains("Second message"),
+            "AgentB should see new message. Got: {}",
+            b_inputs_t2[1]
+        );
+
+        drop(a_inputs_t2);
+        drop(b_inputs_t2);
+
+        assert_eq!(dialogue.history().len(), 6);
+        assert_eq!(dialogue.history()[3].speaker.name(), "System");
+        assert_eq!(dialogue.history()[3].content, "Second message");
+        assert_eq!(dialogue.history()[4].speaker.name(), "AgentA");
+        assert_eq!(dialogue.history()[5].speaker.name(), "AgentB");
     }
 
     /// Test multi-turn sequential (3 members) to verify message flow across turns.
@@ -3815,6 +3905,213 @@ mod tests {
         assert_eq!(dialogue.history()[7].speaker.name(), "AgentC"); // Turn 2 C (final)
     }
 
+    /// Sequential session variant for three participants to ensure partial_session mirrors run().
+    #[tokio::test]
+    async fn test_multi_turn_sequential_session_3_members() {
+        use crate::agent::persona::Persona;
+        use tokio::sync::Mutex;
+
+        #[derive(Clone)]
+        struct TrackingAgent {
+            name: String,
+            responses: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl Agent for TrackingAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Tracking agent"
+            }
+
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                let input = payload.to_text();
+                let response = format!("[{}] processed", self.name);
+                self.responses.lock().await.push(input);
+                Ok(response)
+            }
+        }
+
+        let mut dialogue = Dialogue::sequential();
+
+        let persona_a = Persona {
+            name: "AgentA".to_string(),
+            role: "First".to_string(),
+            background: "First agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona_b = Persona {
+            name: "AgentB".to_string(),
+            role: "Second".to_string(),
+            background: "Second agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona_c = Persona {
+            name: "AgentC".to_string(),
+            role: "Third".to_string(),
+            background: "Third agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let agent_a_responses = Arc::new(Mutex::new(Vec::new()));
+        let agent_b_responses = Arc::new(Mutex::new(Vec::new()));
+        let agent_c_responses = Arc::new(Mutex::new(Vec::new()));
+
+        dialogue
+            .add_participant(
+                persona_a,
+                TrackingAgent {
+                    name: "AgentA".to_string(),
+                    responses: Arc::clone(&agent_a_responses),
+                },
+            )
+            .add_participant(
+                persona_b,
+                TrackingAgent {
+                    name: "AgentB".to_string(),
+                    responses: Arc::clone(&agent_b_responses),
+                },
+            )
+            .add_participant(
+                persona_c,
+                TrackingAgent {
+                    name: "AgentC".to_string(),
+                    responses: Arc::clone(&agent_c_responses),
+                },
+            );
+
+        // Turn 1: Streamed sequential execution
+        let mut session1 = dialogue.partial_session("First message");
+        let mut turns1 = Vec::new();
+        while let Some(result) = session1.next_turn().await {
+            turns1.push(result.unwrap());
+        }
+        drop(session1);
+
+        assert_eq!(turns1.len(), 3);
+        assert_eq!(turns1[0].speaker.name(), "AgentA");
+        assert_eq!(turns1[0].content, "[AgentA] processed");
+        assert_eq!(turns1[1].speaker.name(), "AgentB");
+        assert_eq!(turns1[1].content, "[AgentB] processed");
+        assert_eq!(turns1[2].speaker.name(), "AgentC");
+        assert_eq!(turns1[2].content, "[AgentC] processed");
+
+        let a_inputs_t1 = agent_a_responses.lock().await;
+        let b_inputs_t1 = agent_b_responses.lock().await;
+        let c_inputs_t1 = agent_c_responses.lock().await;
+
+        assert!(
+            a_inputs_t1[0].contains("First message"),
+            "AgentA should see 'First message' in Turn 1. Got: {}",
+            a_inputs_t1[0]
+        );
+        assert!(
+            b_inputs_t1[0].contains("[AgentA] processed"),
+            "AgentB should see AgentA's Turn 1 output. Got: {}",
+            b_inputs_t1[0]
+        );
+        assert!(
+            c_inputs_t1[0].contains("[AgentB] processed"),
+            "AgentC should see AgentB's Turn 1 output. Got: {}",
+            c_inputs_t1[0]
+        );
+
+        drop(a_inputs_t1);
+        drop(b_inputs_t1);
+        drop(c_inputs_t1);
+
+        assert_eq!(dialogue.history().len(), 4);
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
+        assert_eq!(dialogue.history()[0].content, "First message");
+        assert_eq!(dialogue.history()[1].speaker.name(), "AgentA");
+        assert_eq!(dialogue.history()[2].speaker.name(), "AgentB");
+        assert_eq!(dialogue.history()[3].speaker.name(), "AgentC");
+
+        // Turn 2: Streamed sequential execution with prior context
+        let mut session2 = dialogue.partial_session("Second message");
+        let mut turns2 = Vec::new();
+        while let Some(result) = session2.next_turn().await {
+            turns2.push(result.unwrap());
+        }
+        drop(session2);
+
+        assert_eq!(turns2.len(), 3);
+        assert_eq!(turns2[0].speaker.name(), "AgentA");
+        assert_eq!(turns2[0].content, "[AgentA] processed");
+        assert_eq!(turns2[1].speaker.name(), "AgentB");
+        assert_eq!(turns2[1].content, "[AgentB] processed");
+        assert_eq!(turns2[2].speaker.name(), "AgentC");
+        assert_eq!(turns2[2].content, "[AgentC] processed");
+
+        let a_inputs_t2 = agent_a_responses.lock().await;
+        let b_inputs_t2 = agent_b_responses.lock().await;
+        let c_inputs_t2 = agent_c_responses.lock().await;
+
+        assert!(
+            a_inputs_t2[1].contains("[AgentA] processed"),
+            "AgentA should see its own Turn 1 output. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            a_inputs_t2[1].contains("[AgentB] processed"),
+            "AgentA should see AgentB's Turn 1 output. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            a_inputs_t2[1].contains("[AgentC] processed"),
+            "AgentA should see AgentC's Turn 1 output. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            a_inputs_t2[1].contains("Second message"),
+            "AgentA should see new message. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            b_inputs_t2[1].contains("[AgentA] processed"),
+            "AgentB should see AgentA's Turn 2 output. Got: {}",
+            b_inputs_t2[1]
+        );
+        assert!(
+            b_inputs_t2[1].contains("Second message"),
+            "AgentB should see new message. Got: {}",
+            b_inputs_t2[1]
+        );
+        assert!(
+            c_inputs_t2[1].contains("[AgentA] processed"),
+            "AgentC should see AgentA's Turn 2 output. Got: {}",
+            c_inputs_t2[1]
+        );
+        assert!(
+            c_inputs_t2[1].contains("[AgentB] processed"),
+            "AgentC should see AgentB's Turn 2 output. Got: {}",
+            c_inputs_t2[1]
+        );
+        assert!(
+            c_inputs_t2[1].contains("Second message"),
+            "AgentC should see new message. Got: {}",
+            c_inputs_t2[1]
+        );
+
+        drop(a_inputs_t2);
+        drop(b_inputs_t2);
+        drop(c_inputs_t2);
+
+        assert_eq!(dialogue.history().len(), 8);
+        assert_eq!(dialogue.history()[4].speaker.name(), "System");
+        assert_eq!(dialogue.history()[4].content, "Second message");
+        assert_eq!(dialogue.history()[5].speaker.name(), "AgentA");
+        assert_eq!(dialogue.history()[6].speaker.name(), "AgentB");
+        assert_eq!(dialogue.history()[7].speaker.name(), "AgentC");
+    }
+
     /// Test that DialogueContext is properly applied to the payload
     #[tokio::test]
     async fn test_dialogue_context_brainstorm() {
@@ -3842,7 +4139,10 @@ mod tests {
 
             async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
                 let payload_text = payload.to_text();
-                self.received_payloads.lock().await.push(payload_text.clone());
+                self.received_payloads
+                    .lock()
+                    .await
+                    .push(payload_text.clone());
                 Ok(format!("[{}] responded", self.name))
             }
         }
