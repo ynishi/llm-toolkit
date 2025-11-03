@@ -1300,6 +1300,7 @@ The `Dialogue` component provides several methods for managing conversations:
 -   **`add_participant(persona, agent)`**: Dynamically add a new participant to the conversation.
 -   **`remove_participant(name)`**: Remove a participant by name (useful for guest participants).
 -   **`history() -> &[DialogueTurn]`**: Access the complete conversation history.
+-   **`with_context(DialogueContext)`**: Apply a conversation preset (brainstorming, planning, etc.) that the toolkit prepends as system guidance before each turn in both `run` and `partial_session`.
 
 ```rust
 // Inspect participants
@@ -1317,6 +1318,13 @@ dialogue.remove_participant("Expert")?;
 for turn in dialogue.history() {
     println!("[{}]: {}", turn.speaker.name(), turn.content);
 }
+
+// Apply a preset conversation context
+use llm_toolkit::agent::dialogue::DialogueContext;
+let mut dialogue = Dialogue::sequential();
+dialogue.with_context(DialogueContext::Brainstorm);
+dialogue.add_participant(persona1, agent1).add_participant(persona2, agent2);
+dialogue.partial_session("Kickoff agenda").await?;
 ```
 
 **Session Resumption and History Injection:**

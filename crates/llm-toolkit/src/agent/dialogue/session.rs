@@ -151,9 +151,9 @@ impl<'a> DialogueSession<'a> {
 
                     let response_payload = build_sequential_payload(
                         payload,
-                        prev_agent_outputs,
-                        current_turn_outputs,
-                        participants_info,
+                        prev_agent_outputs.as_slice(),
+                        current_turn_outputs.as_slice(),
+                        participants_info.as_slice(),
                         idx,
                     );
 
@@ -213,22 +213,22 @@ impl<'a> DialogueSession<'a> {
 
 fn build_sequential_payload(
     base_payload: &Payload,
-    prev_agent_outputs: &Vec<PayloadMessage>,
-    current_turn_outputs: &Vec<PayloadMessage>,
-    participants_info: &Vec<ParticipantInfo>,
+    prev_agent_outputs: &[PayloadMessage],
+    current_turn_outputs: &[PayloadMessage],
+    participants_info: &[ParticipantInfo],
     idx: usize,
 ) -> Payload {
     if idx == 0 {
         let mut payload = base_payload.clone();
 
         if !prev_agent_outputs.is_empty() {
-            payload = Payload::from_messages(prev_agent_outputs.clone()).merge(payload);
+            payload = Payload::from_messages(prev_agent_outputs.to_vec()).merge(payload);
         }
 
-        payload.with_participants(participants_info.clone())
+        payload.with_participants(participants_info.to_vec())
     } else {
-        Payload::from_messages(current_turn_outputs.clone())
+        Payload::from_messages(current_turn_outputs.to_vec())
             .merge(base_payload.clone())
-            .with_participants(participants_info.clone())
+            .with_participants(participants_info.to_vec())
     }
 }

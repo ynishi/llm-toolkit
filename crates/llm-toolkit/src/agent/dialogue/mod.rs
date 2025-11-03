@@ -968,7 +968,10 @@ impl Dialogue {
         broadcast_order: BroadcastOrder,
     ) -> DialogueSession<'_> {
         // Convert to Payload first
-        let payload: Payload = initial_prompt.into();
+        let mut payload: Payload = initial_prompt.into();
+        if let Some(ref context) = self.context {
+            payload = payload.prepend_system(context.to_prompt());
+        }
         let current_turn = self.message_store.current_turn() + 1;
 
         crate::tracing::trace!(
@@ -4110,6 +4113,88 @@ mod tests {
         assert_eq!(dialogue.history()[5].speaker.name(), "AgentA");
         assert_eq!(dialogue.history()[6].speaker.name(), "AgentB");
         assert_eq!(dialogue.history()[7].speaker.name(), "AgentC");
+    }
+
+    /// Ensure partial sequential sessions prepend dialogue context for each participant.
+    #[tokio::test]
+    async fn test_partial_session_sequential_applies_context() {
+        use crate::agent::persona::Persona;
+        use tokio::sync::Mutex;
+
+        #[derive(Clone)]
+        struct TrackingAgent {
+            name: String,
+            payloads: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl Agent for TrackingAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Context tracking agent"
+            }
+
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                let text = payload.to_text();
+                self.payloads.lock().await.push(text);
+                Ok(format!("[{}] ok", self.name))
+            }
+        }
+
+        let mut dialogue = Dialogue::sequential();
+        dialogue.with_context(DialogueContext::Brainstorm);
+
+        let persona_a = Persona {
+            name: "AgentA".to_string(),
+            role: "First".to_string(),
+            background: "First".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona_b = Persona {
+            name: "AgentB".to_string(),
+            role: "Second".to_string(),
+            background: "Second".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let payloads = Arc::new(Mutex::new(Vec::new()));
+
+        dialogue
+            .add_participant(
+                persona_a,
+                TrackingAgent {
+                    name: "AgentA".to_string(),
+                    payloads: Arc::clone(&payloads),
+                },
+            )
+            .add_participant(
+                persona_b,
+                TrackingAgent {
+                    name: "AgentB".to_string(),
+                    payloads: Arc::clone(&payloads),
+                },
+            );
+
+        let mut session = dialogue.partial_session("Kickoff");
+        while let Some(result) = session.next_turn().await {
+            result.unwrap();
+        }
+        drop(session);
+
+        let payloads = payloads.lock().await;
+        assert!(
+            payloads
+                .iter()
+                .all(|text| text.contains("Brainstorming Session")),
+            "Each participant should receive brainstorming context. Payloads: {:?}",
+            *payloads
+        );
     }
 
     /// Test that DialogueContext is properly applied to the payload
