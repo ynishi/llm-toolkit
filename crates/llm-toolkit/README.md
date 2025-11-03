@@ -1300,7 +1300,10 @@ The `Dialogue` component provides several methods for managing conversations:
 -   **`add_participant(persona, agent)`**: Dynamically add a new participant to the conversation.
 -   **`remove_participant(name)`**: Remove a participant by name (useful for guest participants).
 -   **`history() -> &[DialogueTurn]`**: Access the complete conversation history.
--   **`with_context(DialogueContext)`**: Apply a conversation preset (brainstorming, planning, etc.) that the toolkit prepends as system guidance before each turn in both `run` and `partial_session`.
+-   **`with_context(DialogueContext)`**: Apply a full dialogue context (talk style, environment, additional context) that the toolkit prepends as system guidance before each turn in both `run` and `partial_session`.
+-   **`with_talk_style(TalkStyle)`**: Convenient method to set only the conversation style (Brainstorm, Debate, etc.).
+-   **`with_environment(String)`**: Set environment information (e.g., "Production environment", "ClaudeCode").
+-   **`with_additional_context(impl ToPrompt)`**: Add structured or string-based additional context that gets converted to prompts.
 
 ```rust
 // Inspect participants
@@ -1319,12 +1322,66 @@ for turn in dialogue.history() {
     println!("[{}]: {}", turn.speaker.name(), turn.content);
 }
 
-// Apply a preset conversation context
-use llm_toolkit::agent::dialogue::DialogueContext;
+// Apply conversation context using convenient builder methods
+use llm_toolkit::agent::dialogue::{DialogueContext, TalkStyle};
+
+// Option 1: Use convenient builder methods
 let mut dialogue = Dialogue::sequential();
-dialogue.with_context(DialogueContext::Brainstorm);
-dialogue.add_participant(persona1, agent1).add_participant(persona2, agent2);
+dialogue
+    .with_talk_style(TalkStyle::Brainstorm)    // Set conversation style
+    .with_environment("Production environment") // Add environment info
+    .with_additional_context("Focus on security and performance".to_string())
+    .add_participant(persona1, agent1)
+    .add_participant(persona2, agent2);
+
+// Option 2: Build a complete context and apply it
+let context = DialogueContext::default()
+    .with_talk_style(TalkStyle::Debate)
+    .with_environment("ClaudeCode environment")
+    .with_additional_context("Technical deep-dive".to_string());
+
+dialogue.with_context(context);
+
+// Option 3: Use structured, type-safe additional context
+#[derive(ToPrompt)]
+struct ProjectContext {
+    language: String,
+    focus_areas: Vec<String>,
+}
+
+dialogue.with_additional_context(ProjectContext {
+    language: "Rust".to_string(),
+    focus_areas: vec!["Performance".to_string(), "Safety".to_string()],
+});
+
 dialogue.partial_session("Kickoff agenda").await?;
+```
+
+**Available TalkStyles:**
+- `TalkStyle::Brainstorm` - Creative, exploratory, building on ideas
+- `TalkStyle::Debate` - Challenging ideas, diverse perspectives
+- `TalkStyle::DecisionMaking` - Analytical, weighing options
+- `TalkStyle::ProblemSolving` - Systematic, solution-focused
+- `TalkStyle::Review` - Constructive feedback, detailed analysis
+- `TalkStyle::Planning` - Structured, forward-thinking
+- `TalkStyle::Casual` - Relaxed, friendly conversation
+
+The `DialogueContext` is generic and accepts any type implementing `ToPrompt` for additional context, enabling structured, type-safe context management:
+
+```rust
+// Custom context types are automatically converted to prompts
+#[derive(ToPrompt)]
+struct TeamContext {
+    team_size: usize,
+    experience_level: String,
+    constraints: Vec<String>,
+}
+
+dialogue.with_additional_context(TeamContext {
+    team_size: 5,
+    experience_level: "Senior".to_string(),
+    constraints: vec!["No breaking changes".to_string()],
+});
 ```
 
 **Session Resumption and History Injection:**

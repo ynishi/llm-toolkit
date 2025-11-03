@@ -88,6 +88,7 @@
 //! // Each agent receives context from other agents' Turn 1 responses
 //! ```
 
+pub mod context;
 pub mod message;
 pub mod session;
 pub mod state;
@@ -104,6 +105,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, trace};
 
 // Re-export key types
+pub use context::{DialogueContext, TalkStyle};
 pub use message::{
     DialogueMessage, MessageId, MessageMetadata, Speaker, format_messages_to_prompt,
 };
@@ -201,257 +203,6 @@ pub enum ExecutionModel {
     Broadcast,
     /// Participants execute sequentially, with output chained as input.
     Sequential,
-}
-
-/// Dialogue context that shapes the tone, behavior, and focus of the conversation.
-///
-/// Setting a dialogue context provides implicit instructions to all participants,
-/// eliminating the need for users to explain the conversation's purpose each time.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// use llm_toolkit::agent::dialogue::{Dialogue, DialogueContext};
-///
-/// // Brainstorming session
-/// let mut dialogue = Dialogue::broadcast()
-///     .with_context(DialogueContext::Brainstorm)
-///     .add_participant(persona1, agent1)
-///     .add_participant(persona2, agent2);
-///
-/// dialogue.run("Let's generate ideas for our new feature").await?;
-///
-/// // Decision-making discussion
-/// let mut dialogue = Dialogue::sequential()
-///     .with_context(DialogueContext::DecisionMaking)
-///     .add_participant(persona1, agent1)
-///     .add_participant(persona2, agent2);
-///
-/// dialogue.run("Which tech stack should we use?").await?;
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DialogueContext {
-    /// Brainstorming session - creative, exploratory, building on ideas.
-    ///
-    /// # Characteristics
-    /// - Encourage wild ideas and creative thinking
-    /// - Build on others' suggestions
-    /// - No idea is wrong or too ambitious
-    /// - Quantity over quality initially
-    /// - Defer judgment and criticism
-    Brainstorm,
-
-    /// Casual conversation - relaxed, friendly, conversational.
-    ///
-    /// # Characteristics
-    /// - Natural, flowing conversation
-    /// - Friendly and approachable tone
-    /// - Share personal perspectives
-    /// - Ask follow-up questions
-    /// - Keep it light and engaging
-    Casual,
-
-    /// Decision-making discussion - analytical, weighing options, reaching conclusion.
-    ///
-    /// # Characteristics
-    /// - Analyze pros and cons systematically
-    /// - Consider trade-offs and constraints
-    /// - Base opinions on evidence and reasoning
-    /// - Work toward a clear decision
-    /// - Document rationale for choices
-    DecisionMaking,
-
-    /// Debate - challenging ideas, diverse perspectives, constructive argument.
-    ///
-    /// # Characteristics
-    /// - Challenge ideas constructively
-    /// - Present alternative viewpoints
-    /// - Support arguments with evidence
-    /// - Engage respectfully with disagreement
-    /// - Strengthen thinking through dialectic
-    Debate,
-
-    /// Problem-solving session - systematic, solution-focused, practical.
-    ///
-    /// # Characteristics
-    /// - Define the problem clearly
-    /// - Break down complex issues
-    /// - Generate practical solutions
-    /// - Evaluate feasibility
-    /// - Focus on actionable outcomes
-    ProblemSolving,
-
-    /// Review/Critique - constructive feedback, detailed analysis.
-    ///
-    /// # Characteristics
-    /// - Provide specific, actionable feedback
-    /// - Balance positive and constructive criticism
-    /// - Explain reasoning behind observations
-    /// - Suggest concrete improvements
-    /// - Maintain constructive tone
-    Review,
-
-    /// Planning session - structured, forward-thinking, action-oriented.
-    ///
-    /// # Characteristics
-    /// - Think ahead and anticipate needs
-    /// - Break goals into actionable steps
-    /// - Consider resources and timelines
-    /// - Identify dependencies and risks
-    /// - Create clear action items
-    Planning,
-
-    /// Custom context with user-defined instructions.
-    ///
-    /// Use this for specialized dialogue contexts not covered by the presets.
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let context = DialogueContext::Custom(
-    ///     "This is a technical deep-dive. Focus on implementation details, \
-    ///      code examples, and architectural decisions."
-    /// );
-    /// ```
-    Custom(String),
-}
-
-impl ToPrompt for DialogueContext {
-    fn to_prompt(&self) -> String {
-        match self {
-            Self::Brainstorm => r#"# Dialogue Context: Brainstorming Session
-
-This is a creative brainstorming session. Your goal is to generate and explore ideas freely.
-
-## Guidelines
-- **Encourage wild ideas**: No idea is too ambitious or unconventional
-- **Build on others**: Expand and combine suggestions from other participants
-- **Defer judgment**: Focus on generating ideas first, evaluating later
-- **Quantity matters**: More ideas lead to better final solutions
-- **Stay positive**: Use "Yes, and..." instead of "No, but..."
-
-## Expected Behavior
-- Be creative and exploratory
-- Suggest multiple alternatives
-- Connect ideas in novel ways
-- Avoid criticizing or dismissing ideas prematurely
-"#
-            .to_string(),
-            Self::Casual => r#"# Dialogue Context: Casual Conversation
-
-This is a relaxed, friendly conversation. Be natural and approachable.
-
-## Guidelines
-- **Be conversational**: Write as you would speak to a friend
-- **Show personality**: Share opinions and perspectives naturally
-- **Ask questions**: Show genuine interest in others' thoughts
-- **Keep it light**: Maintain a friendly, upbeat tone
-- **Be authentic**: Don't overthink formality
-
-## Expected Behavior
-- Natural, flowing responses
-- Personal anecdotes when relevant
-- Follow-up questions to deepen discussion
-- Friendly and warm tone
-"#
-            .to_string(),
-            Self::DecisionMaking => r#"# Dialogue Context: Decision-Making Discussion
-
-This is a decision-making discussion. Work systematically toward a clear conclusion.
-
-## Guidelines
-- **Analyze thoroughly**: Examine pros, cons, and trade-offs
-- **Use evidence**: Base arguments on facts and reasoning
-- **Consider constraints**: Account for limitations and requirements
-- **Think long-term**: Evaluate future implications
-- **Build consensus**: Work toward agreement where possible
-
-## Expected Behavior
-- Structured analysis of options
-- Clear reasoning and justification
-- Acknowledgment of trade-offs
-- Concrete recommendations
-- Documentation of decision rationale
-"#
-            .to_string(),
-            Self::Debate => r#"# Dialogue Context: Debate
-
-This is a debate. Challenge ideas constructively and present diverse perspectives.
-
-## Guidelines
-- **Challenge respectfully**: Question ideas, not people
-- **Support with evidence**: Back arguments with examples and data
-- **Consider alternatives**: Present different viewpoints actively
-- **Engage thoughtfully**: Respond to others' points directly
-- **Strengthen collectively**: Better ideas emerge through dialectic
-
-## Expected Behavior
-- Present contrasting viewpoints
-- Constructive criticism of ideas
-- Evidence-based arguments
-- Respectful disagreement
-- Synthesis of opposing views where possible
-"#
-            .to_string(),
-            Self::ProblemSolving => r#"# Dialogue Context: Problem-Solving Session
-
-This is a problem-solving session. Be systematic, practical, and solution-focused.
-
-## Guidelines
-- **Define clearly**: Ensure everyone understands the problem
-- **Break it down**: Decompose complex issues into manageable parts
-- **Be practical**: Focus on implementable solutions
-- **Evaluate feasibility**: Consider resources, time, and constraints
-- **Action-oriented**: Move from analysis to concrete next steps
-
-## Expected Behavior
-- Clear problem definition
-- Systematic analysis
-- Multiple solution options
-- Feasibility assessment
-- Actionable recommendations
-"#
-            .to_string(),
-            Self::Review => r#"# Dialogue Context: Review/Critique Session
-
-This is a review session. Provide constructive, detailed feedback.
-
-## Guidelines
-- **Be specific**: Point to concrete examples
-- **Balance feedback**: Note both strengths and areas for improvement
-- **Explain reasoning**: Help others understand your perspective
-- **Suggest improvements**: Offer actionable recommendations
-- **Stay constructive**: Focus on helping, not criticizing
-
-## Expected Behavior
-- Detailed, specific observations
-- Balanced positive and constructive feedback
-- Clear explanations of reasoning
-- Concrete improvement suggestions
-- Supportive, constructive tone
-"#
-            .to_string(),
-            Self::Planning => r#"# Dialogue Context: Planning Session
-
-This is a planning session. Think ahead, structure goals, and create actionable plans.
-
-## Guidelines
-- **Think forward**: Anticipate needs and challenges
-- **Break down goals**: Convert objectives into concrete steps
-- **Consider resources**: Account for time, people, and dependencies
-- **Identify risks**: Spot potential blockers early
-- **Create clarity**: Define clear action items and ownership
-
-## Expected Behavior
-- Future-oriented thinking
-- Structured breakdown of goals
-- Resource and timeline consideration
-- Risk identification
-- Clear action items with next steps
-"#
-            .to_string(),
-            Self::Custom(instruction) => instruction.clone(),
-        }
-    }
 }
 
 /// Internal representation of a dialogue participant.
@@ -847,7 +598,73 @@ impl Dialogue {
     ///     ))
     ///     .add_participant(persona1, agent1);
     /// ```
+    /// Sets the full dialogue context (talk style, environment, additional context).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let context = DialogueContext::default()
+    ///     .with_talk_style(TalkStyle::Brainstorm)
+    ///     .with_environment("Production environment")
+    ///     .with_additional_context("Focus on security".to_string());
+    ///
+    /// dialogue.with_context(context);
+    /// ```
     pub fn with_context(&mut self, context: DialogueContext) -> &mut Self {
+        self.context = Some(context);
+        self
+    }
+
+    /// Sets the talk style for the dialogue.
+    ///
+    /// This is a convenience method for setting only the talk style without
+    /// constructing a full DialogueContext.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// dialogue.with_talk_style(TalkStyle::Debate);
+    /// ```
+    pub fn with_talk_style(&mut self, style: TalkStyle) -> &mut Self {
+        let context = self
+            .context
+            .take()
+            .unwrap_or_default()
+            .with_talk_style(style);
+        self.context = Some(context);
+        self
+    }
+
+    /// Sets the environment information for the dialogue.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// dialogue.with_environment("ClaudeCode environment");
+    /// ```
+    pub fn with_environment(&mut self, env: impl Into<String>) -> &mut Self {
+        let context = self
+            .context
+            .take()
+            .unwrap_or_default()
+            .with_environment(env);
+        self.context = Some(context);
+        self
+    }
+
+    /// Adds additional context to the dialogue.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// dialogue.with_additional_context("Focus on performance".to_string());
+    /// ```
+    pub fn with_additional_context(&mut self, ctx: String) -> &mut Self {
+        let context = self
+            .context
+            .take()
+            .unwrap_or_default()
+            .with_additional_context(ctx);
         self.context = Some(context);
         self
     }
@@ -4147,7 +3964,7 @@ mod tests {
         }
 
         let mut dialogue = Dialogue::sequential();
-        dialogue.with_context(DialogueContext::Brainstorm);
+        dialogue.with_talk_style(TalkStyle::Brainstorm);
 
         let persona_a = Persona {
             name: "AgentA".to_string(),
@@ -4242,7 +4059,7 @@ mod tests {
 
         let received_payloads = Arc::new(Mutex::new(Vec::new()));
         dialogue
-            .with_context(DialogueContext::Brainstorm)
+            .with_talk_style(TalkStyle::Brainstorm)
             .add_participant(
                 persona,
                 TrackingAgent {
@@ -4316,9 +4133,9 @@ mod tests {
 
         let received_payloads = Arc::new(Mutex::new(Vec::new()));
         dialogue
-            .with_context(DialogueContext::Custom(
+            .with_additional_context(
                 "This is a technical deep-dive. Focus on implementation details.".to_string(),
-            ))
+            )
             .add_participant(
                 persona,
                 TrackingAgent {
