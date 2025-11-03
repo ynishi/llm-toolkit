@@ -227,8 +227,22 @@ fn build_sequential_payload(
 
         payload.with_participants(participants_info.to_vec())
     } else {
-        Payload::from_messages(current_turn_outputs.to_vec())
-            .merge(base_payload.clone())
-            .with_participants(participants_info.to_vec())
+        // For idx > 0:
+        // 1. prev_agent_outputs (prior turn's agent outputs)
+        // 2. base_payload (new input)
+        // 3. current_turn_outputs (current turn's agent outputs so far)
+        let mut payload = base_payload.clone();
+
+        // Prepend prev_agent_outputs if present
+        if !prev_agent_outputs.is_empty() {
+            payload = Payload::from_messages(prev_agent_outputs.to_vec()).merge(payload);
+        }
+
+        // Append current_turn_outputs
+        if !current_turn_outputs.is_empty() {
+            payload = payload.merge(Payload::from_messages(current_turn_outputs.to_vec()));
+        }
+
+        payload.with_participants(participants_info.to_vec())
     }
 }
