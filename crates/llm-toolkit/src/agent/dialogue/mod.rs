@@ -203,6 +203,264 @@ pub enum ExecutionModel {
     Sequential,
 }
 
+/// Dialogue context that shapes the tone, behavior, and focus of the conversation.
+///
+/// Setting a dialogue context provides implicit instructions to all participants,
+/// eliminating the need for users to explain the conversation's purpose each time.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use llm_toolkit::agent::dialogue::{Dialogue, DialogueContext};
+///
+/// // Brainstorming session
+/// let mut dialogue = Dialogue::broadcast()
+///     .with_context(DialogueContext::Brainstorm)
+///     .add_participant(persona1, agent1)
+///     .add_participant(persona2, agent2);
+///
+/// dialogue.run("Let's generate ideas for our new feature").await?;
+///
+/// // Decision-making discussion
+/// let mut dialogue = Dialogue::sequential()
+///     .with_context(DialogueContext::DecisionMaking)
+///     .add_participant(persona1, agent1)
+///     .add_participant(persona2, agent2);
+///
+/// dialogue.run("Which tech stack should we use?").await?;
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DialogueContext {
+    /// Brainstorming session - creative, exploratory, building on ideas.
+    ///
+    /// # Characteristics
+    /// - Encourage wild ideas and creative thinking
+    /// - Build on others' suggestions
+    /// - No idea is wrong or too ambitious
+    /// - Quantity over quality initially
+    /// - Defer judgment and criticism
+    Brainstorm,
+
+    /// Casual conversation - relaxed, friendly, conversational.
+    ///
+    /// # Characteristics
+    /// - Natural, flowing conversation
+    /// - Friendly and approachable tone
+    /// - Share personal perspectives
+    /// - Ask follow-up questions
+    /// - Keep it light and engaging
+    Casual,
+
+    /// Decision-making discussion - analytical, weighing options, reaching conclusion.
+    ///
+    /// # Characteristics
+    /// - Analyze pros and cons systematically
+    /// - Consider trade-offs and constraints
+    /// - Base opinions on evidence and reasoning
+    /// - Work toward a clear decision
+    /// - Document rationale for choices
+    DecisionMaking,
+
+    /// Debate - challenging ideas, diverse perspectives, constructive argument.
+    ///
+    /// # Characteristics
+    /// - Challenge ideas constructively
+    /// - Present alternative viewpoints
+    /// - Support arguments with evidence
+    /// - Engage respectfully with disagreement
+    /// - Strengthen thinking through dialectic
+    Debate,
+
+    /// Problem-solving session - systematic, solution-focused, practical.
+    ///
+    /// # Characteristics
+    /// - Define the problem clearly
+    /// - Break down complex issues
+    /// - Generate practical solutions
+    /// - Evaluate feasibility
+    /// - Focus on actionable outcomes
+    ProblemSolving,
+
+    /// Review/Critique - constructive feedback, detailed analysis.
+    ///
+    /// # Characteristics
+    /// - Provide specific, actionable feedback
+    /// - Balance positive and constructive criticism
+    /// - Explain reasoning behind observations
+    /// - Suggest concrete improvements
+    /// - Maintain constructive tone
+    Review,
+
+    /// Planning session - structured, forward-thinking, action-oriented.
+    ///
+    /// # Characteristics
+    /// - Think ahead and anticipate needs
+    /// - Break goals into actionable steps
+    /// - Consider resources and timelines
+    /// - Identify dependencies and risks
+    /// - Create clear action items
+    Planning,
+
+    /// Custom context with user-defined instructions.
+    ///
+    /// Use this for specialized dialogue contexts not covered by the presets.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let context = DialogueContext::Custom(
+    ///     "This is a technical deep-dive. Focus on implementation details, \
+    ///      code examples, and architectural decisions."
+    /// );
+    /// ```
+    Custom(String),
+}
+
+impl ToPrompt for DialogueContext {
+    fn to_prompt(&self) -> String {
+        match self {
+            Self::Brainstorm => {
+                r#"# Dialogue Context: Brainstorming Session
+
+This is a creative brainstorming session. Your goal is to generate and explore ideas freely.
+
+## Guidelines
+- **Encourage wild ideas**: No idea is too ambitious or unconventional
+- **Build on others**: Expand and combine suggestions from other participants
+- **Defer judgment**: Focus on generating ideas first, evaluating later
+- **Quantity matters**: More ideas lead to better final solutions
+- **Stay positive**: Use "Yes, and..." instead of "No, but..."
+
+## Expected Behavior
+- Be creative and exploratory
+- Suggest multiple alternatives
+- Connect ideas in novel ways
+- Avoid criticizing or dismissing ideas prematurely
+"#.to_string()
+            }
+            Self::Casual => {
+                r#"# Dialogue Context: Casual Conversation
+
+This is a relaxed, friendly conversation. Be natural and approachable.
+
+## Guidelines
+- **Be conversational**: Write as you would speak to a friend
+- **Show personality**: Share opinions and perspectives naturally
+- **Ask questions**: Show genuine interest in others' thoughts
+- **Keep it light**: Maintain a friendly, upbeat tone
+- **Be authentic**: Don't overthink formality
+
+## Expected Behavior
+- Natural, flowing responses
+- Personal anecdotes when relevant
+- Follow-up questions to deepen discussion
+- Friendly and warm tone
+"#.to_string()
+            }
+            Self::DecisionMaking => {
+                r#"# Dialogue Context: Decision-Making Discussion
+
+This is a decision-making discussion. Work systematically toward a clear conclusion.
+
+## Guidelines
+- **Analyze thoroughly**: Examine pros, cons, and trade-offs
+- **Use evidence**: Base arguments on facts and reasoning
+- **Consider constraints**: Account for limitations and requirements
+- **Think long-term**: Evaluate future implications
+- **Build consensus**: Work toward agreement where possible
+
+## Expected Behavior
+- Structured analysis of options
+- Clear reasoning and justification
+- Acknowledgment of trade-offs
+- Concrete recommendations
+- Documentation of decision rationale
+"#.to_string()
+            }
+            Self::Debate => {
+                r#"# Dialogue Context: Debate
+
+This is a debate. Challenge ideas constructively and present diverse perspectives.
+
+## Guidelines
+- **Challenge respectfully**: Question ideas, not people
+- **Support with evidence**: Back arguments with examples and data
+- **Consider alternatives**: Present different viewpoints actively
+- **Engage thoughtfully**: Respond to others' points directly
+- **Strengthen collectively**: Better ideas emerge through dialectic
+
+## Expected Behavior
+- Present contrasting viewpoints
+- Constructive criticism of ideas
+- Evidence-based arguments
+- Respectful disagreement
+- Synthesis of opposing views where possible
+"#.to_string()
+            }
+            Self::ProblemSolving => {
+                r#"# Dialogue Context: Problem-Solving Session
+
+This is a problem-solving session. Be systematic, practical, and solution-focused.
+
+## Guidelines
+- **Define clearly**: Ensure everyone understands the problem
+- **Break it down**: Decompose complex issues into manageable parts
+- **Be practical**: Focus on implementable solutions
+- **Evaluate feasibility**: Consider resources, time, and constraints
+- **Action-oriented**: Move from analysis to concrete next steps
+
+## Expected Behavior
+- Clear problem definition
+- Systematic analysis
+- Multiple solution options
+- Feasibility assessment
+- Actionable recommendations
+"#.to_string()
+            }
+            Self::Review => {
+                r#"# Dialogue Context: Review/Critique Session
+
+This is a review session. Provide constructive, detailed feedback.
+
+## Guidelines
+- **Be specific**: Point to concrete examples
+- **Balance feedback**: Note both strengths and areas for improvement
+- **Explain reasoning**: Help others understand your perspective
+- **Suggest improvements**: Offer actionable recommendations
+- **Stay constructive**: Focus on helping, not criticizing
+
+## Expected Behavior
+- Detailed, specific observations
+- Balanced positive and constructive feedback
+- Clear explanations of reasoning
+- Concrete improvement suggestions
+- Supportive, constructive tone
+"#.to_string()
+            }
+            Self::Planning => {
+                r#"# Dialogue Context: Planning Session
+
+This is a planning session. Think ahead, structure goals, and create actionable plans.
+
+## Guidelines
+- **Think forward**: Anticipate needs and challenges
+- **Break down goals**: Convert objectives into concrete steps
+- **Consider resources**: Account for time, people, and dependencies
+- **Identify risks**: Spot potential blockers early
+- **Create clarity**: Define clear action items and ownership
+
+## Expected Behavior
+- Future-oriented thinking
+- Structured breakdown of goals
+- Resource and timeline consideration
+- Risk identification
+- Clear action items with next steps
+"#.to_string()
+            }
+            Self::Custom(instruction) => instruction.clone(),
+        }
+    }
+}
+
 /// Internal representation of a dialogue participant.
 ///
 /// Wraps a persona and its associated agent implementation.
@@ -266,6 +524,9 @@ pub struct Dialogue {
     pub(super) message_store: MessageStore,
 
     pub(super) execution_model: ExecutionModel,
+
+    /// Optional dialogue context that shapes conversation tone and behavior
+    pub(super) context: Option<DialogueContext>,
 }
 
 impl Dialogue {
@@ -277,6 +538,7 @@ impl Dialogue {
             participants: Vec::new(),
             message_store: MessageStore::new(),
             execution_model,
+            context: None,
         }
     }
 
@@ -566,6 +828,37 @@ impl Dialogue {
     ///
     /// dialogue.add_participant(expert, ClaudeCodeAgent::new());
     /// ```
+    /// Sets the dialogue context, which shapes the tone and behavior of the conversation.
+    ///
+    /// The context provides implicit instructions to all participants, eliminating
+    /// the need to explain the conversation's purpose in each message.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - The dialogue context to set
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::{Dialogue, DialogueContext};
+    ///
+    /// // Brainstorming session
+    /// let mut dialogue = Dialogue::broadcast()
+    ///     .with_context(DialogueContext::Brainstorm)
+    ///     .add_participant(persona1, agent1);
+    ///
+    /// // Custom context
+    /// let mut dialogue = Dialogue::sequential()
+    ///     .with_context(DialogueContext::Custom(
+    ///         "This is a technical deep-dive. Focus on implementation details."
+    ///     ))
+    ///     .add_participant(persona1, agent1);
+    /// ```
+    pub fn with_context(&mut self, context: DialogueContext) -> &mut Self {
+        self.context = Some(context);
+        self
+    }
+
     pub fn add_participant<T>(&mut self, persona: Persona, llm_agent: T) -> &mut Self
     where
         T: Agent<Output = String> + 'static,
@@ -964,14 +1257,20 @@ impl Dialogue {
         &mut self,
         initial_prompt: impl Into<Payload>,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
-        let payload: Payload = initial_prompt.into();
+        let mut payload: Payload = initial_prompt.into();
         let current_turn = self.message_store.current_turn() + 1;
+
+        // Apply dialogue context if set
+        if let Some(ref context) = self.context {
+            payload = payload.prepend_system(context.to_prompt());
+        }
 
         debug!(
             target = "llm_toolkit::dialogue",
             turn = current_turn,
             execution_model = "broadcast",
             participant_count = self.participants.len(),
+            has_context = self.context.is_some(),
             "Starting dialogue.run() in broadcast mode"
         );
 
@@ -1021,14 +1320,20 @@ impl Dialogue {
         &mut self,
         initial_prompt: impl Into<Payload>,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
-        let payload: Payload = initial_prompt.into();
+        let mut payload: Payload = initial_prompt.into();
         let current_turn = self.message_store.current_turn() + 1;
+
+        // Apply dialogue context if set
+        if let Some(ref context) = self.context {
+            payload = payload.prepend_system(context.to_prompt());
+        }
 
         debug!(
             target = "llm_toolkit::dialogue",
             turn = current_turn,
             execution_model = "sequential",
             participant_count = self.participants.len(),
+            has_context = self.context.is_some(),
             "Starting dialogue.run() in sequential mode"
         );
 
@@ -3508,5 +3813,144 @@ mod tests {
         assert_eq!(dialogue.history()[5].speaker.name(), "AgentA"); // Turn 2 A
         assert_eq!(dialogue.history()[6].speaker.name(), "AgentB"); // Turn 2 B
         assert_eq!(dialogue.history()[7].speaker.name(), "AgentC"); // Turn 2 C (final)
+    }
+
+    /// Test that DialogueContext is properly applied to the payload
+    #[tokio::test]
+    async fn test_dialogue_context_brainstorm() {
+        use crate::agent::persona::Persona;
+        use tokio::sync::Mutex;
+
+        // Create a tracking agent to verify context is included
+        #[derive(Clone)]
+        struct TrackingAgent {
+            name: String,
+            received_payloads: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl Agent for TrackingAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Tracking agent"
+            }
+
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                let payload_text = payload.to_text();
+                self.received_payloads.lock().await.push(payload_text.clone());
+                Ok(format!("[{}] responded", self.name))
+            }
+        }
+
+        let mut dialogue = Dialogue::broadcast();
+        let persona = Persona {
+            name: "Agent1".to_string(),
+            role: "Participant".to_string(),
+            background: "Test agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let received_payloads = Arc::new(Mutex::new(Vec::new()));
+        dialogue
+            .with_context(DialogueContext::Brainstorm)
+            .add_participant(
+                persona,
+                TrackingAgent {
+                    name: "Agent1".to_string(),
+                    received_payloads: Arc::clone(&received_payloads),
+                },
+            );
+
+        // Run dialogue
+        dialogue.run("Let's generate some ideas").await.unwrap();
+
+        // Verify context was included in payload
+        let payloads = received_payloads.lock().await;
+        assert_eq!(payloads.len(), 1, "Should have received one payload");
+
+        let payload_text = &payloads[0];
+
+        // Check for key context markers - they appear in the System message within PersonaAgent's output
+        assert!(
+            payload_text.contains("Brainstorming Session"),
+            "Payload should contain context title. Got: {}",
+            payload_text
+        );
+        assert!(
+            payload_text.contains("Encourage wild ideas"),
+            "Payload should contain context guidelines. Got: {}",
+            payload_text
+        );
+        // The original prompt "Let's generate some ideas" is not visible in PersonaAgent's output
+        // because PersonaAgent wraps everything in its own format. We verify the context was applied
+        // by checking that the Brainstorm context instructions are present.
+    }
+
+    /// Test custom dialogue context
+    #[tokio::test]
+    async fn test_dialogue_context_custom() {
+        use crate::agent::persona::Persona;
+        use tokio::sync::Mutex;
+
+        #[derive(Clone)]
+        struct TrackingAgent {
+            name: String,
+            received_payloads: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl Agent for TrackingAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Tracking"
+            }
+
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                self.received_payloads.lock().await.push(payload.to_text());
+                Ok("OK".to_string())
+            }
+        }
+
+        let mut dialogue = Dialogue::sequential();
+        let persona = Persona {
+            name: "Agent1".to_string(),
+            role: "Participant".to_string(),
+            background: "Test".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let received_payloads = Arc::new(Mutex::new(Vec::new()));
+        dialogue
+            .with_context(DialogueContext::Custom(
+                "This is a technical deep-dive. Focus on implementation details.".to_string(),
+            ))
+            .add_participant(
+                persona,
+                TrackingAgent {
+                    name: "Agent1".to_string(),
+                    received_payloads: Arc::clone(&received_payloads),
+                },
+            );
+
+        dialogue.run("Analyze the architecture").await.unwrap();
+
+        let payloads = received_payloads.lock().await;
+        assert!(
+            payloads[0].contains("technical deep-dive"),
+            "Should contain custom context. Got: {}",
+            payloads[0]
+        );
+        // Note: "Analyze the architecture" is absorbed into PersonaAgent's formatting
+        // We verify context was applied by checking the custom context text is present
     }
 }
