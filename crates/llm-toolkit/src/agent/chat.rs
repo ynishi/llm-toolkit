@@ -261,7 +261,7 @@ mod tests {
         assert_eq!(calls.len(), 2);
 
         // Second call should have history context
-        assert!(calls[1].contains("Previous Conversation"));
+        assert!(calls[1].contains("Previous conversation"));
         assert!(calls[1].contains("Hello"));
     }
 
@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(calls.len(), 2);
 
         // Second call should NOT have history context
-        assert!(!calls[1].contains("Previous Conversation"));
+        assert!(!calls[1].contains("Previous conversation"));
         assert_eq!(calls[1], "How are you?");
     }
 
@@ -348,7 +348,7 @@ mod tests {
         println!("=== Second call ===\n{}\n=== End ===", calls[1]);
 
         // Second call should include both persona and history
-        assert!(calls[1].contains("Previous Conversation"));
+        assert!(calls[1].contains("Previous conversation"));
         assert!(calls[1].contains("Persona Profile"));
         assert!(calls[1].contains("Alice"));
     }

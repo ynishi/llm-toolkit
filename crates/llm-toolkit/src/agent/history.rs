@@ -11,7 +11,10 @@ use tokio::sync::Mutex;
 #[derive(Serialize, ToPrompt)]
 #[prompt(template = r#"
 {% if history %}
-Previous Conversation (most recent last) {{ history_length }} messages:
+# Conversation History
+
+Previous conversation (most recent last) {{ history_length }} messages:
+
 {{ history }}
 {% endif %}
 "#)]
@@ -275,7 +278,7 @@ mod tests {
             history: "[User]: Hello\n[Agent]: Hi there".to_string(),
         };
         let rendered = dto.to_prompt();
-        assert!(rendered.contains("Previous Conversation (most recent last) 2 messages:"));
+        assert!(rendered.contains("Previous conversation (most recent last) 2 messages:"));
         assert!(rendered.contains("[User]: Hello"));
     }
 
@@ -324,7 +327,7 @@ mod tests {
         let received_messages = calls[0].to_messages();
 
         // The second call should include the previous conversation in text
-        assert!(received_text.contains("Previous Conversation"));
+        assert!(received_text.contains("Previous conversation"));
         assert!(received_text.contains("[User]: What is Rust?"));
         assert!(received_text.contains("[System (YOU)]: \"Response 1\""));
 
@@ -371,8 +374,8 @@ mod tests {
         let received_text = calls[0].to_text();
         let received_messages = calls[0].to_messages();
 
-        // Should not contain "Previous Conversation" since it's the first call
-        assert!(!received_text.contains("Previous Conversation"));
+        // Should not contain "Previous conversation" since it's the first call
+        assert!(!received_text.contains("Previous conversation"));
 
         // Current message should be in messages structure
         assert_eq!(received_messages.len(), 1);
