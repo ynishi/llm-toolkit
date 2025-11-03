@@ -1033,7 +1033,7 @@ impl Dialogue {
         );
 
         // 1. Extract and store messages from payload
-        let (input_messages, prompt_text) =
+        let (input_messages, _prompt_text) =
             self.extract_messages_from_payload(&payload, current_turn);
 
         for msg in input_messages {
@@ -1043,22 +1043,54 @@ impl Dialogue {
         // 2. Build participant list
         let participants_info = self.get_participants_info();
 
-        // 3. Chain through participants sequentially
-        let mut current_input = prompt_text;
+        // 3. Get previous turn's all agent outputs (for first agent in multi-turn scenarios)
+        let prev_agent_outputs: Vec<PayloadMessage> = if current_turn > 1 {
+            // Get ALL agent messages from previous turn
+            self.message_store
+                .messages_for_turn(current_turn - 1)
+                .into_iter()
+                .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
+                .map(PayloadMessage::from)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        if !prev_agent_outputs.is_empty() {
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                prev_agent_count = prev_agent_outputs.len(),
+                "Sequential mode: First agent will receive {} previous turn agent outputs as context",
+                prev_agent_outputs.len()
+            );
+        }
+
+        // 4. Execute participants sequentially, collecting their outputs
+        let mut current_turn_outputs: Vec<PayloadMessage> = Vec::new();
         let mut final_turn = None;
 
         for (idx, participant) in self.participants.iter().enumerate() {
             let agent = &participant.agent;
             let name = participant.name().to_string();
 
-            // Create payload based on whether this is the first agent or not
+            // Create payload based on position in sequence
             let final_payload = if idx == 0 {
-                // First agent: use original payload to preserve Messages structure
-                // (includes attachments if any)
-                payload.clone().with_participants(participants_info.clone())
+                // First agent: use original payload + ALL previous turn's agent outputs (if exists)
+                let mut base_payload = payload.clone();
+
+                if !prev_agent_outputs.is_empty() {
+                    // Add all previous turn's agent outputs as context, preserving speaker info
+                    base_payload =
+                        Payload::from_messages(prev_agent_outputs.clone()).merge(base_payload);
+                }
+
+                base_payload.with_participants(participants_info.clone())
             } else {
-                // Subsequent agents: use previous agent's output as System message
-                Payload::from_messages(vec![PayloadMessage::system(current_input.clone())])
+                // Subsequent agents: receive ALL outputs from current turn so far + original payload
+                // preserving speaker info
+                Payload::from_messages(current_turn_outputs.clone())
+                    .merge(payload.clone())
                     .with_participants(participants_info.clone())
             };
 
@@ -1066,19 +1098,17 @@ impl Dialogue {
             let response = agent.execute(final_payload).await?;
 
             // Store response message
-            let response_message = DialogueMessage::new(
-                current_turn,
-                Speaker::agent(name.clone(), participant.persona.role.clone()),
-                response.clone(),
-            );
+            let speaker = Speaker::agent(name.clone(), participant.persona.role.clone());
+            let response_message =
+                DialogueMessage::new(current_turn, speaker.clone(), response.clone());
             self.message_store.push(response_message);
 
-            // Chain output to next input
-            current_input = response.clone();
+            // Add this agent's output to current turn outputs for next agents to see
+            current_turn_outputs.push(PayloadMessage::new(speaker.clone(), response.clone()));
 
             // Keep track of final turn
             final_turn = Some(DialogueTurn {
-                speaker: Speaker::agent(name, participant.persona.role.clone()),
+                speaker,
                 content: response,
             });
         }
@@ -3108,5 +3138,375 @@ mod tests {
         assert_eq!(history[3].speaker.name(), "User"); // Turn 2 user input
         assert_eq!(history[4].speaker.name(), "Agent1"); // Turn 2 response 1
         assert_eq!(history[5].speaker.name(), "Agent2"); // Turn 2 response 2
+    }
+
+    /// Test multi-turn sequential (2 members) to verify message flow across turns.
+    ///
+    /// Expected behavior for 2 members (AgentA, AgentB) in Sequential mode:
+    /// - Turn 1: System -> AgentA(sees System) -> AgentB(sees AgentA's output) -> Done (returns B1)
+    /// - Turn 2: System -> AgentA(sees B1 + new System) -> AgentB(sees AgentA's new output) -> Done (returns B2)
+    ///
+    /// Key: First agent (AgentA) should receive previous turn's final output (B1).
+    #[tokio::test]
+    async fn test_multi_turn_sequential_2_members() {
+        use crate::agent::persona::Persona;
+        use tokio::sync::Mutex;
+
+        // Create mock agents that echo what they receive to verify message flow
+        #[derive(Clone)]
+        struct TrackingAgent {
+            name: String,
+            responses: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl Agent for TrackingAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Tracking agent"
+            }
+
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                let input = payload.to_text();
+                let response = format!("[{}] received input", self.name);
+
+                // Record what was received for verification
+                self.responses.lock().await.push(input.clone());
+
+                Ok(response)
+            }
+        }
+
+        let mut dialogue = Dialogue::sequential();
+
+        let persona_a = Persona {
+            name: "AgentA".to_string(),
+            role: "First".to_string(),
+            background: "First agent in chain".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona_b = Persona {
+            name: "AgentB".to_string(),
+            role: "Second".to_string(),
+            background: "Second agent in chain".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let agent_a_responses = Arc::new(Mutex::new(Vec::new()));
+        let agent_b_responses = Arc::new(Mutex::new(Vec::new()));
+
+        dialogue
+            .add_participant(
+                persona_a,
+                TrackingAgent {
+                    name: "AgentA".to_string(),
+                    responses: Arc::clone(&agent_a_responses),
+                },
+            )
+            .add_participant(
+                persona_b,
+                TrackingAgent {
+                    name: "AgentB".to_string(),
+                    responses: Arc::clone(&agent_b_responses),
+                },
+            );
+
+        // Turn 1: Initial sequential execution
+        println!("\n=== Turn 1 ===");
+        let turns1 = dialogue.run("First message").await.unwrap();
+
+        // Sequential mode returns only the final turn (AgentB's response)
+        assert_eq!(turns1.len(), 1);
+        assert_eq!(turns1[0].speaker.name(), "AgentB");
+        assert_eq!(turns1[0].content, "[AgentB] received input");
+
+        // Verify Turn 1 message flow
+        let a_inputs_t1 = agent_a_responses.lock().await;
+        let b_inputs_t1 = agent_b_responses.lock().await;
+
+        println!("Turn 1 - AgentA received: {}", a_inputs_t1[0]);
+        println!("Turn 1 - AgentB received: {}", b_inputs_t1[0]);
+
+        // AgentA should see original message
+        assert!(
+            a_inputs_t1[0].contains("First message"),
+            "AgentA should see 'First message' in Turn 1. Got: {}",
+            a_inputs_t1[0]
+        );
+
+        // AgentB should see AgentA's response
+        assert!(
+            b_inputs_t1[0].contains("[AgentA] received input"),
+            "AgentB should see AgentA's output in Turn 1. Got: {}",
+            b_inputs_t1[0]
+        );
+
+        drop(a_inputs_t1);
+        drop(b_inputs_t1);
+
+        // History: System(Turn1) + AgentA(Turn1) + AgentB(Turn1) = 3
+        assert_eq!(dialogue.history().len(), 3);
+        assert_eq!(dialogue.history()[0].speaker.name(), "System");
+        assert_eq!(dialogue.history()[0].content, "First message");
+        assert_eq!(dialogue.history()[1].speaker.name(), "AgentA");
+        assert_eq!(dialogue.history()[1].content, "[AgentA] received input");
+        assert_eq!(dialogue.history()[2].speaker.name(), "AgentB");
+        assert_eq!(dialogue.history()[2].content, "[AgentB] received input");
+
+        // Turn 2: Second sequential execution
+        println!("\n=== Turn 2 ===");
+        let turns2 = dialogue.run("Second message").await.unwrap();
+
+        assert_eq!(turns2.len(), 1);
+        assert_eq!(turns2[0].speaker.name(), "AgentB");
+        assert_eq!(turns2[0].content, "[AgentB] received input");
+
+        // Verify Turn 2 message flow
+        let a_inputs_t2 = agent_a_responses.lock().await;
+        let b_inputs_t2 = agent_b_responses.lock().await;
+
+        println!("Turn 2 - AgentA received: {}", a_inputs_t2[1]);
+        println!("Turn 2 - AgentB received: {}", b_inputs_t2[1]);
+
+        // KEY TEST: AgentA should see ALL Turn 1 outputs:
+        // 1. Its own Turn 1 output (AgentA)
+        // 2. AgentB's Turn 1 output
+        // 3. New system message (Second message)
+        assert!(
+            a_inputs_t2[1].contains("[AgentA] received input"),
+            "AgentA should see its own Turn 1 output as context in Turn 2. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            a_inputs_t2[1].contains("[AgentB] received input"),
+            "AgentA should see AgentB's Turn 1 output as context in Turn 2. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            a_inputs_t2[1].contains("Second message"),
+            "AgentA should see new message in Turn 2. Got: {}",
+            a_inputs_t2[1]
+        );
+
+        // AgentB should see AgentA's Turn 2 output + new message
+        assert!(
+            b_inputs_t2[1].contains("[AgentA] received input"),
+            "AgentB should see AgentA's Turn 2 output. Got: {}",
+            b_inputs_t2[1]
+        );
+        assert!(
+            b_inputs_t2[1].contains("Second message"),
+            "AgentB should see new message. Got: {}",
+            b_inputs_t2[1]
+        );
+
+        // History: Turn1(3) + Turn2(3) = 6 messages
+        assert_eq!(dialogue.history().len(), 6);
+        assert_eq!(dialogue.history()[3].speaker.name(), "System"); // Turn 2 input
+        assert_eq!(dialogue.history()[3].content, "Second message");
+        assert_eq!(dialogue.history()[4].speaker.name(), "AgentA"); // Turn 2 AgentA
+        assert_eq!(dialogue.history()[5].speaker.name(), "AgentB"); // Turn 2 AgentB (final)
+    }
+
+    /// Test multi-turn sequential (3 members) to verify message flow across turns.
+    ///
+    /// Expected behavior for 3 members (A, B, C) in Sequential mode:
+    /// - Turn 1: System -> A(sees System) -> B(sees A1) -> C(sees B1) -> Done (returns C1)
+    /// - Turn 2: System -> A(sees C1 + new System) -> B(sees A2) -> C(sees B2) -> Done (returns C2)
+    ///
+    /// Key: Only the first agent (A) receives previous turn's final output (C1).
+    #[tokio::test]
+    async fn test_multi_turn_sequential_3_members() {
+        use crate::agent::persona::Persona;
+        use tokio::sync::Mutex;
+
+        // Create mock agents that track what they receive
+        #[derive(Clone)]
+        struct TrackingAgent {
+            name: String,
+            responses: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl Agent for TrackingAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Tracking agent"
+            }
+
+            fn name(&self) -> String {
+                self.name.clone()
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                let input = payload.to_text();
+                let response = format!("[{}] processed", self.name);
+
+                // Record what was received for verification
+                self.responses.lock().await.push(input.clone());
+
+                Ok(response)
+            }
+        }
+
+        let mut dialogue = Dialogue::sequential();
+
+        let persona_a = Persona {
+            name: "AgentA".to_string(),
+            role: "First".to_string(),
+            background: "First agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona_b = Persona {
+            name: "AgentB".to_string(),
+            role: "Second".to_string(),
+            background: "Second agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let persona_c = Persona {
+            name: "AgentC".to_string(),
+            role: "Third".to_string(),
+            background: "Third agent".to_string(),
+            communication_style: "Direct".to_string(),
+        };
+
+        let agent_a_responses = Arc::new(Mutex::new(Vec::new()));
+        let agent_b_responses = Arc::new(Mutex::new(Vec::new()));
+        let agent_c_responses = Arc::new(Mutex::new(Vec::new()));
+
+        dialogue
+            .add_participant(
+                persona_a,
+                TrackingAgent {
+                    name: "AgentA".to_string(),
+                    responses: Arc::clone(&agent_a_responses),
+                },
+            )
+            .add_participant(
+                persona_b,
+                TrackingAgent {
+                    name: "AgentB".to_string(),
+                    responses: Arc::clone(&agent_b_responses),
+                },
+            )
+            .add_participant(
+                persona_c,
+                TrackingAgent {
+                    name: "AgentC".to_string(),
+                    responses: Arc::clone(&agent_c_responses),
+                },
+            );
+
+        // Turn 1
+        println!("\n=== Turn 1 (3 members) ===");
+        let turns1 = dialogue.run("First message").await.unwrap();
+
+        // Sequential mode returns only the final turn (AgentC's response)
+        assert_eq!(turns1.len(), 1);
+        assert_eq!(turns1[0].speaker.name(), "AgentC");
+
+        // Verify Turn 1 message flow
+        let a_inputs_t1 = agent_a_responses.lock().await;
+        let b_inputs_t1 = agent_b_responses.lock().await;
+        let c_inputs_t1 = agent_c_responses.lock().await;
+
+        // A sees original message
+        assert!(a_inputs_t1[0].contains("First message"));
+
+        // B sees A's output
+        assert!(b_inputs_t1[0].contains("[AgentA] processed"));
+
+        // C sees B's output
+        assert!(c_inputs_t1[0].contains("[AgentB] processed"));
+
+        drop(a_inputs_t1);
+        drop(b_inputs_t1);
+        drop(c_inputs_t1);
+
+        // History: System + A + B + C = 4
+        assert_eq!(dialogue.history().len(), 4);
+
+        // Turn 2
+        println!("\n=== Turn 2 (3 members) ===");
+        let turns2 = dialogue.run("Second message").await.unwrap();
+
+        assert_eq!(turns2.len(), 1);
+        assert_eq!(turns2[0].speaker.name(), "AgentC");
+
+        // Verify Turn 2 message flow
+        let a_inputs_t2 = agent_a_responses.lock().await;
+        let b_inputs_t2 = agent_b_responses.lock().await;
+        let c_inputs_t2 = agent_c_responses.lock().await;
+
+        println!("Turn 2 - AgentA received: {}", a_inputs_t2[1]);
+        println!("Turn 2 - AgentB received: {}", b_inputs_t2[1]);
+        println!("Turn 2 - AgentC received: {}", c_inputs_t2[1]);
+
+        // KEY TEST: A should see ALL Turn 1 outputs (A1, B1, C1) + new message
+        assert!(
+            a_inputs_t2[1].contains("[AgentA] processed"),
+            "AgentA should see its own Turn 1 output. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            a_inputs_t2[1].contains("[AgentB] processed"),
+            "AgentA should see AgentB's Turn 1 output. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            a_inputs_t2[1].contains("[AgentC] processed"),
+            "AgentA should see AgentC's Turn 1 output. Got: {}",
+            a_inputs_t2[1]
+        );
+        assert!(
+            a_inputs_t2[1].contains("Second message"),
+            "AgentA should see new message. Got: {}",
+            a_inputs_t2[1]
+        );
+
+        // B should see A2's output + new message
+        assert!(
+            b_inputs_t2[1].contains("[AgentA] processed"),
+            "AgentB should see AgentA's Turn 2 output. Got: {}",
+            b_inputs_t2[1]
+        );
+        assert!(
+            b_inputs_t2[1].contains("Second message"),
+            "AgentB should see new message. Got: {}",
+            b_inputs_t2[1]
+        );
+
+        // C should see BOTH A2 and B2 outputs + new message
+        assert!(
+            c_inputs_t2[1].contains("[AgentA] processed"),
+            "AgentC should see AgentA's Turn 2 output. Got: {}",
+            c_inputs_t2[1]
+        );
+        assert!(
+            c_inputs_t2[1].contains("[AgentB] processed"),
+            "AgentC should see AgentB's Turn 2 output. Got: {}",
+            c_inputs_t2[1]
+        );
+        assert!(
+            c_inputs_t2[1].contains("Second message"),
+            "AgentC should see new message. Got: {}",
+            c_inputs_t2[1]
+        );
+
+        // History: Turn1(4) + Turn2(4) = 8 messages
+        assert_eq!(dialogue.history().len(), 8);
+        assert_eq!(dialogue.history()[4].speaker.name(), "System"); // Turn 2 input
+        assert_eq!(dialogue.history()[5].speaker.name(), "AgentA"); // Turn 2 A
+        assert_eq!(dialogue.history()[6].speaker.name(), "AgentB"); // Turn 2 B
+        assert_eq!(dialogue.history()[7].speaker.name(), "AgentC"); // Turn 2 C (final)
     }
 }
