@@ -1053,18 +1053,19 @@ impl Dialogue {
             "Starting partial_session"
         );
 
-        // Store messages in MessageStore
-        // If payload has Messages, store them individually; otherwise store Text as System
-        let messages = payload.to_messages();
-        trace!(
-            target = "llm_toolkit::dialogue",
-            turn = current_turn,
-            message_count = messages.len(),
-            "Extracted messages from payload"
-        );
+        // Store all incoming messages in MessageStore for Dialogue history management.
+        // This is Dialogue's responsibility: maintain complete conversation history
+        // regardless of ExecutionModel. Each model may also access Payload directly
+        // during execution, but MessageStore serves as the authoritative, persistent record
+        // for audit, debugging, and history retrieval (e.g., unsent messages, prev turns).
+        //
+        // Payload can contain both Text and Message variants simultaneously, so we store both:
+        // 1. Store all Messages with their speakers
+        // 2. Store all Text as System messages
 
-        let _prompt_text = if !messages.is_empty() {
-            // Store each message individually
+        // First, store all structured Messages
+        let messages = payload.to_messages();
+        if !messages.is_empty() {
             for msg in &messages {
                 let dialogue_msg =
                     DialogueMessage::new(current_turn, msg.speaker.clone(), msg.content.clone());
@@ -1075,49 +1076,33 @@ impl Dialogue {
                 turn = current_turn,
                 stored_messages = messages.len(),
                 total_store_size = self.message_store.len(),
-                "Stored messages in MessageStore (Messages path)"
+                "Stored structured Messages in MessageStore"
             );
-            // For Sequential mode, we need a text representation
-            let text = payload.to_text();
-            trace!(
-                target = "llm_toolkit::dialogue",
-                turn = current_turn,
-                text_length = text.len(),
-                text_preview = &text[..text.len().min(100)],
-                "Generated text representation from Messages payload"
-            );
-            text
-        } else {
-            // Legacy: store text as single System message (skip if empty)
-            let text = payload.to_text();
-            trace!(
-                target = "llm_toolkit::dialogue",
-                turn = current_turn,
-                text_length = text.len(),
-                text_preview = &text[..text.len().min(100)],
-                is_empty = text.is_empty(),
-                "Using text-only payload (fallback path)"
-            );
+        }
 
-            if !text.is_empty() {
-                let system_message =
-                    DialogueMessage::new(current_turn, Speaker::System, text.clone());
-                self.message_store.push(system_message);
-                trace!(
-                    target = "llm_toolkit::dialogue",
-                    turn = current_turn,
-                    total_store_size = self.message_store.len(),
-                    "Stored text as System message in MessageStore"
-                );
-            } else {
-                trace!(
-                    target = "llm_toolkit::dialogue",
-                    turn = current_turn,
-                    "Skipped storing empty text - MessageStore unchanged"
-                );
-            }
-            text
-        };
+        // Second, store all Text as System message (separate from Messages)
+        let text = payload.to_text();
+        if !text.is_empty() {
+            let system_message = DialogueMessage::new(current_turn, Speaker::System, text.clone());
+            self.message_store.push(system_message);
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                text_length = text.len(),
+                text_preview = &text[..text.len().min(100)],
+                total_store_size = self.message_store.len(),
+                "Stored Text as System message in MessageStore"
+            );
+        }
+
+        // Log if payload was completely empty
+        if messages.is_empty() && text.is_empty() {
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                "Payload contained no Messages or Text - MessageStore unchanged"
+            );
+        }
 
         let model = self.execution_model;
         let state = match model {
@@ -1264,21 +1249,23 @@ impl Dialogue {
             Vec::new()
         };
 
-        // Current intent from payload
-        // First try to get structured messages, otherwise get from MessageStore (current turn)
+        // Current intent from payload: extract both Messages and Text
+        // Payload can contain both types simultaneously, so we get both:
+        // 1. Structured Messages with their speakers
+        // 2. Text content as System message
         let new_messages = {
-            let payload_messages = payload.to_messages();
-            if !payload_messages.is_empty() {
-                payload_messages
-            } else {
-                // Fallback: get current turn messages from MessageStore (for text-only payloads)
-                self.message_store
-                    .messages_for_turn(current_turn)
-                    .into_iter()
-                    .filter(|msg| !matches!(msg.speaker, Speaker::Agent { .. }))
-                    .map(PayloadMessage::from)
-                    .collect()
+            let mut messages = Vec::new();
+
+            // Add structured Messages from payload
+            messages.extend(payload.to_messages());
+
+            // Add Text content as System message (if any)
+            let text = payload.to_text();
+            if !text.is_empty() {
+                messages.push(PayloadMessage::system(text));
             }
+
+            messages
         };
 
         // Responses that were produced in a previous session but not surfaced yet.
@@ -1333,25 +1320,16 @@ impl Dialogue {
 
             current_messages.extend(new_messages.clone());
 
-            // Create TurnInput based on whether we have structured messages or text
-            let turn_input = if !current_messages.is_empty() {
-                // New path: use structured messages
-                TurnInput::with_messages_and_context(
-                    current_messages,
-                    vec![], // context is now integrated into current_messages
-                    participants_info.clone(),
-                    name.clone(),
-                )
-            } else {
-                // Legacy path: use text as single prompt
-                let prompt_text = payload.to_text();
-                TurnInput::with_dialogue_context(
-                    prompt_text,
-                    vec![], // no separate context in legacy mode
-                    participants_info.clone(),
-                    name.clone(),
-                )
-            };
+            // current_messages now contains everything needed for this agent's turn:
+            // 1. Previous turn agent outputs (excluding self)
+            // 2. Unsent messages (excluding self)
+            // 3. Current Payload content (Messages + Text as System message)
+            let turn_input = TurnInput::with_messages_and_context(
+                current_messages,
+                vec![], // context is now integrated into current_messages
+                participants_info.clone(),
+                name.clone(),
+            );
 
             // Create payload with Messages (for structured dialogue history)
             let messages = turn_input.to_messages();
@@ -1402,58 +1380,72 @@ impl Dialogue {
         current_turn: usize,
         payload: &Payload,
     ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
-        // Get current intent messages (same approach as spawn_broadcast_tasks)
+        // Get current intent messages: extract both Messages and Text from payload
+        // Payload can contain both types simultaneously, so we get both:
+        // 1. Structured Messages with their speakers
+        // 2. Text content as System message
         let intent_messages = {
+            let mut messages = Vec::new();
+
+            // Add structured Messages from payload
             let payload_messages = payload.to_messages();
-            if !payload_messages.is_empty() {
-                trace!(
-                    target = "llm_toolkit::dialogue",
-                    turn = current_turn,
-                    message_count = payload_messages.len(),
-                    "Using intent messages from payload.to_messages()"
-                );
-                payload_messages
-            } else {
-                // Fallback: get current turn messages from MessageStore (for text-only payloads)
-                let messages: Vec<PayloadMessage> = self.message_store
-                    .messages_for_turn(current_turn)
-                    .into_iter()
-                    .filter(|msg| !matches!(msg.speaker, Speaker::Agent { .. }))
-                    .map(PayloadMessage::from)
-                    .collect();
-                trace!(
-                    target = "llm_toolkit::dialogue",
-                    turn = current_turn,
-                    message_count = messages.len(),
-                    total_store_messages = self.message_store.len(),
-                    "Using intent messages from MessageStore fallback"
-                );
-                messages
+            messages.extend(payload_messages.iter().cloned());
+
+            // Add Text content as System message (if any)
+            let text = payload.to_text();
+            if !text.is_empty() {
+                messages.push(PayloadMessage::system(text));
             }
+
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                message_count = messages.len(),
+                has_structured_messages = !payload_messages.is_empty(),
+                has_text = !payload.to_text().is_empty(),
+                "Extracted intent messages from Payload"
+            );
+
+            messages
+        };
+
+        // Get previous agent responses as PayloadMessages
+        let prev_agent_messages: Vec<PayloadMessage> = if current_turn > 1 {
+            self.message_store
+                .messages_for_turn(current_turn - 1)
+                .into_iter()
+                .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
+                .map(PayloadMessage::from)
+                .collect()
+        } else {
+            Vec::new()
         };
 
         // Extract text from messages to find mentions
-        let payload_text = if !intent_messages.is_empty() {
-            intent_messages
+        let mentions_text = {
+            let payload_text = intent_messages
                 .iter()
                 .map(|msg| msg.content.as_str())
                 .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            // Ultimate fallback: use payload.to_text()
-            payload.to_text()
+                .join("\n");
+            let prev_agent_text = prev_agent_messages
+                .iter()
+                .map(|msg| msg.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("{}\n{}", payload_text, prev_agent_text)
         };
 
         // Get all participant names
         let participant_names = self.participant_names();
 
         // Extract mentions from the text
-        let mentioned_names = extract_mentions(&payload_text, &participant_names);
+        let mentioned_names = extract_mentions(&mentions_text, &participant_names);
 
         trace!(
             target = "llm_toolkit::dialogue",
             turn = current_turn,
-            payload_text_preview = &payload_text[..payload_text.len().min(100)],
+            payload_text_preview = &mentions_text[..mentions_text.len().min(100)],
             intent_message_count = intent_messages.len(),
             all_participants = ?participant_names,
             mentioned = ?mentioned_names,
@@ -1481,18 +1473,6 @@ impl Dialogue {
 
         // Build participant list
         let participants_info = self.get_participants_info();
-
-        // Get previous agent responses as PayloadMessages
-        let prev_agent_messages: Vec<PayloadMessage> = if current_turn > 1 {
-            self.message_store
-                .messages_for_turn(current_turn - 1)
-                .into_iter()
-                .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
-                .map(PayloadMessage::from)
-                .collect()
-        } else {
-            Vec::new()
-        };
 
         // Reuse intent_messages as new_messages (already extracted above for mention detection)
         let new_messages = intent_messages;
@@ -1587,25 +1567,16 @@ impl Dialogue {
 
             current_messages.extend(new_messages.clone());
 
-            // Create TurnInput based on whether we have structured messages or text
-            let turn_input = if !current_messages.is_empty() {
-                // New path: use structured messages
-                TurnInput::with_messages_and_context(
-                    current_messages.clone(),
-                    vec![], // context is now integrated into current_messages
-                    participants_info.clone(),
-                    name.clone(),
-                )
-            } else {
-                // Legacy path: use text as single prompt
-                let prompt_text = payload.to_text();
-                TurnInput::with_dialogue_context(
-                    prompt_text,
-                    vec![], // no separate context in legacy mode
-                    participants_info.clone(),
-                    name.clone(),
-                )
-            };
+            // current_messages now contains everything needed for this agent's turn:
+            // 1. Previous turn agent outputs (excluding self)
+            // 2. Unsent messages (excluding self)
+            // 3. Current Payload content (Messages + Text as System message)
+            let turn_input = TurnInput::with_messages_and_context(
+                current_messages.clone(),
+                vec![], // context is now integrated into current_messages
+                participants_info.clone(),
+                name.clone(),
+            );
 
             // Create payload with Messages (for structured dialogue history)
             let messages = turn_input.to_messages();
@@ -5344,5 +5315,134 @@ mod tests {
 
         assert_eq!(history[3].speaker.name(), "System");
         assert_eq!(history[4].speaker.name(), "Charlie");
+    }
+
+    #[tokio::test]
+    async fn test_payload_with_both_messages_and_text() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona = Persona {
+            name: "TestAgent".to_string(),
+            role: "Tester".to_string(),
+            background: "Test agent".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+        };
+
+        dialogue.add_participant(
+            persona,
+            MockAgent::new("TestAgent", vec!["Response".to_string()]),
+        );
+
+        // Create a Payload with both Messages and Text
+        let payload = Payload::from_messages(vec![
+            PayloadMessage::user("Alice", "Product Manager", "What should we do?"),
+            PayloadMessage::system("Context: This is a test scenario"),
+        ])
+        .merge(Payload::text("Additional text content"));
+
+        dialogue.run(payload).await.unwrap();
+
+        // Verify MessageStore contains all content
+        let history = dialogue.history();
+
+        // Should have:
+        // 1. User message from Alice
+        // 2. System message (Context)
+        // 3. System message (Additional text)
+        // 4. Agent response
+        assert_eq!(history.len(), 4);
+
+        // Check first message (User from Alice)
+        assert!(matches!(history[0].speaker, Speaker::User { .. }));
+        assert_eq!(history[0].speaker.name(), "Alice");
+        assert_eq!(history[0].content, "What should we do?");
+
+        // Check second message (System - Context)
+        assert!(matches!(history[1].speaker, Speaker::System));
+        assert_eq!(history[1].content, "Context: This is a test scenario");
+
+        // Check third message (System - Text)
+        assert!(matches!(history[2].speaker, Speaker::System));
+        assert_eq!(history[2].content, "Additional text content");
+
+        // Check fourth message (Agent response)
+        assert!(matches!(history[3].speaker, Speaker::Agent { .. }));
+        assert_eq!(history[3].speaker.name(), "TestAgent");
+    }
+
+    #[tokio::test]
+    async fn test_mentioned_mode_includes_previous_agent_outputs_in_mention_extraction() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::mentioned();
+
+        let alice_persona = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Technical".to_string(),
+            visual_identity: None,
+        };
+
+        let bob_persona = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Visual".to_string(),
+            visual_identity: None,
+        };
+
+        let charlie_persona = Persona {
+            name: "Charlie".to_string(),
+            role: "Tester".to_string(),
+            background: "QA engineer".to_string(),
+            communication_style: "Detail-oriented".to_string(),
+            visual_identity: None,
+        };
+
+        dialogue
+            .add_participant(
+                alice_persona,
+                MockAgent::new(
+                    "Alice",
+                    vec!["I think we should use @Bob's design".to_string()],
+                ),
+            )
+            .add_participant(
+                bob_persona,
+                MockAgent::new("Bob", vec!["Thanks Alice!".to_string()]),
+            )
+            .add_participant(
+                charlie_persona,
+                MockAgent::new("Charlie", vec!["I agree".to_string()]),
+            );
+
+        // Turn 1: Mention Alice
+        let turn1 = dialogue.run("@Alice what do you think?").await.unwrap();
+        assert_eq!(turn1.len(), 1);
+        assert_eq!(turn1[0].speaker.name(), "Alice");
+        assert_eq!(turn1[0].content, "I think we should use @Bob's design");
+
+        // Turn 2: No explicit mention, but Alice's response mentions @Bob
+        // The implementation should extract mentions from previous agent outputs
+        let turn2 = dialogue.run("Continue the discussion").await.unwrap();
+
+        // Bob should be activated because Alice mentioned @Bob in turn 1
+        assert_eq!(turn2.len(), 1);
+        assert_eq!(turn2[0].speaker.name(), "Bob");
+        assert_eq!(turn2[0].content, "Thanks Alice!");
+
+        // Verify history structure
+        let history = dialogue.history();
+        // Turn 1: System + Alice
+        // Turn 2: System + Bob
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].speaker.name(), "System");
+        assert_eq!(history[1].speaker.name(), "Alice");
+        assert_eq!(history[2].speaker.name(), "System");
+        assert_eq!(history[3].speaker.name(), "Bob");
     }
 }
