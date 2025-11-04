@@ -96,14 +96,22 @@ impl MessageStore {
 
     /// Returns messages that have not been sent to agents as context yet.
     ///
-    /// This is used to get agent responses from previous turns that need to be
-    /// distributed as context to other agents in the next turn.
+    /// This is used to get messages from previous turns that need to be
+    /// distributed as context to agents in the next turn.
     ///
-    /// Only returns Agent messages (excludes System and User messages).
+    /// Returns both System and Agent messages (excludes User messages).
+    /// System messages are included to support cases like:
+    /// - Sequential execution where the dialogue issues system prompts
+    /// - History injection via system messages
+    /// - Any other system-level context that agents should receive
     pub fn unsent_messages(&self) -> Vec<&DialogueMessage> {
         self.all_messages()
             .into_iter()
-            .filter(|msg| !msg.sent_to_agents && matches!(msg.speaker, Speaker::Agent { .. }))
+            .filter(|msg| {
+                !msg.sent_to_agents
+                    && (matches!(msg.speaker, Speaker::Agent { .. })
+                        || matches!(msg.speaker, Speaker::System))
+            })
             .collect()
     }
 
@@ -240,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unsent_messages_only_returns_agent_messages() {
+    fn test_unsent_messages_returns_agent_and_system_messages() {
         let mut store = MessageStore::new();
 
         // Add various message types
@@ -263,11 +271,12 @@ mod tests {
         store.push(msg3);
         store.push(msg4);
 
-        // unsent_messages should only return Agent messages (Alice and Bob)
+        // unsent_messages should return System and Agent messages (excludes User)
         let unsent = store.unsent_messages();
-        assert_eq!(unsent.len(), 2);
-        assert_eq!(unsent[0].content, "Alice response");
-        assert_eq!(unsent[1].content, "Bob response");
+        assert_eq!(unsent.len(), 3);
+        assert_eq!(unsent[0].content, "System prompt");
+        assert_eq!(unsent[1].content, "Alice response");
+        assert_eq!(unsent[2].content, "Bob response");
     }
 
     #[test]
@@ -353,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unsent_messages_excludes_user_and_system() {
+    fn test_unsent_messages_excludes_user_only() {
         let mut store = MessageStore::new();
 
         // Add messages in Turn 1
@@ -380,14 +389,17 @@ mod tests {
             "Turn 2 Bob".to_string(),
         ));
 
-        // unsent_messages should only return Agent messages (Alice and Bob)
+        // unsent_messages should return System and Agent messages (excludes User)
         let unsent = store.unsent_messages();
-        assert_eq!(unsent.len(), 2);
+        assert_eq!(unsent.len(), 3);
 
-        // Verify it's only agent messages
-        for msg in &unsent {
-            assert!(matches!(msg.speaker, Speaker::Agent { .. }));
-        }
+        // Verify it includes System and Agent messages, but not User
+        assert_eq!(unsent[0].content, "Turn 1 prompt");
+        assert!(matches!(unsent[0].speaker, Speaker::System));
+        assert_eq!(unsent[1].content, "Turn 1 Alice");
+        assert!(matches!(unsent[1].speaker, Speaker::Agent { .. }));
+        assert_eq!(unsent[2].content, "Turn 2 Bob");
+        assert!(matches!(unsent[2].speaker, Speaker::Agent { .. }));
     }
 
     #[test]
