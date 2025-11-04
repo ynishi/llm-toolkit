@@ -1359,8 +1359,33 @@ impl Dialogue {
         current_turn: usize,
         payload: &Payload,
     ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
-        // Extract text from payload to find mentions
-        let payload_text = payload.to_text();
+        // Get current intent messages (same approach as spawn_broadcast_tasks)
+        let intent_messages = {
+            let payload_messages = payload.to_messages();
+            if !payload_messages.is_empty() {
+                payload_messages
+            } else {
+                // Fallback: get current turn messages from MessageStore (for text-only payloads)
+                self.message_store
+                    .messages_for_turn(current_turn)
+                    .into_iter()
+                    .filter(|msg| !matches!(msg.speaker, Speaker::Agent { .. }))
+                    .map(PayloadMessage::from)
+                    .collect()
+            }
+        };
+
+        // Extract text from messages to find mentions
+        let payload_text = if !intent_messages.is_empty() {
+            intent_messages
+                .iter()
+                .map(|msg| msg.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            // Ultimate fallback: use payload.to_text()
+            payload.to_text()
+        };
 
         // Get all participant names
         let participant_names = self.participant_names();
@@ -1372,6 +1397,7 @@ impl Dialogue {
             target = "llm_toolkit::dialogue",
             turn = current_turn,
             payload_text_preview = &payload_text[..payload_text.len().min(100)],
+            intent_message_count = intent_messages.len(),
             all_participants = ?participant_names,
             mentioned = ?mentioned_names,
             "Extracting mentions for Mentioned execution mode"
@@ -1411,21 +1437,8 @@ impl Dialogue {
             Vec::new()
         };
 
-        // Current intent from payload
-        let new_messages = {
-            let payload_messages = payload.to_messages();
-            if !payload_messages.is_empty() {
-                payload_messages
-            } else {
-                // Fallback: get current turn messages from MessageStore (for text-only payloads)
-                self.message_store
-                    .messages_for_turn(current_turn)
-                    .into_iter()
-                    .filter(|msg| !matches!(msg.speaker, Speaker::Agent { .. }))
-                    .map(PayloadMessage::from)
-                    .collect()
-            }
-        };
+        // Reuse intent_messages as new_messages (already extracted above for mention detection)
+        let new_messages = intent_messages;
 
         // Get unsent messages
         let unsent_messages: Vec<PayloadMessage> = self
