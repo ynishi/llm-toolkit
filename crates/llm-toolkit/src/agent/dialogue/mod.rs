@@ -117,6 +117,61 @@ pub use turn_input::{ContextMessage, ParticipantInfo, TurnInput};
 // Internal modules (not re-exported)
 use state::{BroadcastState, SessionState};
 
+/// Formats dialogue history as a human-readable conversation log.
+///
+/// Converts a vector of `DialogueTurn` into a formatted text representation
+/// suitable for injecting as context. The format groups messages by speaker
+/// and provides clear separation for readability.
+///
+/// # Arguments
+///
+/// * `history` - The conversation history to format
+///
+/// # Returns
+///
+/// A formatted string representation of the conversation
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let history = vec![
+///     DialogueTurn { speaker: Speaker::user("User", "User"), content: "Hello".to_string() },
+///     DialogueTurn { speaker: Speaker::agent("Alice", "PM"), content: "Hi there!".to_string() },
+/// ];
+/// let formatted = format_dialogue_history_as_text(&history);
+/// // Returns:
+/// // # Previous Conversation History
+/// //
+/// // [User]
+/// // Hello
+/// //
+/// // [Alice (PM)]
+/// // Hi there!
+/// ```
+fn format_dialogue_history_as_text(history: &[DialogueTurn]) -> String {
+    let mut output = String::from("# Previous Conversation History\n\n");
+    output.push_str("The following is the conversation history from previous sessions. ");
+    output.push_str("Please use this context to maintain continuity in the discussion.\n\n");
+
+    for (idx, turn) in history.iter().enumerate() {
+        // Add speaker label with appropriate formatting
+        let speaker_label = match &turn.speaker {
+            Speaker::System => "[System]".to_string(),
+            Speaker::User { name, .. } => format!("[{}]", name),
+            Speaker::Agent { name, role } => format!("[{} ({})]", name, role),
+        };
+
+        output.push_str(&format!("{}. {}\n", idx + 1, speaker_label));
+        output.push_str(&turn.content);
+        output.push_str("\n\n");
+    }
+
+    output.push_str("---\n");
+    output.push_str("End of previous conversation. Continue from here.\n");
+
+    output
+}
+
 /// Extracts @mentions from a text string.
 ///
 /// Finds all occurrences of `@name` pattern (where name is alphanumeric + underscores).
@@ -461,6 +516,78 @@ impl Dialogue {
                 turn_counter += 1;
             }
         }
+
+        self
+    }
+
+    /// Sets initial conversation history as a SYSTEM prompt for session resumption.
+    ///
+    /// This method provides a simpler alternative to `with_history()` by converting
+    /// the entire conversation history into a single SYSTEM message. This approach:
+    /// - Is simpler to implement and maintain
+    /// - Leverages modern LLMs' long context capabilities
+    /// - Ensures agents can "remember" previous conversations
+    ///
+    /// The history is formatted as a human-readable conversation log and prepended
+    /// to the first prompt that agents receive.
+    ///
+    /// # When to use this vs `with_history()`
+    ///
+    /// - **Use `with_history_as_system_prompt()`** when:
+    ///   - You want simple session restoration with minimal complexity
+    ///   - Your conversation history fits within the LLM's context window
+    ///   - You don't need structured history management
+    ///
+    /// - **Use `with_history()`** when:
+    ///   - You need the structured MessageStore for querying/filtering
+    ///   - You want agents to manage their own history independently
+    ///   - You're building advanced dialogue features
+    ///
+    /// # Arguments
+    ///
+    /// * `history` - A vector of `DialogueTurn` representing the conversation history
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::Dialogue;
+    ///
+    /// // Session 1: Initial conversation
+    /// let mut dialogue = Dialogue::broadcast()
+    ///     .add_participant(persona1, agent1)
+    ///     .add_participant(persona2, agent2);
+    /// let turns = dialogue.run("Discuss project architecture").await?;
+    /// dialogue.save_history("session_123.json")?;
+    ///
+    /// // --- Process restart or session end ---
+    ///
+    /// // Session 2: Resume conversation with system prompt approach
+    /// let saved_history = Dialogue::load_history("session_123.json")?;
+    /// let mut dialogue = Dialogue::broadcast()
+    ///     .with_history_as_system_prompt(saved_history)  // ← Inject as system message
+    ///     .add_participant(persona1, agent1)
+    ///     .add_participant(persona2, agent2);
+    ///
+    /// // Agents will have context from previous conversation
+    /// let more_turns = dialogue.run("Continue from last discussion").await?;
+    /// ```
+    pub fn with_history_as_system_prompt(mut self, history: Vec<DialogueTurn>) -> Self {
+        if history.is_empty() {
+            return self;
+        }
+
+        // Format the history as a readable conversation log
+        // Store it in the context which will be prepended to all prompts
+        let history_text = format_dialogue_history_as_text(&history);
+
+        // Add the history as additional context that will be included
+        // in the dialogue context for all participants
+        let context = self
+            .context
+            .take()
+            .unwrap_or_default()
+            .with_additional_context(history_text);
+        self.context = Some(context);
 
         self
     }

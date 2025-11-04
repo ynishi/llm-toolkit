@@ -1450,6 +1450,37 @@ let mut dialogue = Dialogue::broadcast()
 let more_turns = dialogue.run("Continue from last discussion").await?;
 ```
 
+**Alternative: Simple Session Resumption with System Prompt**
+
+For simpler use cases where you want agents to "remember" previous conversations without complex structured history management, use `with_history_as_system_prompt()`:
+
+```rust
+// Session 2: Resume with simpler approach
+let saved_history = Dialogue::load_history("session_123.json")?;
+
+let mut dialogue = Dialogue::broadcast()
+    .with_history_as_system_prompt(saved_history)  // ← Inject as system context
+    .add_participant(persona1, agent1)
+    .add_participant(persona2, agent2);
+
+// Agents receive full conversation context and can reference previous discussion
+let more_turns = dialogue.run("Continue from last discussion").await?;
+```
+
+**When to use each approach:**
+
+- **`with_history_as_system_prompt()`** - Use when:
+  - ✅ You want simple session restoration with minimal complexity
+  - ✅ Your conversation history fits within the LLM's context window
+  - ✅ You need agents to "remember" and reference previous conversations
+  - ✅ You don't need to query or filter the structured MessageStore
+
+- **`with_history()`** - Use when:
+  - ✅ You need structured MessageStore for querying/filtering history
+  - ✅ You want agents to manage their own conversation history independently
+  - ✅ You're building advanced dialogue features with complex history management
+  - ✅ You need fine-grained control over message distribution
+
 **DialogueTurn Structure:**
 
 The `DialogueTurn` struct represents a single turn in the conversation with full speaker attribution:
@@ -1465,8 +1496,12 @@ The `speaker` field uses the `Speaker` enum to preserve complete attribution inf
 
 Key methods for session management:
 
--   **`with_history(history: Vec<DialogueTurn>)`**: Builder method to inject conversation history into a new dialogue instance. Following the Orchestrator Step pattern, this creates a fresh instance with pre-populated history rather than mutating existing state. **Preserves full speaker information including roles.**
+-   **`with_history(history: Vec<DialogueTurn>)`**: Builder method to inject conversation history into a new dialogue instance as structured messages in the MessageStore. Following the Orchestrator Step pattern, this creates a fresh instance with pre-populated history rather than mutating existing state. **Preserves full speaker information including roles.** Use this for advanced dialogue features requiring structured history queries.
+
+-   **`with_history_as_system_prompt(history: Vec<DialogueTurn>)`**: Builder method to inject conversation history as a formatted system prompt that all agents receive. This simpler approach converts the entire conversation history into readable text that agents can reference, ensuring they "remember" previous discussions. **Ideal for straightforward session restoration** when you don't need structured history management.
+
 -   **`save_history(path)`**: Persists the current conversation history to a JSON file with complete speaker attribution.
+
 -   **`load_history(path)`**: Loads conversation history from a JSON file, restoring all speaker details.
 
 Use cases:
@@ -1474,8 +1509,9 @@ Use cases:
 - ✅ **Session Management**: Save and restore user conversation sessions
 - ✅ **Conversation Archival**: Store dialogue history for later analysis
 - ✅ **Stateful Chatbots**: Implement chatbots with long-term memory
+- ✅ **Agent Memory**: Enable agents to reference and build upon previous conversations
 
-See `examples/dialogue_session_resumption.rs` for a complete demonstration.
+See `examples/dialogue_session_resumption.rs` and `examples/dialogue_session_resumption_system_prompt.rs` for complete demonstrations.
 
 **Multimodal Input Support:**
 
