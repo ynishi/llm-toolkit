@@ -1056,6 +1056,13 @@ impl Dialogue {
         // Store messages in MessageStore
         // If payload has Messages, store them individually; otherwise store Text as System
         let messages = payload.to_messages();
+        trace!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            message_count = messages.len(),
+            "Extracted messages from payload"
+        );
+
         let _prompt_text = if !messages.is_empty() {
             // Store each message individually
             for msg in &messages {
@@ -1063,15 +1070,51 @@ impl Dialogue {
                     DialogueMessage::new(current_turn, msg.speaker.clone(), msg.content.clone());
                 self.message_store.push(dialogue_msg);
             }
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                stored_messages = messages.len(),
+                total_store_size = self.message_store.len(),
+                "Stored messages in MessageStore (Messages path)"
+            );
             // For Sequential mode, we need a text representation
-            payload.to_text()
+            let text = payload.to_text();
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                text_length = text.len(),
+                text_preview = &text[..text.len().min(100)],
+                "Generated text representation from Messages payload"
+            );
+            text
         } else {
             // Legacy: store text as single System message (skip if empty)
             let text = payload.to_text();
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                text_length = text.len(),
+                text_preview = &text[..text.len().min(100)],
+                is_empty = text.is_empty(),
+                "Using text-only payload (fallback path)"
+            );
+
             if !text.is_empty() {
                 let system_message =
                     DialogueMessage::new(current_turn, Speaker::System, text.clone());
                 self.message_store.push(system_message);
+                trace!(
+                    target = "llm_toolkit::dialogue",
+                    turn = current_turn,
+                    total_store_size = self.message_store.len(),
+                    "Stored text as System message in MessageStore"
+                );
+            } else {
+                trace!(
+                    target = "llm_toolkit::dialogue",
+                    turn = current_turn,
+                    "Skipped storing empty text - MessageStore unchanged"
+                );
             }
             text
         };
@@ -1363,15 +1406,29 @@ impl Dialogue {
         let intent_messages = {
             let payload_messages = payload.to_messages();
             if !payload_messages.is_empty() {
+                trace!(
+                    target = "llm_toolkit::dialogue",
+                    turn = current_turn,
+                    message_count = payload_messages.len(),
+                    "Using intent messages from payload.to_messages()"
+                );
                 payload_messages
             } else {
                 // Fallback: get current turn messages from MessageStore (for text-only payloads)
-                self.message_store
+                let messages: Vec<PayloadMessage> = self.message_store
                     .messages_for_turn(current_turn)
                     .into_iter()
                     .filter(|msg| !matches!(msg.speaker, Speaker::Agent { .. }))
                     .map(PayloadMessage::from)
-                    .collect()
+                    .collect();
+                trace!(
+                    target = "llm_toolkit::dialogue",
+                    turn = current_turn,
+                    message_count = messages.len(),
+                    total_store_messages = self.message_store.len(),
+                    "Using intent messages from MessageStore fallback"
+                );
+                messages
             }
         };
 
