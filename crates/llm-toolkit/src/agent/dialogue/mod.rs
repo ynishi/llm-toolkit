@@ -1386,6 +1386,13 @@ impl Dialogue {
             );
             participant_names
         } else {
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                mentioned_count = mentioned_names.len(),
+                mentioned_participants = ?mentioned_names,
+                "Mentions detected - executing selective participants"
+            );
             mentioned_names
         };
 
@@ -1448,6 +1455,31 @@ impl Dialogue {
 
         let mut pending = JoinSet::new();
 
+        // Log execution plan summary
+        let executing_participants: Vec<_> = self
+            .participants
+            .iter()
+            .filter(|p| target_participants.contains(&p.name()))
+            .map(|p| p.name())
+            .collect();
+
+        let skipped_participants: Vec<_> = self
+            .participants
+            .iter()
+            .filter(|p| !target_participants.contains(&p.name()))
+            .map(|p| p.name())
+            .collect();
+
+        trace!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            executing_count = executing_participants.len(),
+            executing_participants = ?executing_participants,
+            skipped_count = skipped_participants.len(),
+            skipped_participants = ?skipped_participants,
+            "Mention-based execution plan determined"
+        );
+
         // Only spawn tasks for mentioned participants (or all if no mentions)
         for (idx, participant) in self.participants.iter().enumerate() {
             let name = participant.name();
@@ -1457,7 +1489,8 @@ impl Dialogue {
                 trace!(
                     target = "llm_toolkit::dialogue",
                     participant = name,
-                    "Skipping participant (not mentioned)"
+                    reason = "not_mentioned",
+                    "Skipping participant"
                 );
                 continue;
             }
@@ -1488,7 +1521,7 @@ impl Dialogue {
             let turn_input = if !current_messages.is_empty() {
                 // New path: use structured messages
                 TurnInput::with_messages_and_context(
-                    current_messages,
+                    current_messages.clone(),
                     vec![], // context is now integrated into current_messages
                     participants_info.clone(),
                     name.clone(),
@@ -1521,6 +1554,15 @@ impl Dialogue {
             } else {
                 input_payload
             };
+
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                participant = %name,
+                message_count = current_messages.len(),
+                has_attachments = payload.has_attachments(),
+                "Spawning task for mentioned participant"
+            );
 
             pending.spawn(async move {
                 let result = agent.execute(final_payload).await;
