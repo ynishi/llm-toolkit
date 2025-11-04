@@ -99,6 +99,7 @@ use crate::ToPrompt;
 use crate::agent::chat::Chat;
 use crate::agent::persona::{Persona, PersonaTeam, PersonaTeamGenerationRequest};
 use crate::agent::{Agent, AgentError, Payload, PayloadMessage};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -115,6 +116,52 @@ pub use turn_input::{ContextMessage, ParticipantInfo, TurnInput};
 
 // Internal modules (not re-exported)
 use state::{BroadcastState, SessionState};
+
+/// Extracts @mentions from a text string.
+///
+/// Finds all occurrences of `@name` pattern (where name is alphanumeric + underscores).
+/// Performs exact matching against provided participant names.
+///
+/// # Arguments
+///
+/// * `text` - The text to search for mentions
+/// * `participant_names` - List of valid participant names for matching
+///
+/// # Returns
+///
+/// A vector of matched participant names (deduplicated).
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let text = "@Alice @Bob what do you think? @Alice?";
+/// let participants = vec!["Alice", "Bob", "Charlie"];
+/// let mentions = extract_mentions(text, &participants);
+/// assert_eq!(mentions, vec!["Alice", "Bob"]);
+/// ```
+fn extract_mentions<'a>(text: &str, participant_names: &'a [&'a str]) -> Vec<&'a str> {
+    use std::collections::HashSet;
+
+    // Compile regex each time (simpler approach without external dependencies)
+    // Performance impact is minimal for typical dialogue use cases
+    let mention_regex = Regex::new(r"@(\w+)").expect("Invalid regex pattern");
+
+    let mut mentioned = HashSet::new();
+
+    // Extract all @mentions from text
+    for cap in mention_regex.captures_iter(text) {
+        if let Some(mention) = cap.get(1) {
+            let mention_str = mention.as_str();
+            // Exact match against participant names
+            if let Some(&matched_name) = participant_names.iter().find(|&&name| name == mention_str)
+            {
+                mentioned.insert(matched_name);
+            }
+        }
+    }
+
+    mentioned.into_iter().collect()
+}
 
 /// Blueprint for creating a Dialogue.
 ///
@@ -203,6 +250,12 @@ pub enum ExecutionModel {
     Broadcast,
     /// Participants execute sequentially, with output chained as input.
     Sequential,
+    /// Only @mentioned participants respond (falls back to Broadcast if no mentions).
+    ///
+    /// Supports multiple mentions like "@Alice @Bob what do you think?"
+    /// If no mentions are found in the message, behaves like Broadcast mode.
+    /// Future: Can be extended to `Mentioned { mode: MentionMode }` for strict mode.
+    Mentioned,
 }
 
 /// Internal representation of a dialogue participant.
@@ -319,6 +372,33 @@ impl Dialogue {
     /// ```
     pub fn sequential() -> Self {
         Self::new(ExecutionModel::Sequential)
+    }
+
+    /// Creates a new dialogue with mentioned execution.
+    ///
+    /// In mentioned mode, only participants explicitly mentioned with `@name` will respond.
+    /// If no mentions are found, it falls back to broadcast mode (all participants respond).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::Dialogue;
+    ///
+    /// let mut dialogue = Dialogue::mentioned()
+    ///     .add_participant(alice_persona, agent1)
+    ///     .add_participant(bob_persona, agent2);
+    ///
+    /// // Only Alice will respond
+    /// let turns = dialogue.run("@Alice what do you think?").await?;
+    ///
+    /// // Both Alice and Bob will respond
+    /// let turns = dialogue.run("@Alice @Bob discuss this").await?;
+    ///
+    /// // Falls back to broadcast - all participants respond
+    /// let turns = dialogue.run("What does everyone think?").await?;
+    /// ```
+    pub fn mentioned() -> Self {
+        Self::new(ExecutionModel::Mentioned)
     }
 
     /// Sets initial conversation history for session resumption.
@@ -679,6 +759,34 @@ impl Dialogue {
         self
     }
 
+    /// Returns the names of all current participants in the dialogue.
+    ///
+    /// This is useful for:
+    /// - UI auto-completion of @mentions
+    /// - Displaying current participants
+    /// - Validating participant existence before operations
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::Dialogue;
+    ///
+    /// let mut dialogue = Dialogue::mentioned()
+    ///     .add_participant(alice, agent1)
+    ///     .add_participant(bob, agent2);
+    ///
+    /// let names = dialogue.participant_names();
+    /// assert_eq!(names, vec!["Alice", "Bob"]);
+    ///
+    /// // Use for auto-completion in UI
+    /// for name in dialogue.participant_names() {
+    ///     println!("Available: @{}", name);
+    /// }
+    /// ```
+    pub fn participant_names(&self) -> Vec<&str> {
+        self.participants.iter().map(|p| p.name()).collect()
+    }
+
     /// Removes a participant from the dialogue by name.
     ///
     /// This is useful for guest participants who are only needed for specific
@@ -836,6 +944,17 @@ impl Dialogue {
                     current_turn,
                 ))
             }
+            ExecutionModel::Mentioned => {
+                // For Mentioned mode, spawn tasks for mentioned participants only
+                let pending = self.spawn_mentioned_tasks(current_turn, &payload);
+
+                SessionState::Broadcast(BroadcastState::new(
+                    pending,
+                    broadcast_order,
+                    self.participants.len(),
+                    current_turn,
+                ))
+            }
             ExecutionModel::Sequential => {
                 let participants_info = self.get_participants_info();
 
@@ -930,6 +1049,7 @@ impl Dialogue {
         match self.execution_model {
             ExecutionModel::Broadcast => self.run_broadcast_new(initial_prompt).await,
             ExecutionModel::Sequential => self.run_sequential_new(initial_prompt).await,
+            ExecutionModel::Mentioned => self.run_mentioned_new(initial_prompt).await,
         }
     }
 
@@ -1005,6 +1125,200 @@ impl Dialogue {
         for (idx, participant) in self.participants.iter().enumerate() {
             let agent = Arc::clone(&participant.agent);
             let name = participant.name().to_string();
+
+            // Combine: [old agent responses (excluding self)] + [unsent messages (excluding self)] + [new intent]
+            let mut current_messages = prev_agent_messages
+                .iter()
+                .filter(|msg| msg.speaker.name() != name)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            // Add unsent messages, but exclude self
+            if !unsent_messages.is_empty() {
+                current_messages.extend(
+                    unsent_messages
+                        .iter()
+                        .filter(|msg| msg.speaker.name() != name)
+                        .cloned(),
+                );
+            }
+
+            current_messages.extend(new_messages.clone());
+
+            // Create TurnInput based on whether we have structured messages or text
+            let turn_input = if !current_messages.is_empty() {
+                // New path: use structured messages
+                TurnInput::with_messages_and_context(
+                    current_messages,
+                    vec![], // context is now integrated into current_messages
+                    participants_info.clone(),
+                    name.clone(),
+                )
+            } else {
+                // Legacy path: use text as single prompt
+                let prompt_text = payload.to_text();
+                TurnInput::with_dialogue_context(
+                    prompt_text,
+                    vec![], // no separate context in legacy mode
+                    participants_info.clone(),
+                    name.clone(),
+                )
+            };
+
+            // Create payload with Messages (for structured dialogue history)
+            let messages = turn_input.to_messages();
+            let mut input_payload = Payload::from_messages(messages);
+
+            // Add Participants metadata
+            input_payload = input_payload.with_participants(participants_info.clone());
+
+            // Copy attachments from original payload if any
+            let final_payload = if payload.has_attachments() {
+                let mut p = input_payload;
+                for attachment in payload.attachments() {
+                    p = p.with_attachment(attachment.clone());
+                }
+                p
+            } else {
+                input_payload
+            };
+
+            pending.spawn(async move {
+                let result = agent.execute(final_payload).await;
+                (idx, name, result)
+            });
+        }
+
+        // Mark unsent messages as sent to agents
+        self.message_store.mark_all_as_sent(&unsent_message_ids);
+
+        if !unsent_message_ids.is_empty() {
+            trace!(
+                target = "llm_toolkit::dialogue",
+                marked_sent_count = unsent_message_ids.len(),
+                "Marked messages as sent_to_agents in MessageStore"
+            );
+        }
+
+        pending
+    }
+
+    /// Helper method to spawn tasks for mentioned participants only.
+    ///
+    /// Extracts @mentions from the payload and spawns tasks only for those participants.
+    /// If no mentions are found, falls back to spawning tasks for all participants (broadcast).
+    ///
+    /// Returns a JoinSet with pending agent executions.
+    pub(super) fn spawn_mentioned_tasks(
+        &mut self,
+        current_turn: usize,
+        payload: &Payload,
+    ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
+        // Extract text from payload to find mentions
+        let payload_text = payload.to_text();
+
+        // Get all participant names
+        let participant_names = self.participant_names();
+
+        // Extract mentions from the text
+        let mentioned_names = extract_mentions(&payload_text, &participant_names);
+
+        trace!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            payload_text_preview = &payload_text[..payload_text.len().min(100)],
+            all_participants = ?participant_names,
+            mentioned = ?mentioned_names,
+            "Extracting mentions for Mentioned execution mode"
+        );
+
+        // If no mentions found, fall back to broadcast mode (all participants)
+        let target_participants: Vec<&str> = if mentioned_names.is_empty() {
+            debug!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                "No mentions found, falling back to broadcast mode"
+            );
+            participant_names
+        } else {
+            mentioned_names
+        };
+
+        // Build participant list
+        let participants_info = self.get_participants_info();
+
+        // Get previous agent responses as PayloadMessages
+        let prev_agent_messages: Vec<PayloadMessage> = if current_turn > 1 {
+            self.message_store
+                .messages_for_turn(current_turn - 1)
+                .into_iter()
+                .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
+                .map(PayloadMessage::from)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Current intent from payload
+        let new_messages = {
+            let payload_messages = payload.to_messages();
+            if !payload_messages.is_empty() {
+                payload_messages
+            } else {
+                // Fallback: get current turn messages from MessageStore (for text-only payloads)
+                self.message_store
+                    .messages_for_turn(current_turn)
+                    .into_iter()
+                    .filter(|msg| !matches!(msg.speaker, Speaker::Agent { .. }))
+                    .map(PayloadMessage::from)
+                    .collect()
+            }
+        };
+
+        // Get unsent messages
+        let unsent_messages: Vec<PayloadMessage> = self
+            .message_store
+            .unsent_messages()
+            .iter()
+            .map(|msg| PayloadMessage::new(msg.speaker.clone(), msg.content.clone()))
+            .collect();
+
+        // Collect message IDs to mark as sent after spawning tasks
+        let unsent_message_ids: Vec<_> = self
+            .message_store
+            .unsent_messages()
+            .iter()
+            .map(|msg| msg.id)
+            .collect();
+
+        if !unsent_messages.is_empty() {
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                unsent_count = unsent_messages.len(),
+                total_messages = self.message_store.len(),
+                "Retrieved unsent messages from MessageStore to distribute as context"
+            );
+        }
+
+        let mut pending = JoinSet::new();
+
+        // Only spawn tasks for mentioned participants (or all if no mentions)
+        for (idx, participant) in self.participants.iter().enumerate() {
+            let name = participant.name();
+
+            // Skip if this participant was not mentioned
+            if !target_participants.contains(&name) {
+                trace!(
+                    target = "llm_toolkit::dialogue",
+                    participant = name,
+                    "Skipping participant (not mentioned)"
+                );
+                continue;
+            }
+
+            let agent = Arc::clone(&participant.agent);
+            let name = name.to_string();
 
             // Combine: [old agent responses (excluding self)] + [unsent messages (excluding self)] + [new intent]
             let mut current_messages = prev_agent_messages
@@ -1251,6 +1565,69 @@ impl Dialogue {
 
         // 3. Return only the final turn
         Ok(final_turn.into_iter().collect())
+    }
+
+    /// New mentioned implementation using MessageStore and TurnInput.
+    ///
+    /// In Mentioned mode, only @mentioned participants respond. If no mentions are found,
+    /// it falls back to broadcast mode (all participants respond).
+    async fn run_mentioned_new(
+        &mut self,
+        initial_prompt: impl Into<Payload>,
+    ) -> Result<Vec<DialogueTurn>, AgentError> {
+        let mut payload: Payload = initial_prompt.into();
+        let current_turn = self.message_store.current_turn() + 1;
+
+        // Apply dialogue context if set
+        if let Some(ref context) = self.context {
+            payload = payload.prepend_system(context.to_prompt());
+        }
+
+        debug!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            execution_model = "mentioned",
+            participant_count = self.participants.len(),
+            has_context = self.context.is_some(),
+            "Starting dialogue.run() in mentioned mode"
+        );
+
+        // 1. Extract and store messages from payload
+        let (input_messages, _prompt_text) =
+            self.extract_messages_from_payload(&payload, current_turn);
+
+        for msg in input_messages {
+            self.message_store.push(msg);
+        }
+
+        // 2. Spawn tasks for mentioned participants (or all if no mentions)
+        let mut pending = self.spawn_mentioned_tasks(current_turn, &payload);
+
+        // 3. Collect responses and create message entities
+        let mut dialogue_turns = Vec::new();
+
+        while let Some(Ok((idx, name, result))) = pending.join_next().await {
+            match result {
+                Ok(content) => {
+                    // Store response message
+                    let response_message = DialogueMessage::new(
+                        current_turn,
+                        Speaker::agent(name.clone(), self.participants[idx].persona.role.clone()),
+                        content.clone(),
+                    );
+                    self.message_store.push(response_message);
+
+                    // Create DialogueTurn for backward compatibility
+                    dialogue_turns.push(DialogueTurn {
+                        speaker: Speaker::agent(name, self.participants[idx].persona.role.clone()),
+                        content,
+                    });
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(dialogue_turns)
     }
 
     /// Formats the conversation history as a single string.
@@ -4154,5 +4531,485 @@ mod tests {
         );
         // Note: "Analyze the architecture" is absorbed into PersonaAgent's formatting
         // We verify context was applied by checking the custom context text is present
+    }
+
+    #[test]
+    fn test_extract_mentions() {
+        // Test basic mention extraction
+        let text = "@Alice what do you think?";
+        let participants = vec!["Alice", "Bob", "Charlie"];
+        let mentions = extract_mentions(text, &participants);
+        assert_eq!(mentions.len(), 1);
+        assert!(mentions.contains(&"Alice"));
+
+        // Test multiple mentions
+        let text = "@Alice @Bob please discuss this";
+        let mentions = extract_mentions(text, &participants);
+        assert_eq!(mentions.len(), 2);
+        assert!(mentions.contains(&"Alice"));
+        assert!(mentions.contains(&"Bob"));
+
+        // Test duplicate mentions (should be deduplicated)
+        let text = "@Alice what do you think? @Alice?";
+        let mentions = extract_mentions(text, &participants);
+        assert_eq!(mentions.len(), 1);
+        assert!(mentions.contains(&"Alice"));
+
+        // Test no mentions
+        let text = "What does everyone think?";
+        let mentions = extract_mentions(text, &participants);
+        assert_eq!(mentions.len(), 0);
+
+        // Test mention that doesn't match any participant (should be ignored)
+        let text = "@David @Alice what do you think?";
+        let mentions = extract_mentions(text, &participants);
+        assert_eq!(mentions.len(), 1);
+        assert!(mentions.contains(&"Alice"));
+        assert!(!mentions.contains(&"David"));
+
+        // Test exact matching (not partial)
+        let participants = vec!["Alice", "Ali"];
+        let text = "@Ali what do you think?";
+        let mentions = extract_mentions(text, &participants);
+        assert_eq!(mentions.len(), 1);
+        assert!(mentions.contains(&"Ali"));
+        assert!(!mentions.contains(&"Alice"));
+    }
+
+    #[tokio::test]
+    async fn test_participants_method() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::broadcast();
+
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Technical".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Visual".to_string(),
+        };
+
+        dialogue
+            .add_participant(persona1, MockAgent::new("Alice", vec!["Hi".to_string()]))
+            .add_participant(persona2, MockAgent::new("Bob", vec!["Hello".to_string()]));
+
+        let participants = dialogue.participant_names();
+        assert_eq!(participants.len(), 2);
+        assert!(participants.contains(&"Alice"));
+        assert!(participants.contains(&"Bob"));
+    }
+
+    #[tokio::test]
+    async fn test_mentioned_mode_with_mentions() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::mentioned();
+
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Technical".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Visual".to_string(),
+        };
+
+        let persona3 = Persona {
+            name: "Charlie".to_string(),
+            role: "Tester".to_string(),
+            background: "QA engineer".to_string(),
+            communication_style: "Analytical".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona1,
+                MockAgent::new("Alice", vec!["Alice's response".to_string()]),
+            )
+            .add_participant(
+                persona2,
+                MockAgent::new("Bob", vec!["Bob's response".to_string()]),
+            )
+            .add_participant(
+                persona3,
+                MockAgent::new("Charlie", vec!["Charlie's response".to_string()]),
+            );
+
+        // Only mention Alice and Bob
+        let turns = dialogue
+            .run("@Alice @Bob what do you think about this feature?")
+            .await
+            .unwrap();
+
+        // Should only get responses from Alice and Bob, not Charlie
+        assert_eq!(turns.len(), 2);
+        let responders: Vec<&str> = turns.iter().map(|t| t.speaker.name()).collect();
+        assert!(responders.contains(&"Alice"));
+        assert!(responders.contains(&"Bob"));
+        assert!(!responders.contains(&"Charlie"));
+    }
+
+    #[tokio::test]
+    async fn test_mentioned_mode_fallback_to_broadcast() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::mentioned();
+
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Technical".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Visual".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona1,
+                MockAgent::new("Alice", vec!["Alice's response".to_string()]),
+            )
+            .add_participant(
+                persona2,
+                MockAgent::new("Bob", vec!["Bob's response".to_string()]),
+            );
+
+        // No mentions - should fall back to broadcast mode
+        let turns = dialogue
+            .run("What does everyone think about this?")
+            .await
+            .unwrap();
+
+        // Should get responses from all participants (broadcast fallback)
+        assert_eq!(turns.len(), 2);
+        let responders: Vec<&str> = turns.iter().map(|t| t.speaker.name()).collect();
+        assert!(responders.contains(&"Alice"));
+        assert!(responders.contains(&"Bob"));
+    }
+
+    #[tokio::test]
+    async fn test_mentioned_mode_single_mention() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::mentioned();
+
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Technical".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Visual".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona1,
+                MockAgent::new("Alice", vec!["Alice's response".to_string()]),
+            )
+            .add_participant(
+                persona2,
+                MockAgent::new("Bob", vec!["Bob's response".to_string()]),
+            );
+
+        // Only mention Alice
+        let turns = dialogue.run("@Alice can you help?").await.unwrap();
+
+        // Should only get response from Alice
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].speaker.name(), "Alice");
+        assert_eq!(turns[0].content, "Alice's response");
+    }
+
+    #[tokio::test]
+    async fn test_mentioned_mode_multi_turn_context_propagation() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::mentioned();
+
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Technical".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Visual".to_string(),
+        };
+
+        let persona3 = Persona {
+            name: "Charlie".to_string(),
+            role: "Tester".to_string(),
+            background: "QA engineer".to_string(),
+            communication_style: "Analytical".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona1,
+                MockAgent::new(
+                    "Alice",
+                    vec![
+                        "Alice: Turn 1 response".to_string(),
+                        "Alice: Turn 2 response".to_string(),
+                    ],
+                ),
+            )
+            .add_participant(
+                persona2,
+                MockAgent::new(
+                    "Bob",
+                    vec![
+                        "Bob: Turn 1 response".to_string(),
+                        "Bob: Turn 2 response".to_string(),
+                    ],
+                ),
+            )
+            .add_participant(
+                persona3,
+                MockAgent::new("Charlie", vec!["Charlie: Turn 2 response".to_string()]),
+            );
+
+        // Turn 1: Mention Alice and Bob
+        let turn1 = dialogue
+            .run("@Alice @Bob what's your initial thoughts?")
+            .await
+            .unwrap();
+
+        assert_eq!(turn1.len(), 2);
+        let turn1_responders: Vec<&str> = turn1.iter().map(|t| t.speaker.name()).collect();
+        assert!(turn1_responders.contains(&"Alice"));
+        assert!(turn1_responders.contains(&"Bob"));
+
+        // Turn 2: Mention Charlie - he should see Alice and Bob's Turn 1 responses
+        let turn2 = dialogue
+            .run("@Charlie what do you think about their responses?")
+            .await
+            .unwrap();
+
+        assert_eq!(turn2.len(), 1);
+        assert_eq!(turn2[0].speaker.name(), "Charlie");
+
+        // Verify history contains all turns
+        let history = dialogue.history();
+        // Turn 1: System message + Alice + Bob
+        // Turn 2: System message + Charlie
+        assert_eq!(history.len(), 5);
+
+        // Verify Turn 1 messages
+        assert_eq!(history[0].speaker.name(), "System"); // Turn 1 prompt
+
+        // Turn 1 responses (Alice and Bob, order may vary)
+        let turn1_names: Vec<&str> = vec![history[1].speaker.name(), history[2].speaker.name()];
+        assert!(turn1_names.contains(&"Alice"));
+        assert!(turn1_names.contains(&"Bob"));
+
+        // Turn 2 messages
+        assert_eq!(history[3].speaker.name(), "System"); // Turn 2 prompt
+        assert_eq!(history[4].speaker.name(), "Charlie"); // Turn 2 response
+    }
+
+    #[tokio::test]
+    async fn test_mentioned_mode_partial_session() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::mentioned();
+
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Technical".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Visual".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona1,
+                MockAgent::new("Alice", vec!["Alice's response".to_string()]),
+            )
+            .add_participant(
+                persona2,
+                MockAgent::new("Bob", vec!["Bob's response".to_string()]),
+            );
+
+        // Use partial_session with mention
+        let mut session = dialogue.partial_session("@Alice what do you think?");
+
+        let mut turns = Vec::new();
+        while let Some(result) = session.next_turn().await {
+            turns.push(result.unwrap());
+        }
+
+        // Should only get response from Alice
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].speaker.name(), "Alice");
+        assert_eq!(turns[0].content, "Alice's response");
+    }
+
+    #[tokio::test]
+    async fn test_mentioned_mode_three_members_progressive() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::mentioned();
+
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Technical".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Visual".to_string(),
+        };
+
+        let persona3 = Persona {
+            name: "Charlie".to_string(),
+            role: "Tester".to_string(),
+            background: "QA engineer".to_string(),
+            communication_style: "Analytical".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona1,
+                MockAgent::new("Alice", vec!["Alice response".to_string()]),
+            )
+            .add_participant(
+                persona2,
+                MockAgent::new("Bob", vec!["Bob response".to_string()]),
+            )
+            .add_participant(
+                persona3,
+                MockAgent::new("Charlie", vec!["Charlie response".to_string()]),
+            );
+
+        // Mention all three members
+        let turns = dialogue
+            .run("@Alice @Bob @Charlie everyone needs to respond")
+            .await
+            .unwrap();
+
+        // All three should respond
+        assert_eq!(turns.len(), 3);
+        let responders: Vec<&str> = turns.iter().map(|t| t.speaker.name()).collect();
+        assert!(responders.contains(&"Alice"));
+        assert!(responders.contains(&"Bob"));
+        assert!(responders.contains(&"Charlie"));
+    }
+
+    #[tokio::test]
+    async fn test_mentioned_mode_receives_other_participants_context() {
+        use crate::agent::persona::Persona;
+
+        let mut dialogue = Dialogue::mentioned();
+
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Technical".to_string(),
+        };
+
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Visual".to_string(),
+        };
+
+        let persona3 = Persona {
+            name: "Charlie".to_string(),
+            role: "Tester".to_string(),
+            background: "QA engineer".to_string(),
+            communication_style: "Analytical".to_string(),
+        };
+
+        dialogue
+            .add_participant(
+                persona1,
+                MockAgent::new(
+                    "Alice",
+                    vec![
+                        "Alice: Turn 1".to_string(),
+                        "Alice: Turn 2 after seeing Bob".to_string(),
+                    ],
+                ),
+            )
+            .add_participant(
+                persona2,
+                MockAgent::new("Bob", vec!["Bob: Turn 1".to_string()]),
+            )
+            .add_participant(
+                persona3,
+                MockAgent::new(
+                    "Charlie",
+                    vec!["Charlie: Turn 2 after seeing Alice and Bob".to_string()],
+                ),
+            );
+
+        // Turn 1: Alice and Bob discuss
+        let turn1 = dialogue
+            .run("@Alice @Bob initial discussion")
+            .await
+            .unwrap();
+        assert_eq!(turn1.len(), 2);
+
+        // Turn 2: Charlie joins and should see both Alice and Bob's Turn 1 responses
+        let turn2 = dialogue.run("@Charlie your thoughts?").await.unwrap();
+        assert_eq!(turn2.len(), 1);
+        assert_eq!(turn2[0].speaker.name(), "Charlie");
+
+        // Verify the full dialogue history is preserved
+        let history = dialogue.history();
+        // Turn 1: System + Alice + Bob
+        // Turn 2: System + Charlie
+        assert_eq!(history.len(), 5);
+
+        // Verify message ordering and speakers
+        assert_eq!(history[0].speaker.name(), "System");
+
+        let turn1_speakers: Vec<&str> = vec![history[1].speaker.name(), history[2].speaker.name()];
+        assert!(turn1_speakers.contains(&"Alice"));
+        assert!(turn1_speakers.contains(&"Bob"));
+
+        assert_eq!(history[3].speaker.name(), "System");
+        assert_eq!(history[4].speaker.name(), "Charlie");
     }
 }

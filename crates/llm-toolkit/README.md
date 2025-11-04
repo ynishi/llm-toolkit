@@ -1217,9 +1217,10 @@ For use cases that require simulating conversations *between* multiple AI agents
 **Core Concepts:**
 
 -   **`Dialogue`**: The main orchestrator for the conversation.
--   **Execution Strategy**: Determines how agents interact. Two strategies are provided:
+-   **Execution Strategy**: Determines how agents interact. Three strategies are provided:
     -   **`Sequential`**: A pipeline where agents execute in a chain (`A -> B -> C`), with the output of one becoming the input for the next. Ideal for data processing workflows.
     -   **`Broadcast`**: A 1-to-N pattern where all agents respond to the same prompt. Ideal for brainstorming or getting multiple perspectives.
+    -   **`Mentioned`**: Only `@mentioned` participants respond (e.g., `@Alice @Bob what do you think?`). Falls back to Broadcast if no mentions are found. Perfect for selective participation in group conversations.
 
 **Usage Example:**
 
@@ -1267,6 +1268,39 @@ let mut dialogue = Dialogue::broadcast();
 dialogue.add_participant(critic).add_participant(translator_b);
 let responses = dialogue.run("The new API design is complete.").await?;
 // responses: Ok(vec!["[Critic] processed: 'The new API design is complete.'", "[Translator] processed: 'The new API design is complete.'"])
+
+// --- Pattern 3: Mentioned (Selective Participation) ---
+# const ALICE_PERSONA: Persona = Persona { name: "Alice", role: "Backend", background: "...", communication_style: "..." };
+# const BOB_PERSONA: Persona = Persona { name: "Bob", role: "Frontend", background: "...", communication_style: "..." };
+# const CHARLIE_PERSONA: Persona = Persona { name: "Charlie", role: "QA", background: "...", communication_style: "..." };
+let alice = Chat::new(MockLLMAgent { agent_type: "Alice".to_string() })
+    .with_persona(ALICE_PERSONA).with_history(false).build();
+let bob = Chat::new(MockLLMAgent { agent_type: "Bob".to_string() })
+    .with_persona(BOB_PERSONA).with_history(false).build();
+let charlie = Chat::new(MockLLMAgent { agent_type: "Charlie".to_string() })
+    .with_persona(CHARLIE_PERSONA).with_history(false).build();
+
+let mut dialogue = Dialogue::mentioned();
+dialogue
+    .add_participant(alice)
+    .add_participant(bob)
+    .add_participant(charlie);
+
+// Only Alice and Bob respond
+let turn1 = dialogue.run("@Alice @Bob what's your initial take?").await?;
+// turn1: Ok(vec![DialogueTurn from Alice, DialogueTurn from Bob])
+
+// Charlie can respond to their discussion
+let turn2 = dialogue.run("@Charlie your QA perspective?").await?;
+// turn2: Ok(vec![DialogueTurn from Charlie])
+
+// No mentions → falls back to Broadcast (everyone responds)
+let turn3 = dialogue.run("Any final thoughts?").await?;
+// turn3: Ok(vec![DialogueTurn from Alice, Bob, Charlie])
+
+// Get participant names for UI auto-completion
+let names = dialogue.participant_names();
+// names: vec!["Alice", "Bob", "Charlie"]
 ```
 
 ###### Streaming Results with `partial_session`
@@ -1296,6 +1330,7 @@ The existing `Dialogue::run` helper still collects everything for you (and, in s
 The `Dialogue` component provides several methods for managing conversations:
 
 -   **`participants() -> Vec<&Persona>`**: Access the list of participant personas. Useful for inspecting names, roles, backgrounds, and communication styles.
+-   **`participant_names() -> Vec<&str>`**: Get the names of all participants as strings. Ideal for UI auto-completion of `@mentions`.
 -   **`participant_count() -> usize`**: Get the current number of participants.
 -   **`add_participant(persona, agent)`**: Dynamically add a new participant to the conversation.
 -   **`remove_participant(name)`**: Remove a participant by name (useful for guest participants).
