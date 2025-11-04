@@ -89,6 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         role: "Product Manager".to_string(),
         background: "Experienced PM with focus on user experience".to_string(),
         communication_style: "Strategic and user-focused".to_string(),
+        visual_identity: None,
     };
 
     let persona2 = Persona {
@@ -96,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         role: "Software Engineer".to_string(),
         background: "Senior engineer specializing in backend systems".to_string(),
         communication_style: "Technical and pragmatic".to_string(),
+        visual_identity: None,
     };
 
     let mut session1 = Dialogue::broadcast();

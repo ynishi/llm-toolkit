@@ -38,6 +38,7 @@ async fn main() {
         role: "Content Summarizer".to_string(),
         background: "Expert in distilling long texts into key points.".to_string(),
         communication_style: "Concise and to the point.".to_string(),
+        visual_identity: None,
     };
 
     let translator_persona = Persona {
@@ -45,6 +46,7 @@ async fn main() {
         role: "English to Japanese Translator".to_string(),
         background: "Professional translator with a focus on technical accuracy.".to_string(),
         communication_style: "Formal and precise.".to_string(),
+        visual_identity: None,
     };
 
     let mut sequential_dialogue = Dialogue::sequential();
@@ -85,6 +87,7 @@ async fn main() {
         role: "English to Japanese Translator".to_string(),
         background: "Professional translator with a focus on technical accuracy.".to_string(),
         communication_style: "Formal and precise.".to_string(),
+        visual_identity: None,
     };
 
     let critic_persona = Persona {
@@ -92,6 +95,7 @@ async fn main() {
         role: "Content Critic".to_string(),
         background: "A skeptical critic who finds potential issues.".to_string(),
         communication_style: "Direct and questioning.".to_string(),
+        visual_identity: None,
     };
 
     let mut broadcast_dialogue = Dialogue::broadcast();

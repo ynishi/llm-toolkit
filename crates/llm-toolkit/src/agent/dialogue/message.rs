@@ -155,7 +155,12 @@ impl DialogueMessage {
 ///
 /// - System: System-generated prompts/instructions
 /// - User: Human user input (with name and role)
-/// - Agent: AI agent with persona (name + role)
+/// - Agent: AI agent with persona (name + role + optional icon)
+///
+/// # Visual Identity
+///
+/// Agents can optionally include an icon for visual anchoring, which improves
+/// recognition in conversation logs and strengthens LLM role adherence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Speaker {
@@ -178,6 +183,10 @@ pub enum Speaker {
 
         /// Role/title of the agent
         role: String,
+
+        /// Optional visual icon/emoji (e.g., "🎨", "🔧", "📊")
+        #[serde(skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
     },
 }
 
@@ -200,6 +209,31 @@ impl Speaker {
         }
     }
 
+    /// Returns the speaker's icon (if agent with visual identity).
+    pub fn icon(&self) -> Option<&str> {
+        match self {
+            Speaker::Agent { icon, .. } => icon.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Returns a display name with icon if available.
+    ///
+    /// Returns formats like:
+    /// - "🎨 Alice" (agent with icon)
+    /// - "Alice" (agent without icon, or user)
+    /// - "System" (system)
+    pub fn display_name(&self) -> String {
+        match self {
+            Speaker::System => "System".to_string(),
+            Speaker::User { name, .. } => name.clone(),
+            Speaker::Agent { name, icon, .. } => match icon {
+                Some(icon) => format!("{} {}", icon, name),
+                None => name.clone(),
+            },
+        }
+    }
+
     /// Creates a new user speaker.
     pub fn user(name: impl Into<String>, role: impl Into<String>) -> Self {
         Self::User {
@@ -213,6 +247,20 @@ impl Speaker {
         Self::Agent {
             name: name.into(),
             role: role.into(),
+            icon: None,
+        }
+    }
+
+    /// Creates a new agent speaker with icon.
+    pub fn agent_with_icon(
+        name: impl Into<String>,
+        role: impl Into<String>,
+        icon: impl Into<String>,
+    ) -> Self {
+        Self::Agent {
+            name: name.into(),
+            role: role.into(),
+            icon: Some(icon.into()),
         }
     }
 

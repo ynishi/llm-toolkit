@@ -41,6 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             communication_style: "Strategic and user-focused. Asks clarifying questions about \
                                  business value. Pushes for MVP scope while maintaining vision."
                 .to_string(),
+            visual_identity: None,
         },
         Persona {
             name: "Marcus Lee".to_string(),
@@ -51,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             communication_style: "Visual and empathetic. Uses concrete user scenarios. \
                                  Advocates strongly for simplicity and intuitive workflows."
                 .to_string(),
+            visual_identity: None,
         },
         Persona {
             name: "Priya Patel".to_string(),
@@ -61,6 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             communication_style: "Technical and precise. Focuses on data models, API contracts, \
                                  and system scalability. Pragmatic about trade-offs."
                 .to_string(),
+            visual_identity: None,
         },
         Persona {
             name: "Kenji Tanaka".to_string(),
@@ -71,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             communication_style: "Detail-oriented and collaborative. Thinks in terms of \
                                  components and state management. Values maintainability."
                 .to_string(),
+            visual_identity: None,
         },
         Persona {
             name: "Elena Rodriguez".to_string(),
@@ -81,6 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             communication_style: "Systematic and thorough. Thinks about edge cases and error \
                                  states. Asks 'what if' questions to uncover potential issues."
                 .to_string(),
+            visual_identity: None,
         },
     ];
 
@@ -206,6 +211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                              customer quotes and real usage patterns. Highlights friction \
                              points based on support tickets."
             .to_string(),
+        visual_identity: None,
     };
 
     println!("💡 Adding a guest participant:");

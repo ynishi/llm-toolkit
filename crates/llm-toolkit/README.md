@@ -1210,6 +1210,42 @@ let response = yui.execute("Introduce yourself.".into()).await?;
 - ✅ **Composable**: `PersonaAgent` can wrap *any* agent that implements `Agent`.
 - ✅ **Multimodal-Friendly**: Accepts full `Payload` inputs so persona agents can inspect attachments.
 
+**Visual Identity for Enhanced Recognition**
+
+Personas support optional visual identities (icons, taglines, and colors) that strengthen LLM role adherence and improve multi-agent dialogue clarity:
+
+```rust
+use llm_toolkit::agent::persona::{Persona, VisualIdentity};
+
+let alice = Persona::new("Alice", "UI/UX Designer")
+    .with_background("10 years of user-centered design experience")
+    .with_communication_style("Visual, empathetic, user-focused")
+    .with_visual_identity(
+        VisualIdentity::new("🎨")
+            .with_tagline("User-Centered Design Advocate")
+            .with_color("#FF6B6B")
+    );
+
+// Or use the convenience method for quick icon addition
+let bob = Persona::new("Bob", "Backend Engineer")
+    .with_background("Senior engineer specializing in distributed systems")
+    .with_communication_style("Technical, pragmatic")
+    .with_icon("🔧");
+
+// Visual identities appear in dialogue history and speaker names
+println!("{}", alice.display_name()); // "🎨 Alice"
+```
+
+**Benefits:**
+- ✅ **Enhanced Recognition**: Icons provide visual anchors for LLMs
+- ✅ **Improved Clarity**: Easier to distinguish agents in conversation logs
+- ✅ **Stronger Adherence**: LLMs maintain role consistency better
+- ✅ **Human Readability**: Users quickly identify agents at a glance
+- ✅ **Professional**: Taglines communicate expertise clearly
+- ✅ **Future-Ready**: Color codes enable UI integration
+
+See `examples/persona_visual_identity.rs` for a complete demonstration.
+
 ##### 4. Multi-Agent Dialogue Simulation
 
 For use cases that require simulating conversations *between* multiple AI agents, the `Dialogue` component provides a powerful and flexible solution. It manages the turn-taking, shared history, and execution flow, enabling complex multi-agent interactions like brainstorming sessions or workflow pipelines.
