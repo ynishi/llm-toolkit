@@ -109,7 +109,14 @@ impl VisualIdentity {
 {{ background }}
 
 ## Communication Style
-{{ communication_style }}"
+{{ communication_style }}
+{% if capabilities %}
+
+## Capabilities
+{% for cap in capabilities %}
+- {{ cap }}
+{% endfor %}
+{% endif %}"
 )]
 pub struct Persona {
     pub name: String,
@@ -120,6 +127,14 @@ pub struct Persona {
     /// Optional visual identity for enhanced recognition
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visual_identity: Option<VisualIdentity>,
+
+    /// Capabilities (tools/actions) this persona can perform
+    ///
+    /// Declares what concrete actions this agent can execute.
+    /// This is used by Orchestrator for strategy generation and by
+    /// Dialogue for participant coordination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<super::Capability>>,
 }
 
 impl Persona {
@@ -141,6 +156,7 @@ impl Persona {
             background: String::new(),
             communication_style: String::new(),
             visual_identity: None,
+            capabilities: None,
         }
     }
 
@@ -200,6 +216,29 @@ impl Persona {
         self.visual_identity
             .as_ref()
             .and_then(|v| v.tagline.as_deref())
+    }
+
+    /// Sets the capabilities for this persona.
+    ///
+    /// Accepts any type that can be converted into a Vec<Capability>,
+    /// including Vec<&str>, Vec<String>, or Vec<Capability>.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::persona::Persona;
+    /// use llm_toolkit::agent::Capability;
+    ///
+    /// // Simple string slice vector
+    /// let persona = Persona::new("FileAgent", "File Manager")
+    ///     .with_capabilities(vec![
+    ///         Capability::new("file:read"),
+    ///         Capability::new("file:write"),
+    ///     ]);
+    /// ```
+    pub fn with_capabilities(mut self, capabilities: Vec<super::Capability>) -> Self {
+        self.capabilities = Some(capabilities);
+        self
     }
 
     /// Returns a display name with icon if available.
@@ -487,6 +526,10 @@ where
         &self.persona.role
     }
 
+    fn capabilities(&self) -> Option<Vec<super::Capability>> {
+        self.persona.capabilities.clone()
+    }
+
     #[crate::tracing::instrument(
         name = "persona_agent.execute",
         skip(self, intent),
@@ -603,6 +646,7 @@ mod tests {
             background: "Validates payload handling.".to_string(),
             communication_style: "Direct and concise.".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let base_agent = RecordingAgent::new(String::from("ok"));
@@ -631,6 +675,7 @@ mod tests {
             background: "A helpful test bot for unit testing".to_string(),
             communication_style: "Direct and clear".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let base_agent = RecordingAgent::new(String::from("response"));
@@ -665,6 +710,7 @@ mod tests {
             background: "Senior software engineer with 10 years of experience".to_string(),
             communication_style: "Direct and clear".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let prompt = persona.to_prompt();
@@ -725,6 +771,7 @@ mod tests {
             background: "Senior software engineer".to_string(),
             communication_style: "Direct and clear".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let prompt_struct = PersonaAgentPrompt {
@@ -752,6 +799,7 @@ Senior software engineer
 
 ## Communication Style
 Direct and clear
+
 
 # Participants
 - Bob (Developer)
@@ -806,6 +854,7 @@ Please review the code
             background: "Senior engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         });
 
         team.add_persona(Persona {
@@ -814,6 +863,7 @@ Please review the code
             background: "UX specialist".to_string(),
             communication_style: "User-focused".to_string(),
             visual_identity: None,
+            capabilities: None,
         });
 
         // Serialize
@@ -841,6 +891,7 @@ Please review the code
             background: "10 years experience".to_string(),
             communication_style: "Strategic".to_string(),
             visual_identity: None,
+            capabilities: None,
         });
 
         // Save to temp file
@@ -880,6 +931,7 @@ Please review the code
             background: "Product manager".to_string(),
             communication_style: "Strategic".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let participants = vec![
@@ -920,6 +972,7 @@ Please review the code
             background: "Helper".to_string(),
             communication_style: "Friendly".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let base_agent = RecordingAgent::new("response".to_string());
@@ -950,6 +1003,7 @@ Please review the code
             background: "Helper".to_string(),
             communication_style: "Friendly".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let base_agent = RecordingAgent::new("response".to_string());
@@ -985,6 +1039,7 @@ Please review the code
             background: "Product manager with 5 years experience".to_string(),
             communication_style: "Strategic and data-driven".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let participants = vec![

@@ -1455,6 +1455,97 @@ dialogue.with_additional_context(TeamContext {
 });
 ```
 
+**Capability Declaration and Policy Enforcement:**
+
+The `Capability` system provides a hybrid architecture for managing what agents can do and what they're allowed to do in specific sessions:
+
+- **Bottom-up (Static)**: Agents declare capabilities via `Agent::capabilities()` and `Persona.capabilities`
+- **Top-down (Dynamic)**: Dialogues enforce policies via `DialogueContext.policy` to restrict what's allowed in a session
+
+This separation distinguishes "what CAN be done" from "what is ALLOWED in this context."
+
+```rust
+use llm_toolkit::agent::{Capability, Persona};
+use llm_toolkit::agent::dialogue::{Dialogue, DialogueContext};
+
+// Declare agent capabilities on Persona
+let researcher = Persona::new(
+    "Alice",
+    "Research Specialist",
+    "Expert in data gathering and analysis",
+    "Analytical and thorough",
+)
+.with_capabilities(vec![
+    Capability::new("web:search").with_description("Search the web for information"),
+    Capability::new("db:query").with_description("Query internal databases"),
+    Capability::new("file:read").with_description("Read files from disk"),
+]);
+
+let writer = Persona::new(
+    "Bob",
+    "Technical Writer",
+    "Creates clear documentation",
+    "Clear and concise",
+)
+.with_capabilities(vec![
+    Capability::new("file:write").with_description("Write content to files"),
+    Capability::new("file:read").with_description("Read files from disk"),
+]);
+
+// Create a dialogue with policy restrictions
+let context = DialogueContext::new()
+    // Allow Alice only web search in this session (restrict db:query and file:read)
+    .with_policy("Alice", vec![
+        Capability::new("web:search"),
+    ])
+    // Allow Bob both capabilities
+    .with_policy("Bob", vec![
+        Capability::new("file:write"),
+        Capability::new("file:read"),
+    ]);
+
+let dialogue = Dialogue::broadcast()
+    .with_context(context)
+    .add_participant(researcher, agent1)
+    .add_participant(writer, agent2);
+
+// During execution:
+// - Alice sees Bob's capabilities: [file:write, file:read]
+// - Bob sees Alice's capabilities: [web:search] (policy-filtered from original 3)
+// - This information is distributed via ParticipantInfo
+```
+
+**How Capabilities Flow:**
+
+1. **Declaration**: Agents declare what they can do via `Persona.with_capabilities()`
+2. **Policy Filtering**: `DialogueContext.with_policy()` restricts allowed capabilities per participant
+3. **Distribution**: `ParticipantInfo` carries filtered capabilities to other agents
+4. **Coordination**: Agents discover what others can do and coordinate accordingly
+
+**Capability Format:**
+
+Capabilities use a `category:action` naming convention for clarity:
+
+```rust
+// Simple capability (just name)
+let cap1 = Capability::new("api:weather");
+
+// With description for LLM understanding
+let cap2 = Capability::new("db:query")
+    .with_description("Query the user database");
+
+// Convenience conversions
+let cap3: Capability = "file:read".into();
+let cap4: Capability = ("api:call", "Call external APIs").into();
+```
+
+**Use Cases:**
+
+- ✅ **Access Control**: Restrict capabilities based on session context (e.g., read-only mode)
+- ✅ **Orchestrator Precision**: Select agents based on concrete capabilities, not just expertise
+- ✅ **Dialogue Coordination**: Agents discover and leverage each other's capabilities
+- ✅ **Dynamic Policy**: Different sessions can enforce different restrictions on the same agents
+
 **Session Resumption and History Injection:**
 
 The `Dialogue` component supports saving and resuming conversations, enabling persistent multi-turn dialogues across process restarts or session boundaries.

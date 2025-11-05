@@ -41,6 +41,7 @@ async fn main() {
         background: "Test agent A".to_string(),
         communication_style: "Direct".to_string(),
         visual_identity: None,
+        capabilities: None,
     };
 
     let persona_b = Persona {
@@ -49,6 +50,7 @@ async fn main() {
         background: "Test agent B".to_string(),
         communication_style: "Direct".to_string(),
         visual_identity: None,
+        capabilities: None,
     };
 
     dialogue

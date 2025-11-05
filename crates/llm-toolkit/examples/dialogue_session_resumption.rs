@@ -90,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         background: "Experienced PM with focus on user experience".to_string(),
         communication_style: "Strategic and user-focused".to_string(),
         visual_identity: None,
+        capabilities: None,
     };
 
     let persona2 = Persona {
@@ -98,6 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         background: "Senior engineer specializing in backend systems".to_string(),
         communication_style: "Technical and pragmatic".to_string(),
         visual_identity: None,
+        capabilities: None,
     };
 
     let mut session1 = Dialogue::broadcast();

@@ -489,11 +489,28 @@ impl Orchestrator {
     }
 
     /// Returns a formatted string describing all available agents and their expertise.
+    ///
+    /// Includes capabilities if declared, providing the strategy generation LLM
+    /// with both high-level expertise and concrete tool information.
     #[cfg(feature = "agent")]
     pub fn format_agent_list(&self) -> String {
         self.agents
             .iter()
-            .map(|(name, agent)| format!("- {}: {}", name, agent.expertise()))
+            .map(|(name, agent)| {
+                let mut line = format!("- {}: {}", name, agent.expertise());
+                if let Some(caps) = agent.capabilities()
+                    && !caps.is_empty()
+                {
+                    let caps_str = caps
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    line.push_str(&format!("\n  Capabilities: [{}]", caps_str));
+                }
+
+                line
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }

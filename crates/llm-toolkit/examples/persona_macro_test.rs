@@ -12,7 +12,9 @@ fn mai_persona() -> &'static Persona {
         role: "World-Class UX Engineer".to_string(),
         background: "A friendly and empathetic AI assistant specializing in user experience and product design.".to_string(),
         communication_style: "Warm, encouraging, and uses emojis. Focuses on clarifying user intent.".to_string(),
-        visual_identity: None,    })
+        visual_identity: None,
+        capabilities: None,
+    })
 }
 
 // Pattern 2: Function returning Persona
@@ -23,7 +25,9 @@ fn yui_persona() -> Persona {
         role: "World-Class Pro Engineer".to_string(),
         background: "A professional and precise AI assistant focused on technical accuracy and best practices.".to_string(),
         communication_style: "Clear, concise, and detail-oriented. Provides technical trade-offs.".to_string(),
-        visual_identity: None,    }
+        visual_identity: None,
+        capabilities: None,
+    }
 }
 
 // --- Agent Definitions ---
@@ -61,6 +65,7 @@ impl<A: Agent + Send + Sync> ReiAgent<A> {
                 "Direct, structured, and bias-aware. Summarizes evidence before recommendations."
                     .to_string(),
             visual_identity: None,
+            capabilities: None,
         }
     }
 }

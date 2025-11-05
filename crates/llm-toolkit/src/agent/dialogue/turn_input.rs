@@ -17,6 +17,14 @@ pub struct ParticipantInfo {
 
     /// Background/description of the participant
     pub description: String,
+
+    /// Capabilities allowed for this participant in this dialogue session
+    ///
+    /// This represents the **filtered** set of capabilities after applying
+    /// any dynamic policy restrictions. If None, no specific capabilities
+    /// are declared for this participant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<crate::agent::Capability>>,
 }
 
 impl ParticipantInfo {
@@ -30,7 +38,14 @@ impl ParticipantInfo {
             name: name.into(),
             role: role.into(),
             description: description.into(),
+            capabilities: None,
         }
+    }
+
+    /// Sets the capabilities for this participant.
+    pub fn with_capabilities(mut self, capabilities: Vec<crate::agent::Capability>) -> Self {
+        self.capabilities = Some(capabilities);
+        self
     }
 }
 

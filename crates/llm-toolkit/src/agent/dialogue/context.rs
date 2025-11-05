@@ -3,8 +3,10 @@
 //! This module provides a flexible context system for dialogues, allowing users
 //! to customize the behavior and tone of conversations.
 
+use crate::agent::Capability;
 use crate::prompt::ToPrompt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// The overall context for a dialogue, including talk style and additional context.
 ///
@@ -49,6 +51,27 @@ where
 
     /// Additional context items (can be structured data that implements ToPrompt)
     pub additional_context: Vec<S>,
+
+    /// Dynamic policy: maps participant name to allowed capabilities.
+    ///
+    /// This enables top-down, session-specific capability restrictions:
+    /// - If `None`, all declared capabilities from Persona are allowed
+    /// - If `Some`, only the capabilities listed here are permitted for each participant
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::DialogueContext;
+    /// use llm_toolkit::agent::Capability;
+    ///
+    /// let context = DialogueContext::default()
+    ///     .with_policy("FileAgent", vec![
+    ///         Capability::new("file:read"), // Allow read
+    ///         // file:write is NOT allowed in this session
+    ///     ]);
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<HashMap<String, Vec<Capability>>>,
 }
 
 impl<T, S> Default for DialogueContext<T, S>
@@ -61,6 +84,7 @@ where
             talk_style: None,
             environment: None,
             additional_context: Vec::new(),
+            policy: None,
         }
     }
 }
@@ -96,6 +120,28 @@ where
     /// Adds multiple additional context items.
     pub fn with_additional_contexts(mut self, contexts: Vec<S>) -> Self {
         self.additional_context.extend(contexts);
+        self
+    }
+
+    /// Sets the policy (allowed capabilities) for a specific participant.
+    ///
+    /// This enables dynamic, session-specific restriction of what a participant
+    /// can do, regardless of what capabilities their Persona declares.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::DialogueContext;
+    /// use llm_toolkit::agent::Capability;
+    ///
+    /// let context = DialogueContext::default()
+    ///     .with_policy("FileAgent", vec![Capability::new("file:read")])
+    ///     .with_policy("APIAgent", vec![Capability::new("api:weather")]);
+    /// ```
+    pub fn with_policy(mut self, participant: impl Into<String>, allowed: Vec<Capability>) -> Self {
+        self.policy
+            .get_or_insert_with(HashMap::new)
+            .insert(participant.into(), allowed);
         self
     }
 }

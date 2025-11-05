@@ -39,6 +39,7 @@ async fn main() {
         background: "Expert in distilling long texts into key points.".to_string(),
         communication_style: "Concise and to the point.".to_string(),
         visual_identity: None,
+        capabilities: None,
     };
 
     let translator_persona = Persona {
@@ -47,6 +48,7 @@ async fn main() {
         background: "Professional translator with a focus on technical accuracy.".to_string(),
         communication_style: "Formal and precise.".to_string(),
         visual_identity: None,
+        capabilities: None,
     };
 
     let mut sequential_dialogue = Dialogue::sequential();
@@ -88,6 +90,7 @@ async fn main() {
         background: "Professional translator with a focus on technical accuracy.".to_string(),
         communication_style: "Formal and precise.".to_string(),
         visual_identity: None,
+        capabilities: None,
     };
 
     let critic_persona = Persona {
@@ -96,6 +99,7 @@ async fn main() {
         background: "A skeptical critic who finds potential issues.".to_string(),
         communication_style: "Direct and questioning.".to_string(),
         visual_identity: None,
+        capabilities: None,
     };
 
     let mut broadcast_dialogue = Dialogue::broadcast();

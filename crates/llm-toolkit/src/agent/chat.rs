@@ -31,6 +31,7 @@ use serde::{Serialize, de::DeserializeOwned};
 ///     background: "Expert in Rust programming".to_string(),
 ///     communication_style: "Clear and concise".to_string(),
 ///     visual_identity: None,
+///     capabilities: None,
 /// };
 /// let chat_with_persona = Chat::new(ClaudeCodeAgent::new())
 ///     .with_persona(persona)
@@ -89,6 +90,7 @@ impl<A: Agent> Chat<A> {
     ///     background: "Senior software engineer".to_string(),
     ///     communication_style: "Detailed and constructive".to_string(),
     ///     visual_identity: None,
+    ///     capabilities: None,
     /// };
     /// let chat = Chat::new(agent).with_persona(persona);
     /// ```
@@ -298,6 +300,7 @@ mod tests {
             background: "A helpful test bot".to_string(),
             communication_style: "Direct and clear".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let chat = Chat::new(test_agent.clone())
@@ -325,6 +328,7 @@ mod tests {
             background: "Helpful AI".to_string(),
             communication_style: "Friendly".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let chat = Chat::new(test_agent.clone()).with_persona(persona).build();
@@ -375,6 +379,7 @@ mod tests {
             background: "Senior developer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let chat = Chat::new(test_agent)

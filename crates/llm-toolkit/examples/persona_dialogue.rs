@@ -13,6 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         communication_style: "Speaks in a calm, measured tone. Uses precise language and often \
                               responds with rhetorical questions to stimulate deeper thought. Avoids slang and contractions.".to_string(),
         visual_identity: None,
+        capabilities: None,
     };
 
     // 2. Create a base agent that will handle the actual LLM calls.

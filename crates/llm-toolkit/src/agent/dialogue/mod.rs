@@ -644,17 +644,36 @@ impl Dialogue {
 
     /// Returns participant information for all participants in the dialogue.
     ///
-    /// This helper method extracts name, role, and background from each
+    /// This helper method extracts name, role, background, and capabilities from each
     /// participant's persona for use in context distribution.
+    ///
+    /// Capabilities are filtered by the dialogue's policy if one is set.
     fn get_participants_info(&self) -> Vec<ParticipantInfo> {
         self.participants
             .iter()
             .map(|p| {
+                // Get capabilities from persona
+                let mut capabilities = p.persona.capabilities.clone();
+
+                // Apply policy filtering if context has a policy
+                if let Some(ref context) = self.context
+                    && let Some(ref policy) = context.policy
+                    && let Some(allowed) = policy.get(&p.persona.name)
+                {
+                    // Filter: only keep capabilities that are in the allowed list
+                    capabilities = capabilities.map(|caps| {
+                        caps.into_iter()
+                            .filter(|cap| allowed.contains(cap))
+                            .collect()
+                    });
+                }
+
                 ParticipantInfo::new(
                     p.persona.name.clone(),
                     p.persona.role.clone(),
                     p.persona.background.clone(),
                 )
+                .with_capabilities(capabilities.unwrap_or_default())
             })
             .collect()
     }
@@ -793,6 +812,7 @@ impl Dialogue {
     ///     background: "20 years in enterprise security...".to_string(),
     ///     communication_style: "Detail-oriented and cautious...".to_string(),
     ///     visual_identity: None,
+    ///     capabilities: None,
     /// };
     ///
     /// dialogue.add_participant(expert, ClaudeCodeAgent::new());
@@ -2098,6 +2118,7 @@ mod tests {
             background: "Test agent 1".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -2106,6 +2127,7 @@ mod tests {
             background: "Test agent 2".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -2157,6 +2179,7 @@ mod tests {
             background: "Test agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue.add_participant(persona, MockAgent::new("Agent1", vec!["Hello".to_string()]));
@@ -2180,6 +2203,7 @@ mod tests {
             background: "Summarizes inputs".to_string(),
             communication_style: "Concise".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -2188,6 +2212,7 @@ mod tests {
             background: "Translates content".to_string(),
             communication_style: "Formal".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona3 = Persona {
@@ -2196,6 +2221,7 @@ mod tests {
             background: "Finalizes output".to_string(),
             communication_style: "Professional".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         // Create agents with distinct responses so we can track the chain
@@ -2253,6 +2279,7 @@ mod tests {
             background: "first".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -2261,6 +2288,7 @@ mod tests {
             background: "second".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -2333,6 +2361,7 @@ mod tests {
             background: "Quick replies".to_string(),
             communication_style: "Snappy".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let slow = Persona {
@@ -2341,6 +2370,7 @@ mod tests {
             background: "Takes time".to_string(),
             communication_style: "Measured".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -2373,6 +2403,7 @@ mod tests {
             background: "Prefers careful analysis".to_string(),
             communication_style: "Measured".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let fast = Persona {
@@ -2381,6 +2412,7 @@ mod tests {
             background: "Snappy insights".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -2412,6 +2444,7 @@ mod tests {
             background: "Senior engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         });
         team.add_persona(Persona {
             name: "Bob".to_string(),
@@ -2419,6 +2452,7 @@ mod tests {
             background: "UX specialist".to_string(),
             communication_style: "User-focused".to_string(),
             visual_identity: None,
+            capabilities: None,
         });
         team.execution_strategy = Some(ExecutionModel::Broadcast);
 
@@ -2445,6 +2479,7 @@ mod tests {
             background: "Data analyst".to_string(),
             communication_style: "Analytical".to_string(),
             visual_identity: None,
+            capabilities: None,
         });
         team.add_persona(Persona {
             name: "Second".to_string(),
@@ -2452,6 +2487,7 @@ mod tests {
             background: "Content creator".to_string(),
             communication_style: "Creative".to_string(),
             visual_identity: None,
+            capabilities: None,
         });
         team.execution_strategy = Some(ExecutionModel::Sequential);
 
@@ -2475,6 +2511,7 @@ mod tests {
             background: "Initial background".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
         dialogue.add_participant(
             initial_persona,
@@ -2489,6 +2526,7 @@ mod tests {
             background: "20 years experience".to_string(),
             communication_style: "Authoritative".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let llm = MockAgent::new("ExpertLLM", vec!["Expert response".to_string()]);
@@ -2516,6 +2554,7 @@ mod tests {
             background: "QA specialist".to_string(),
             communication_style: "Thorough".to_string(),
             visual_identity: None,
+            capabilities: None,
         });
 
         // Save
@@ -2544,6 +2583,7 @@ mod tests {
             background: "Test".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
         let persona2 = Persona {
             name: "Agent2".to_string(),
@@ -2551,6 +2591,7 @@ mod tests {
             background: "Test".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
         let persona3 = Persona {
             name: "Agent3".to_string(),
@@ -2558,6 +2599,7 @@ mod tests {
             background: "Test".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         // Add 3 participants
@@ -2589,6 +2631,7 @@ mod tests {
             background: "Test".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
         dialogue.add_participant(persona, MockAgent::new("Agent1", vec!["R1".to_string()]));
 
@@ -2613,6 +2656,7 @@ mod tests {
             background: "Senior engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -2621,6 +2665,7 @@ mod tests {
             background: "UX specialist".to_string(),
             communication_style: "User-focused".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let blueprint = DialogueBlueprint {
@@ -2679,6 +2724,7 @@ mod tests {
             background: "Core team member".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
         let core2 = Persona {
             name: "CoreMember2".to_string(),
@@ -2686,6 +2732,7 @@ mod tests {
             background: "Core team member".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue.add_participant(
@@ -2705,6 +2752,7 @@ mod tests {
             background: "Guest invited for this session".to_string(),
             communication_style: "Expert".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
         let guest_llm = MockAgent::new("Guest", vec!["Guest insight".to_string()]);
         dialogue.add_participant(guest, guest_llm);
@@ -2745,6 +2793,7 @@ mod tests {
             background: "Senior engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
         dialogue.add_participant(
             persona1.clone(),
@@ -2758,6 +2807,7 @@ mod tests {
             background: "UX specialist".to_string(),
             communication_style: "User-focused".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
         dialogue.add_participant(
             persona2.clone(),
@@ -2771,6 +2821,7 @@ mod tests {
             background: "Product manager".to_string(),
             communication_style: "Strategic".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
         dialogue.add_participant(
             persona3.clone(),
@@ -2822,6 +2873,7 @@ mod tests {
             background: "Expert in image analysis".to_string(),
             communication_style: "Technical and precise".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue.add_participant(
@@ -2857,6 +2909,7 @@ mod tests {
             background: "Test agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue.add_participant(
@@ -2884,6 +2937,7 @@ mod tests {
             background: "Analyzes data".to_string(),
             communication_style: "Analytical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -2892,6 +2946,7 @@ mod tests {
             background: "Summarizes results".to_string(),
             communication_style: "Concise".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -2933,6 +2988,7 @@ mod tests {
             background: "Quick analysis".to_string(),
             communication_style: "Fast".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -2941,6 +2997,7 @@ mod tests {
             background: "Detailed analysis".to_string(),
             communication_style: "Thorough".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -2975,6 +3032,7 @@ mod tests {
             background: "Test agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue.add_participant(
@@ -3023,6 +3081,7 @@ mod tests {
             background: "Test agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue.add_participant(
@@ -3062,6 +3121,7 @@ mod tests {
             background: "Test agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         session1.add_participant(
@@ -3173,6 +3233,7 @@ mod tests {
             background: "Test agent A".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona_b = Persona {
@@ -3181,6 +3242,7 @@ mod tests {
             background: "Test agent B".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -3331,6 +3393,7 @@ mod tests {
             background: "Test agent A".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona_b = Persona {
@@ -3339,6 +3402,7 @@ mod tests {
             background: "Test agent B".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         // Create Chat agents WITH history (as Dialogue does)
@@ -3423,6 +3487,7 @@ mod tests {
                 background: "Test agent 1".to_string(),
                 communication_style: "Direct".to_string(),
                 visual_identity: None,
+                capabilities: None,
             },
             MockAgent::new("Agent1", vec!["Response from Agent1".to_string()]),
         );
@@ -3433,6 +3498,7 @@ mod tests {
                 background: "Test agent 2".to_string(),
                 communication_style: "Direct".to_string(),
                 visual_identity: None,
+                capabilities: None,
             },
             MockAgent::new("Agent2", vec!["Response from Agent2".to_string()]),
         );
@@ -3484,6 +3550,7 @@ mod tests {
                 background: "First agent".to_string(),
                 communication_style: "Analytical".to_string(),
                 visual_identity: None,
+                capabilities: None,
             },
             MockAgent::new("Agent1", vec!["Analysis result".to_string()]),
         );
@@ -3494,6 +3561,7 @@ mod tests {
                 background: "Second agent".to_string(),
                 communication_style: "Critical".to_string(),
                 visual_identity: None,
+                capabilities: None,
             },
             MockAgent::new("Agent2", vec!["Review complete".to_string()]),
         );
@@ -3561,6 +3629,7 @@ mod tests {
             background: "Test agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue.add_participant(
@@ -3658,6 +3727,7 @@ mod tests {
             background: "Test agent A".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona_b = Persona {
@@ -3666,6 +3736,7 @@ mod tests {
             background: "Test agent B".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -3780,6 +3851,7 @@ mod tests {
             background: "Test".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         // Test with run()
@@ -3890,6 +3962,7 @@ mod tests {
             background: "First agent in chain".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona_b = Persona {
@@ -3898,6 +3971,7 @@ mod tests {
             background: "Second agent in chain".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let agent_a_responses = Arc::new(Mutex::new(Vec::new()));
@@ -4059,6 +4133,7 @@ mod tests {
             background: "First agent in chain".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona_b = Persona {
@@ -4067,6 +4142,7 @@ mod tests {
             background: "Second agent in chain".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let agent_a_responses = Arc::new(Mutex::new(Vec::new()));
@@ -4230,6 +4306,7 @@ mod tests {
             background: "First agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona_b = Persona {
@@ -4238,6 +4315,7 @@ mod tests {
             background: "Second agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona_c = Persona {
@@ -4246,6 +4324,7 @@ mod tests {
             background: "Third agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let agent_a_responses = Arc::new(Mutex::new(Vec::new()));
@@ -4419,6 +4498,7 @@ mod tests {
             background: "First agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona_b = Persona {
@@ -4427,6 +4507,7 @@ mod tests {
             background: "Second agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona_c = Persona {
@@ -4435,6 +4516,7 @@ mod tests {
             background: "Third agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let agent_a_responses = Arc::new(Mutex::new(Vec::new()));
@@ -4629,6 +4711,7 @@ mod tests {
             background: "First".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona_b = Persona {
@@ -4637,6 +4720,7 @@ mod tests {
             background: "Second".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let payloads = Arc::new(Mutex::new(Vec::new()));
@@ -4715,6 +4799,7 @@ mod tests {
             background: "Test agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let received_payloads = Arc::new(Mutex::new(Vec::new()));
@@ -4790,6 +4875,7 @@ mod tests {
             background: "Test".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let received_payloads = Arc::new(Mutex::new(Vec::new()));
@@ -4872,6 +4958,7 @@ mod tests {
             background: "Backend engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -4880,6 +4967,7 @@ mod tests {
             background: "UI/UX specialist".to_string(),
             communication_style: "Visual".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -4904,6 +4992,7 @@ mod tests {
             background: "Backend engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -4912,6 +5001,7 @@ mod tests {
             background: "UI/UX specialist".to_string(),
             communication_style: "Visual".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona3 = Persona {
@@ -4920,6 +5010,7 @@ mod tests {
             background: "QA engineer".to_string(),
             communication_style: "Analytical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -4962,6 +5053,7 @@ mod tests {
             background: "Backend engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -4970,6 +5062,7 @@ mod tests {
             background: "UI/UX specialist".to_string(),
             communication_style: "Visual".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -5007,6 +5100,7 @@ mod tests {
             background: "Backend engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -5015,6 +5109,7 @@ mod tests {
             background: "UI/UX specialist".to_string(),
             communication_style: "Visual".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -5048,6 +5143,7 @@ mod tests {
             background: "Backend engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -5056,6 +5152,7 @@ mod tests {
             background: "UI/UX specialist".to_string(),
             communication_style: "Visual".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona3 = Persona {
@@ -5064,6 +5161,7 @@ mod tests {
             background: "QA engineer".to_string(),
             communication_style: "Analytical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -5143,6 +5241,7 @@ mod tests {
             background: "Backend engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -5151,6 +5250,7 @@ mod tests {
             background: "UI/UX specialist".to_string(),
             communication_style: "Visual".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -5189,6 +5289,7 @@ mod tests {
             background: "Backend engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -5197,6 +5298,7 @@ mod tests {
             background: "UI/UX specialist".to_string(),
             communication_style: "Visual".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona3 = Persona {
@@ -5205,6 +5307,7 @@ mod tests {
             background: "QA engineer".to_string(),
             communication_style: "Analytical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -5247,6 +5350,7 @@ mod tests {
             background: "Backend engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona2 = Persona {
@@ -5255,6 +5359,7 @@ mod tests {
             background: "UI/UX specialist".to_string(),
             communication_style: "Visual".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let persona3 = Persona {
@@ -5263,6 +5368,7 @@ mod tests {
             background: "QA engineer".to_string(),
             communication_style: "Analytical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue
@@ -5329,6 +5435,7 @@ mod tests {
             background: "Test agent".to_string(),
             communication_style: "Direct".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue.add_participant(
@@ -5385,6 +5492,7 @@ mod tests {
             background: "Backend engineer".to_string(),
             communication_style: "Technical".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let bob_persona = Persona {
@@ -5393,6 +5501,7 @@ mod tests {
             background: "UI/UX specialist".to_string(),
             communication_style: "Visual".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         let charlie_persona = Persona {
@@ -5401,6 +5510,7 @@ mod tests {
             background: "QA engineer".to_string(),
             communication_style: "Detail-oriented".to_string(),
             visual_identity: None,
+            capabilities: None,
         };
 
         dialogue

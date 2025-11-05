@@ -28,6 +28,7 @@ fn yui_persona() -> Persona {
         background: "A top-tier software engineer focused on quality and precision.".to_string(),
         communication_style: "Professional, precise, and detail-oriented.".to_string(),
         visual_identity: None,
+        capabilities: None,
     }
 }
 

@@ -213,6 +213,7 @@
 //!
 //! This pattern is recommended for building your own custom agents.
 
+pub mod capability;
 pub mod error;
 pub mod payload;
 
@@ -252,6 +253,7 @@ pub enum ExecutionProfile {
     Deterministic,
 }
 
+pub use capability::Capability;
 pub use error::AgentError;
 pub use payload::{Payload, PayloadContent};
 #[cfg(feature = "agent")]
@@ -350,6 +352,46 @@ pub trait Agent: Send + Sync {
     async fn is_available(&self) -> Result<(), AgentError> {
         Ok(())
     }
+
+    /// Returns a list of capabilities (tools/actions) this agent can perform.
+    ///
+    /// This is used by Orchestrator and Dialogue to understand what concrete
+    /// actions an agent can execute, in addition to its general expertise.
+    /// Capabilities enable:
+    ///
+    /// - **Orchestrator precision**: Strategy generation can select agents based on
+    ///   concrete capabilities rather than just natural language expertise.
+    /// - **Dialogue coordination**: Agents can discover what other participants can do.
+    /// - **Dynamic policy enforcement**: Dialogues can restrict which capabilities
+    ///   are allowed in a given session.
+    ///
+    /// # Default Implementation
+    ///
+    /// By default, this returns `None`, meaning the agent does not declare specific
+    /// capabilities. This maintains backward compatibility with existing agents.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::{Agent, Capability};
+    ///
+    /// struct FileAgent;
+    ///
+    /// impl Agent for FileAgent {
+    ///     // ... other trait methods ...
+    ///
+    ///     fn capabilities(&self) -> Option<Vec<Capability>> {
+    ///         Some(vec![
+    ///             Capability::new("file:read"),
+    ///             Capability::new("file:write")
+    ///                 .with_description("Write content to a file"),
+    ///         ])
+    ///     }
+    /// }
+    /// ```
+    fn capabilities(&self) -> Option<Vec<Capability>> {
+        None
+    }
 }
 
 /// A boxed agent trait object for dynamic dispatch.
@@ -376,6 +418,13 @@ pub trait DynamicAgent: Send + Sync {
     /// Checks if the agent's backend is available.
     async fn is_available(&self) -> Result<(), AgentError> {
         Ok(())
+    }
+
+    /// Returns the capabilities of this agent.
+    ///
+    /// This mirrors the `Agent::capabilities()` method for type-erased agents.
+    fn capabilities(&self) -> Option<Vec<Capability>> {
+        None
     }
 
     /// Attempts to convert a JSON output to a prompt string if the underlying type implements ToPrompt.
@@ -447,6 +496,10 @@ impl<T: Serialize + DeserializeOwned> DynamicAgent for AgentAdapter<T> {
 
     async fn is_available(&self) -> Result<(), AgentError> {
         self.inner.is_available().await
+    }
+
+    fn capabilities(&self) -> Option<Vec<Capability>> {
+        self.inner.capabilities()
     }
 
     fn try_to_prompt(&self, json: &serde_json::Value) -> Option<String> {

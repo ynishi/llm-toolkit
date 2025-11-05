@@ -42,6 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                  business value. Pushes for MVP scope while maintaining vision."
                 .to_string(),
             visual_identity: None,
+            capabilities: None,
         },
         Persona {
             name: "Marcus Lee".to_string(),
@@ -53,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                  Advocates strongly for simplicity and intuitive workflows."
                 .to_string(),
             visual_identity: None,
+            capabilities: None,
         },
         Persona {
             name: "Priya Patel".to_string(),
@@ -64,6 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                  and system scalability. Pragmatic about trade-offs."
                 .to_string(),
             visual_identity: None,
+            capabilities: None,
         },
         Persona {
             name: "Kenji Tanaka".to_string(),
@@ -75,6 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                  components and state management. Values maintainability."
                 .to_string(),
             visual_identity: None,
+            capabilities: None,
         },
         Persona {
             name: "Elena Rodriguez".to_string(),
@@ -86,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                  states. Asks 'what if' questions to uncover potential issues."
                 .to_string(),
             visual_identity: None,
+            capabilities: None,
         },
     ];
 
@@ -212,6 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                              points based on support tickets."
             .to_string(),
         visual_identity: None,
+        capabilities: None,
     };
 
     println!("💡 Adding a guest participant:");
