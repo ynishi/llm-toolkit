@@ -271,10 +271,62 @@ impl Speaker {
     }
 }
 
+/// Type of message for controlling dialogue reaction behavior.
+///
+/// This allows fine-grained control over when agents should react to messages.
+///
+/// # Message Types
+///
+/// - **Conversational**: Normal back-and-forth dialogue messages (default)
+/// - **Notification**: Status updates, progress reports (may or may not trigger reactions)
+/// - **System**: Explicit system commands or instructions (typically triggers reactions)
+/// - **ContextInfo**: Background information, command results (does not trigger reactions)
+/// - **Custom**: Application-specific message types
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // Conversational message (triggers reaction)
+/// MessageMetadata::new().with_type(MessageType::Conversational)
+///
+/// // Command result as context (no reaction)
+/// MessageMetadata::new().with_type(MessageType::ContextInfo)
+///
+/// // System notification
+/// MessageMetadata::new().with_type(MessageType::Notification)
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageType {
+    /// Conversational message in dialogue (default)
+    Conversational,
+
+    /// Notification or status update
+    Notification,
+
+    /// System command or instruction
+    System,
+
+    /// Context information only (e.g., command results, background info)
+    ///
+    /// Messages with this type are stored as context but do not trigger
+    /// agent reactions by default.
+    ContextInfo,
+
+    /// Custom message type
+    Custom(String),
+}
+
+impl Default for MessageType {
+    fn default() -> Self {
+        Self::Conversational
+    }
+}
+
 /// Metadata associated with a dialogue message.
 ///
 /// This can be extended with custom fields as needed.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageMetadata {
     /// Estimated token count (if available)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -284,9 +336,48 @@ pub struct MessageMetadata {
     #[serde(default)]
     pub has_attachments: bool,
 
+    /// Type of this message (affects reaction behavior)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_type: Option<MessageType>,
+
     /// Custom application data
     #[serde(flatten)]
     pub custom: HashMap<String, serde_json::Value>,
+}
+
+impl MessageMetadata {
+    /// Creates a new empty metadata.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the message type.
+    pub fn with_type(mut self, message_type: MessageType) -> Self {
+        self.message_type = Some(message_type);
+        self
+    }
+
+    /// Adds a custom key-value pair.
+    pub fn with_custom(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        self.custom.insert(key.into(), value.into());
+        self
+    }
+
+    /// Checks if this metadata has the specified message type.
+    pub fn is_type(&self, message_type: &MessageType) -> bool {
+        self.message_type.as_ref() == Some(message_type)
+    }
+
+    /// Returns true if this message should not trigger agent reactions.
+    ///
+    /// Currently, only `ContextInfo` messages are considered context-only.
+    pub fn is_context_only(&self) -> bool {
+        matches!(self.message_type, Some(MessageType::ContextInfo))
+    }
 }
 
 /// Formats a list of messages as a prompt string.

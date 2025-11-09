@@ -3,6 +3,7 @@
 //! This module provides abstractions for passing different types of content
 //! (text, images, etc.) to agents in a unified way.
 
+use super::dialogue::message::MessageMetadata;
 use super::payload_message::PayloadMessage;
 use crate::attachment::Attachment;
 use std::fmt;
@@ -24,6 +25,8 @@ pub enum PayloadContent {
     Message {
         speaker: crate::agent::dialogue::Speaker,
         content: String,
+        #[allow(dead_code)]
+        metadata: MessageMetadata,
     },
 
     /// Dialogue participants information
@@ -213,8 +216,45 @@ impl Payload {
             PayloadContent::Message {
                 speaker,
                 content: content.into(),
+                metadata: MessageMetadata::default(),
             },
         );
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
+    }
+
+    /// Adds a dialogue message with metadata to this payload.
+    ///
+    /// This allows fine-grained control over message reaction behavior.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::agent::dialogue::{Speaker, MessageMetadata, MessageType};
+    ///
+    /// let payload = Payload::new()
+    ///     .add_message_with_metadata(
+    ///         Speaker::System,
+    ///         "Command completed successfully",
+    ///         MessageMetadata::new().with_type(MessageType::CommandResult),
+    ///     );
+    /// ```
+    pub fn add_message_with_metadata(
+        self,
+        speaker: crate::agent::dialogue::Speaker,
+        content: impl Into<String>,
+        metadata: MessageMetadata,
+    ) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.push(PayloadContent::Message {
+            speaker,
+            content: content.into(),
+            metadata,
+        });
         Self {
             inner: Arc::new(PayloadInner {
                 contents: new_contents,
@@ -288,6 +328,7 @@ impl Payload {
         new_contents.push(PayloadContent::Message {
             speaker,
             content: content.into(),
+            metadata: MessageMetadata::default(),
         });
         Self {
             inner: Arc::new(PayloadInner {
@@ -315,6 +356,7 @@ impl Payload {
             .map(|message| PayloadContent::Message {
                 speaker: message.speaker,
                 content: message.content,
+                metadata: message.metadata,
             })
             .collect();
 
@@ -424,9 +466,15 @@ impl Payload {
             .contents
             .iter()
             .filter_map(|c| match c {
-                PayloadContent::Message { speaker, content } => {
-                    Some(PayloadMessage::new(speaker.clone(), content.clone()))
-                }
+                PayloadContent::Message {
+                    speaker,
+                    content,
+                    metadata,
+                } => Some(PayloadMessage {
+                    speaker: speaker.clone(),
+                    content: content.clone(),
+                    metadata: metadata.clone(),
+                }),
                 PayloadContent::Text(_)
                 | PayloadContent::Attachment(_)
                 | PayloadContent::Participants(_) => None,
@@ -628,7 +676,7 @@ mod tests {
         // First element should be the prepended message
         assert!(matches!(
             &payload.contents()[0],
-            PayloadContent::Message { speaker, content }
+            PayloadContent::Message { speaker, content, .. }
                 if matches!(speaker, Speaker::System) && content == "Keep responses concise."
         ));
         // Second element should be the original text
@@ -646,7 +694,7 @@ mod tests {
         // First element should be a System message
         assert!(matches!(
             &payload.contents()[0],
-            PayloadContent::Message { speaker, content }
+            PayloadContent::Message { speaker, content, .. }
                 if matches!(speaker, crate::agent::dialogue::Speaker::System)
                 && content == "IMPORTANT: Be concise."
         ));

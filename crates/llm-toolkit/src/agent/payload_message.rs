@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::dialogue::message::DialogueMessage;
+use super::dialogue::message::{DialogueMessage, MessageMetadata};
 use super::dialogue::{ParticipantInfo, Speaker};
 
 /// Lightweight message record used when constructing payloads and tracking history.
@@ -14,6 +14,17 @@ pub struct PayloadMessage {
     pub speaker: Speaker,
     /// Message content.
     pub content: String,
+    /// Optional metadata for controlling reaction behavior.
+    #[serde(default, skip_serializing_if = "is_metadata_default")]
+    pub metadata: MessageMetadata,
+}
+
+/// Helper function to skip serializing default metadata.
+fn is_metadata_default(metadata: &MessageMetadata) -> bool {
+    metadata.token_count.is_none()
+        && !metadata.has_attachments
+        && metadata.message_type.is_none()
+        && metadata.custom.is_empty()
 }
 
 impl PayloadMessage {
@@ -22,6 +33,7 @@ impl PayloadMessage {
         Self {
             speaker,
             content: content.into(),
+            metadata: MessageMetadata::default(),
         }
     }
 
@@ -34,6 +46,7 @@ impl PayloadMessage {
         Self {
             speaker: Speaker::user(name, role),
             content: content.into(),
+            metadata: MessageMetadata::default(),
         }
     }
 
@@ -42,6 +55,7 @@ impl PayloadMessage {
         Self {
             speaker: Speaker::System,
             content: content.into(),
+            metadata: MessageMetadata::default(),
         }
     }
 
@@ -54,7 +68,14 @@ impl PayloadMessage {
         Self {
             speaker: Speaker::agent(name, role),
             content: content.into(),
+            metadata: MessageMetadata::default(),
         }
+    }
+
+    /// Attaches metadata to this message.
+    pub fn with_metadata(mut self, metadata: MessageMetadata) -> Self {
+        self.metadata = metadata;
+        self
     }
 
     /// Returns the relation of this message's speaker to the provided name.
@@ -74,7 +95,11 @@ impl PayloadMessage {
 
 impl From<&DialogueMessage> for PayloadMessage {
     fn from(msg: &DialogueMessage) -> Self {
-        PayloadMessage::new(msg.speaker.clone(), msg.content.clone())
+        PayloadMessage {
+            speaker: msg.speaker.clone(),
+            content: msg.content.clone(),
+            metadata: msg.metadata.clone(),
+        }
     }
 }
 
