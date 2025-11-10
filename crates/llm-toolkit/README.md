@@ -1586,6 +1586,18 @@ dialogue
   // Ignore system notifications while responding to users and other agents
   ```
 
+- **`ReactionStrategy::Conversational`** - React to User or Agent messages only
+  ```rust
+  dialogue.with_reaction_strategy(ReactionStrategy::Conversational);
+  // Engage in conversation between users and agents, ignoring system messages
+  ```
+
+- **`ReactionStrategy::ExceptContextInfo`** - React to all messages except ContextInfo
+  ```rust
+  dialogue.with_reaction_strategy(ReactionStrategy::ExceptContextInfo);
+  // React to all message types including System, but skip ContextInfo background information
+  ```
+
 **Message Metadata and Types:**
 
 The dialogue system supports rich message metadata including message types for context-aware processing:

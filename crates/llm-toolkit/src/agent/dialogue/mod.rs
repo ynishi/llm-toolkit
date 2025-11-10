@@ -337,6 +337,19 @@ pub enum ReactionStrategy {
 
     /// React to all messages except System messages.
     ExceptSystem,
+
+    /// React to conversational messages (User or Agent), excluding System messages.
+    ///
+    /// This is useful for dialogues where agents should engage in conversation
+    /// but ignore system-level metadata or notifications.
+    Conversational,
+
+    /// React to all messages except ContextInfo type messages.
+    ///
+    /// ContextInfo messages are background information that should be available
+    /// in history but not trigger agent responses. This strategy allows reacting
+    /// to all other message types including System messages.
+    ExceptContextInfo,
 }
 
 impl Default for ReactionStrategy {
@@ -631,40 +644,70 @@ impl Dialogue {
     ///
     /// Current implementation only checks Speaker type (User/Agent/System).
     /// Future improvements needed:
-    /// - Consider MessageType (e.g., ContextInfo should not trigger reactions by default)
-    /// - Add test coverage for UserOnly, AgentOnly, ExceptSystem strategies
+    /// - Add test coverage for all strategies
     /// - Review overall ReactionStrategy design and semantics
     fn should_react(&self, payload: &Payload) -> bool {
         use crate::agent::dialogue::Speaker;
         use crate::agent::dialogue::message::MessageType;
 
-        // Never react to ContextInfo messages, regardless of strategy
-        let has_only_context_info = payload.to_messages().iter().all(|msg| {
+        let messages = payload.to_messages();
+
+        // If no messages (e.g., text-only payload), check based on strategy defaults
+        if messages.is_empty() {
+            // Text-only payloads should trigger reactions for most strategies
+            return !matches!(self.reaction_strategy, ReactionStrategy::AgentOnly);
+        }
+
+        // Helper to check if message is ContextInfo
+        let is_context_info = |msg: &crate::agent::PayloadMessage| {
             msg.metadata
                 .message_type
                 .as_ref()
                 .map(|t| matches!(t, MessageType::ContextInfo))
                 .unwrap_or(false)
-        });
+        };
 
-        if has_only_context_info && !payload.to_messages().is_empty() {
+        // Never react if ALL messages are ContextInfo
+        let all_context_info = messages.iter().all(is_context_info);
+        if all_context_info {
             return false;
         }
 
         match &self.reaction_strategy {
-            ReactionStrategy::Always => true,
-            ReactionStrategy::UserOnly => payload
-                .to_messages()
-                .iter()
-                .any(|msg| matches!(msg.speaker, Speaker::User { .. })),
-            ReactionStrategy::AgentOnly => payload
-                .to_messages()
-                .iter()
-                .any(|msg| matches!(msg.speaker, Speaker::Agent { .. })),
-            ReactionStrategy::ExceptSystem => payload
-                .to_messages()
-                .iter()
-                .any(|msg| !matches!(msg.speaker, Speaker::System)),
+            ReactionStrategy::Always => {
+                // React to all messages except when all are ContextInfo (already checked)
+                true
+            }
+            ReactionStrategy::UserOnly => {
+                // React to User messages (excluding ContextInfo)
+                messages
+                    .iter()
+                    .any(|msg| matches!(msg.speaker, Speaker::User { .. }) && !is_context_info(msg))
+            }
+            ReactionStrategy::AgentOnly => {
+                // React to Agent messages (excluding ContextInfo)
+                messages.iter().any(|msg| {
+                    matches!(msg.speaker, Speaker::Agent { .. }) && !is_context_info(msg)
+                })
+            }
+            ReactionStrategy::ExceptSystem => {
+                // React to all non-System messages (excluding ContextInfo)
+                messages
+                    .iter()
+                    .any(|msg| !matches!(msg.speaker, Speaker::System) && !is_context_info(msg))
+            }
+            ReactionStrategy::Conversational => {
+                // React to User or Agent messages (excluding System and ContextInfo)
+                messages.iter().any(|msg| {
+                    (matches!(msg.speaker, Speaker::User { .. })
+                        || matches!(msg.speaker, Speaker::Agent { .. }))
+                        && !is_context_info(msg)
+                })
+            }
+            ReactionStrategy::ExceptContextInfo => {
+                // React to all messages except ContextInfo (already filtered above)
+                true
+            }
         }
     }
 
