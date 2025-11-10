@@ -635,8 +635,8 @@ impl Dialogue {
     /// - Add test coverage for UserOnly, AgentOnly, ExceptSystem strategies
     /// - Review overall ReactionStrategy design and semantics
     fn should_react(&self, payload: &Payload) -> bool {
-        use crate::agent::dialogue::message::MessageType;
         use crate::agent::dialogue::Speaker;
+        use crate::agent::dialogue::message::MessageType;
 
         // Never react to ContextInfo messages, regardless of strategy
         let has_only_context_info = payload.to_messages().iter().all(|msg| {
@@ -5338,12 +5338,26 @@ mod tests {
 
         // Verify Agent1 executed once (Turn 2: User message; Turn 1: ContextInfo did not trigger)
         let agent1_received = agent1.get_received_payloads();
-        assert_eq!(agent1_received.len(), 1, "Agent1 should execute once for User message");
+        assert_eq!(
+            agent1_received.len(),
+            1,
+            "Agent1 should execute once for User message"
+        );
 
         // Agent1 received ContextInfo in history + User message
         let agent1_payload = agent1_received[0].to_messages();
-        assert!(agent1_payload.iter().any(|m| m.content == "Analyze the code"), "Should contain user message");
-        assert!(agent1_payload.iter().any(|m| m.content == "Background: Project uses Rust"), "ContextInfo should be in history");
+        assert!(
+            agent1_payload
+                .iter()
+                .any(|m| m.content == "Analyze the code"),
+            "Should contain user message"
+        );
+        assert!(
+            agent1_payload
+                .iter()
+                .any(|m| m.content == "Background: Project uses Rust"),
+            "ContextInfo should be in history"
+        );
 
         // Verify Agent2 executed once as well (sequential: receives Agent1's output + user input)
         let agent2_received = agent2.get_received_payloads();
@@ -5403,17 +5417,29 @@ mod tests {
 
         // Verify Alice executed once (Turn 2: @mention, Turn 1: ContextInfo did not trigger)
         let alice_received = agent1.get_received_payloads();
-        assert_eq!(alice_received.len(), 1, "Alice should execute once for @mention");
+        assert_eq!(
+            alice_received.len(),
+            1,
+            "Alice should execute once for @mention"
+        );
 
         // Alice received ContextInfo in history + @mention message
         let alice_payload = alice_received[0].to_messages();
         assert!(alice_payload.iter().any(|m| m.content.contains("@Alice")));
         // ContextInfo should be in history but did not trigger this execution
-        assert!(alice_payload.iter().any(|m| m.content == "Note: Use async/await"));
+        assert!(
+            alice_payload
+                .iter()
+                .any(|m| m.content == "Note: Use async/await")
+        );
 
         // Verify Bob did not execute (no mentions for Bob)
         let bob_received = agent2.get_received_payloads();
-        assert_eq!(bob_received.len(), 0, "Bob should not execute (no mentions)");
+        assert_eq!(
+            bob_received.len(),
+            0,
+            "Bob should not execute (no mentions)"
+        );
     }
 
     #[tokio::test]
