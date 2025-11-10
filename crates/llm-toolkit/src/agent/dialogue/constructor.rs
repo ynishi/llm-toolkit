@@ -4,7 +4,8 @@ use crate::{
         dialogue::{
             Dialogue, DialogueBlueprint, DialogueContext, DialogueMessage, DialogueTurn,
             ExecutionModel, MessageId, MessageStore, ReactionStrategy, Speaker, TalkStyle,
-            format_dialogue_history_as_text, message,
+            format_dialogue_history_as_text,
+            message::{self, SentAgents},
         },
         persona::{PersonaTeam, PersonaTeamGenerationRequest},
     },
@@ -136,7 +137,7 @@ impl Dialogue {
                 content: dialogue_turn.content,
                 timestamp: message::current_unix_timestamp(),
                 metadata: Default::default(),
-                sent_to_agents: true, // Historical messages are considered already sent
+                sent_agents: SentAgents::All, // Historical messages are considered already sent
             };
 
             self.message_store.push(message);

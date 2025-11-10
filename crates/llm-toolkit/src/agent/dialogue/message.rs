@@ -124,15 +124,43 @@ pub struct DialogueMessage {
     /// passed to other agents in subsequent turns. It ensures each agent
     /// receives other agents' responses exactly once as context.
     #[serde(default)]
-    pub sent_to_agents: bool,
+    pub sent_agents: SentAgents,
 }
 
-impl Into<PayloadMessage> for DialogueMessage {
-    fn into(self) -> PayloadMessage {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SentAgents {
+    Agents(Vec<Speaker>),
+    All,
+}
+
+impl Default for SentAgents {
+    fn default() -> Self {
+        Self::Agents(vec![])
+    }
+}
+
+impl SentAgents {
+    pub fn sent(&mut self, speaker: Speaker) {
+        match self {
+            Self::Agents(vs) => vs.push(speaker),
+            Self::All => {} // Already All
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Agents(vs) => vs.is_empty(),
+            Self::All => false,
+        }
+    }
+}
+
+impl From<DialogueMessage> for PayloadMessage {
+    fn from(msg: DialogueMessage) -> PayloadMessage {
         PayloadMessage {
-            speaker: self.speaker,
-            content: self.content,
-            metadata: self.metadata,
+            speaker: msg.speaker,
+            content: msg.content,
+            metadata: msg.metadata,
         }
     }
 }
@@ -147,7 +175,7 @@ impl DialogueMessage {
             content,
             timestamp: current_unix_timestamp(),
             metadata: MessageMetadata::default(),
-            sent_to_agents: false,
+            sent_agents: SentAgents::default(),
         }
     }
 
@@ -164,6 +192,14 @@ impl DialogueMessage {
     /// Returns the speaker's role (if participant).
     pub fn speaker_role(&self) -> Option<&str> {
         self.speaker.role()
+    }
+
+    pub fn sent_to_agents(&self) -> bool {
+        !self.sent_agents.is_empty()
+    }
+
+    pub fn sent(&mut self, speaker: Speaker) {
+        self.sent_agents.sent(speaker);
     }
 }
 

@@ -3,7 +3,9 @@
 //! This module provides the central repository for managing dialogue messages
 //! with efficient lookup by ID and chronological ordering.
 
-use super::message::{DialogueMessage, MessageId, MessageMetadata, MessageOrigin, Speaker};
+use crate::agent::dialogue::message::SentAgents;
+
+use super::message::{DialogueMessage, MessageId, MessageOrigin, Speaker};
 use std::collections::HashMap;
 
 /// Central message repository within a Dialogue.
@@ -108,7 +110,7 @@ impl MessageStore {
         self.all_messages()
             .into_iter()
             .filter(|msg| {
-                !msg.sent_to_agents
+                !msg.sent_to_agents()
                     && (matches!(msg.speaker, Speaker::Agent { .. })
                         || matches!(msg.speaker, Speaker::System))
             })
@@ -119,7 +121,7 @@ impl MessageStore {
     pub fn unsent_messages_with_origin(&self, origin: MessageOrigin) -> Vec<&DialogueMessage> {
         self.all_messages()
             .into_iter()
-            .filter(|msg| !msg.sent_to_agents && msg.metadata.origin() == Some(origin))
+            .filter(|msg| !msg.sent_to_agents() && msg.metadata.origin() == Some(origin))
             .collect()
     }
 
@@ -127,16 +129,23 @@ impl MessageStore {
     ///
     /// This should be called after a message has been included in the context
     /// passed to agents in a subsequent turn.
-    pub fn mark_as_sent(&mut self, id: MessageId) {
+    pub fn mark_as_sent(&mut self, id: MessageId, agent: Speaker) {
         if let Some(msg) = self.messages_by_id.get_mut(&id) {
-            msg.sent_to_agents = true;
+            msg.sent(agent);
+        }
+    }
+
+    /// Marks a message as sent to all agents.
+    pub fn mark_as_sent_all_agents(&mut self, id: MessageId) {
+        if let Some(msg) = self.messages_by_id.get_mut(&id) {
+            msg.sent_agents = SentAgents::All;
         }
     }
 
     /// Marks multiple messages as sent to agents.
     pub fn mark_all_as_sent(&mut self, ids: &[MessageId]) {
         for id in ids {
-            self.mark_as_sent(*id);
+            self.mark_as_sent_all_agents(*id);
         }
     }
 }
@@ -150,7 +159,7 @@ impl Default for MessageStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::dialogue::message::Speaker;
+    use crate::agent::dialogue::{MessageMetadata, message::Speaker};
 
     #[test]
     fn test_message_store_basic_operations() {
@@ -311,7 +320,7 @@ mod tests {
         assert_eq!(store.unsent_messages().len(), 2);
 
         // Mark Alice's message as sent
-        store.mark_as_sent(msg1_id);
+        store.mark_as_sent(msg1_id, Speaker::agent("Bob", "Designer"));
 
         // Now only Bob's message should be unsent
         let unsent = store.unsent_messages();
@@ -319,7 +328,7 @@ mod tests {
         assert_eq!(unsent[0].content, "Bob response");
 
         // Mark Bob's message as sent
-        store.mark_as_sent(msg2_id);
+        store.mark_as_sent(msg2_id, Speaker::agent("Alice", "Engineer"));
 
         // Now no messages are unsent
         assert_eq!(store.unsent_messages().len(), 0);
@@ -364,9 +373,9 @@ mod tests {
         assert_eq!(unsent[0].content, "Charlie response");
 
         // Verify Alice and Bob are marked as sent
-        assert!(store.get(msg1_id).unwrap().sent_to_agents);
-        assert!(store.get(msg2_id).unwrap().sent_to_agents);
-        assert!(!store.get(msg3_id).unwrap().sent_to_agents);
+        assert!(store.get(msg1_id).unwrap().sent_to_agents());
+        assert!(store.get(msg2_id).unwrap().sent_to_agents());
+        assert!(!store.get(msg3_id).unwrap().sent_to_agents());
     }
 
     #[test]
@@ -426,11 +435,11 @@ mod tests {
         let fake_id = MessageId::new();
 
         // Marking a non-existent ID should not panic
-        store.mark_as_sent(fake_id);
+        store.mark_as_sent(fake_id, Speaker::agent("Alice", "Engineer"));
 
         // The real message should still be unsent
         assert_eq!(store.unsent_messages().len(), 1);
-        assert!(!store.get(msg_id).unwrap().sent_to_agents);
+        assert!(!store.get(msg_id).unwrap().sent_to_agents());
     }
 
     #[test]
