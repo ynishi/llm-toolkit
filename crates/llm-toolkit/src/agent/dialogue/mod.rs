@@ -742,7 +742,7 @@ impl Dialogue {
         match self.execution_model {
             ExecutionModel::Broadcast => self.run_broadcast(current_turn).await,
             ExecutionModel::Sequential => self.run_sequential(current_turn).await,
-            ExecutionModel::Mentioned => self.run_mentioned(payload, current_turn).await,
+            ExecutionModel::Mentioned => self.run_mentioned(current_turn).await,
         }
     }
 
@@ -990,7 +990,6 @@ impl Dialogue {
     /// it falls back to broadcast mode (all participants respond).
     async fn run_mentioned(
         &mut self,
-        payload: Payload,
         current_turn: usize,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
         debug!(
@@ -1003,7 +1002,7 @@ impl Dialogue {
         );
 
         // Spawn tasks for mentioned participants (or all if no mentions)
-        let mut pending = self.spawn_mentioned_tasks(current_turn, &payload);
+        let mut pending = self.spawn_mentioned_tasks(current_turn);
 
         // Collect responses and create message entities
         let mut dialogue_turns = Vec::new();
@@ -1131,7 +1130,7 @@ impl Dialogue {
             }
             ExecutionModel::Mentioned => {
                 // For Mentioned mode, spawn tasks for mentioned participants only
-                let pending = self.spawn_mentioned_tasks(current_turn, &payload);
+                let pending = self.spawn_mentioned_tasks(current_turn);
 
                 SessionState::Broadcast(BroadcastState::new(
                     pending,
@@ -1273,69 +1272,68 @@ impl Dialogue {
 
     /// Helper method to spawn tasks for mentioned participants only.
     ///
-    /// Extracts @mentions from the payload and spawns tasks only for those participants.
+    /// Extracts @mentions from unsent messages and spawns tasks only for those participants.
     /// If no mentions are found, falls back to spawning tasks for all participants (broadcast).
     ///
     /// Returns a JoinSet with pending agent executions.
     pub(super) fn spawn_mentioned_tasks(
         &mut self,
         current_turn: usize,
-        payload: &Payload,
     ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
-        // Get current intent messages: extract both Messages and Text from payload
-        // Payload can contain both types simultaneously, so we get both:
-        // 1. Structured Messages with their speakers
-        // 2. Text content as System message
-        let intent_messages = {
-            let mut messages = Vec::new();
+        // Get unsent incoming messages (for mention extraction and agent input)
+        let unsent_messages_incoming: Vec<PayloadMessage> = self
+            .message_store
+            .unsent_messages_with_origin(MessageOrigin::IncomingPayload)
+            .into_iter()
+            .map(PayloadMessage::from)
+            .collect();
 
-            // Add structured Messages from payload
-            let payload_messages = payload.to_messages();
-            messages.extend(payload_messages.iter().cloned());
+        // Collect incoming message IDs to mark as sent later
+        let incoming_message_ids: Vec<_> = self
+            .message_store
+            .unsent_messages_with_origin(MessageOrigin::IncomingPayload)
+            .iter()
+            .map(|msg| msg.id)
+            .collect();
 
-            // Add Text content as System message (if any)
-            let text = payload.to_text();
-            if !text.is_empty() {
-                messages.push(PayloadMessage::system(text));
-            }
+        // Get unsent agent-generated messages (for mention extraction and context)
+        let unsent_messages_from_agent: Vec<PayloadMessage> = self
+            .message_store
+            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
+            .into_iter()
+            .map(PayloadMessage::from)
+            .collect();
 
-            trace!(
-                target = "llm_toolkit::dialogue",
-                turn = current_turn,
-                message_count = messages.len(),
-                has_structured_messages = !payload_messages.is_empty(),
-                has_text = !payload.to_text().is_empty(),
-                "Extracted intent messages from Payload"
-            );
+        // Collect agent message IDs to mark as sent later
+        let agent_message_ids: Vec<_> = self
+            .message_store
+            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
+            .iter()
+            .map(|msg| msg.id)
+            .collect();
 
-            messages
-        };
+        trace!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            incoming_count = unsent_messages_incoming.len(),
+            agent_count = unsent_messages_from_agent.len(),
+            "Retrieved unsent messages from MessageStore for mention extraction"
+        );
 
-        // Get previous agent responses as PayloadMessages
-        let prev_agent_messages: Vec<PayloadMessage> = if current_turn > 1 {
-            self.message_store
-                .messages_for_turn(current_turn - 1)
-                .into_iter()
-                .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
-                .map(PayloadMessage::from)
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        // Extract text from messages to find mentions
+        // Extract text from unsent messages to find mentions
+        // Check both incoming messages and agent messages for mentions
         let mentions_text = {
-            let payload_text = intent_messages
+            let incoming_text = unsent_messages_incoming
                 .iter()
                 .map(|msg| msg.content.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
-            let prev_agent_text = prev_agent_messages
+            let agent_text = unsent_messages_from_agent
                 .iter()
                 .map(|msg| msg.content.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
-            format!("{}\n{}", payload_text, prev_agent_text)
+            format!("{}\n{}", incoming_text, agent_text)
         };
 
         // Get all participant names
@@ -1347,8 +1345,9 @@ impl Dialogue {
         trace!(
             target = "llm_toolkit::dialogue",
             turn = current_turn,
-            payload_text_preview = &mentions_text[..mentions_text.len().min(100)],
-            intent_message_count = intent_messages.len(),
+            mentions_text_preview = &mentions_text[..mentions_text.len().min(100)],
+            incoming_message_count = unsent_messages_incoming.len(),
+            agent_message_count = unsent_messages_from_agent.len(),
             all_participants = ?participant_names,
             mentioned = ?mentioned_names,
             "Extracting mentions for Mentioned execution mode"
@@ -1376,37 +1375,6 @@ impl Dialogue {
         // Build participant list
         let participants_info = self.get_participants_info();
 
-        // Reuse intent_messages as new_messages (already extracted above for mention detection)
-        let new_messages = intent_messages;
-
-        // Get unsent messages
-        let unsent_messages: Vec<PayloadMessage> = self
-            .message_store
-            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
-            .into_iter()
-            .map(PayloadMessage::from)
-            .collect();
-
-        // Collect message IDs to mark as sent after spawning tasks
-        let unsent_message_ids: Vec<_> = self
-            .message_store
-            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
-            .iter()
-            .map(|msg| msg.id)
-            .collect();
-
-        if !unsent_messages.is_empty() {
-            trace!(
-                target = "llm_toolkit::dialogue",
-                turn = current_turn,
-                unsent_count = unsent_messages.len(),
-                total_messages = self.message_store.len(),
-                "Retrieved unsent messages from MessageStore to distribute as context"
-            );
-        }
-
-        let mut pending = JoinSet::new();
-
         // Log execution plan summary
         let executing_participants: Vec<_> = self
             .participants
@@ -1432,6 +1400,8 @@ impl Dialogue {
             "Mention-based execution plan determined"
         );
 
+        let mut pending = JoinSet::new();
+
         // Only spawn tasks for mentioned participants (or all if no mentions)
         for (idx, participant) in self.participants.iter().enumerate() {
             let name = participant.name();
@@ -1450,30 +1420,19 @@ impl Dialogue {
             let agent = Arc::clone(&participant.agent);
             let name = name.to_string();
 
-            // Combine: [old agent responses (excluding self)] + [unsent messages (excluding self)] + [new intent]
-            let mut current_messages = prev_agent_messages
+            // Combine: [unsent agent messages (excluding self)] + [incoming messages]
+            let mut current_messages = unsent_messages_from_agent
                 .iter()
                 .filter(|msg| msg.speaker.name() != name)
                 .cloned()
                 .collect::<Vec<_>>();
 
-            // Add unsent messages, but exclude self
-            if !unsent_messages.is_empty() {
-                current_messages.extend(
-                    unsent_messages
-                        .iter()
-                        .filter(|msg| msg.speaker.name() != name)
-                        .cloned(),
-                );
-            }
-
-            current_messages.extend(new_messages.clone());
+            current_messages.extend(unsent_messages_incoming.clone());
             let messages_with_metadata = current_messages.clone();
 
             // current_messages now contains everything needed for this agent's turn:
-            // 1. Previous turn agent outputs (excluding self)
-            // 2. Unsent messages (excluding self)
-            // 3. Current Payload content (Messages + Text as System message)
+            // 1. Unsent agent messages (excluding self)
+            // 2. Incoming messages from MessageStore
             let turn_input = TurnInput::with_messages_and_context(
                 current_messages.clone(),
                 vec![], // context is now integrated into current_messages
@@ -1484,45 +1443,43 @@ impl Dialogue {
             // Create payload with Messages (for structured dialogue history)
             let messages = turn_input.to_messages();
             let mut input_payload = Payload::from_messages(messages);
+
+            // Prepend context if exists
+            if let Some(ref context) = self.context {
+                input_payload = input_payload.prepend_system(context.to_prompt());
+            }
+
+            // Apply metadata attachments
             input_payload =
                 Self::apply_metadata_attachments(input_payload, &messages_with_metadata);
 
             // Add Participants metadata
             input_payload = input_payload.with_participants(participants_info.clone());
 
-            // Copy attachments from original payload if any
-            let final_payload = if payload.has_attachments() {
-                let mut p = input_payload;
-                for attachment in payload.attachments() {
-                    p = p.with_attachment(attachment.clone());
-                }
-                p
-            } else {
-                input_payload
-            };
-
             trace!(
                 target = "llm_toolkit::dialogue",
                 turn = current_turn,
                 participant = %name,
                 message_count = current_messages.len(),
-                has_attachments = payload.has_attachments(),
                 "Spawning task for mentioned participant"
             );
 
             pending.spawn(async move {
-                let result = agent.execute(final_payload).await;
+                let result = agent.execute(input_payload).await;
                 (idx, name, result)
             });
         }
 
-        // Mark unsent messages as sent to agents
-        self.message_store.mark_all_as_sent(&unsent_message_ids);
+        // Mark all unsent messages as sent to agents (including both agent and incoming messages)
+        let mut all_message_ids = agent_message_ids;
+        all_message_ids.extend(incoming_message_ids);
 
-        if !unsent_message_ids.is_empty() {
+        self.message_store.mark_all_as_sent(&all_message_ids);
+
+        if !all_message_ids.is_empty() {
             trace!(
                 target = "llm_toolkit::dialogue",
-                marked_sent_count = unsent_message_ids.len(),
+                marked_sent_count = all_message_ids.len(),
                 "Marked messages as sent_to_agents in MessageStore"
             );
         }
@@ -5407,7 +5364,7 @@ mod tests {
             .add_participant(persona1, agent1.clone())
             .add_participant(persona2, agent2.clone());
 
-        // Turn 1: ContextInfo (no reaction)
+        // Turn 1: ContextInfo (ReactionStrategy::Always = reacts to everything)
         let context_payload = Payload::new().add_message_with_metadata(
             Speaker::System,
             "Note: Use async/await",
@@ -5415,7 +5372,7 @@ mod tests {
         );
 
         let turns = dialogue.run(context_payload).await.unwrap();
-        assert_eq!(turns.len(), 0);
+        assert_eq!(turns.len(), 2); // Both Alice and Bob react (no mentions = broadcast)
 
         // Turn 2: Mention only Alice
         let user_payload = Payload::from_messages(vec![PayloadMessage::new(
@@ -5427,22 +5384,23 @@ mod tests {
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].speaker.name(), "Alice");
 
-        // Verify Alice received ContextInfo + User message
+        // Verify Alice executed twice (Turn 1: ContextInfo, Turn 2: @mention)
         let alice_received = agent1.get_received_payloads();
-        assert_eq!(alice_received.len(), 1);
-        let alice_messages = alice_received[0].to_messages();
-        assert_eq!(alice_messages.len(), 2);
-        assert_eq!(alice_messages[0].content, "Note: Use async/await");
-        assert!(
-            alice_messages[0]
-                .metadata
-                .is_type(&MessageType::ContextInfo)
-        );
-        assert_eq!(alice_messages[1].content, "@Alice can you implement this?");
+        assert_eq!(alice_received.len(), 2); // Turn 1 + Turn 2
 
-        // Verify Bob was not called (not mentioned)
+        // Turn 1: Alice received ContextInfo only
+        let alice_turn1 = alice_received[0].to_messages();
+        assert_eq!(alice_turn1.len(), 1);
+        assert_eq!(alice_turn1[0].content, "Note: Use async/await");
+        assert!(alice_turn1[0].metadata.is_type(&MessageType::ContextInfo));
+
+        // Turn 2: Alice received previous messages + @mention
+        let alice_turn2 = alice_received[1].to_messages();
+        assert!(alice_turn2.iter().any(|m| m.content.contains("@Alice")));
+
+        // Verify Bob executed once (Turn 1 only, not mentioned in Turn 2)
         let bob_received = agent2.get_received_payloads();
-        assert_eq!(bob_received.len(), 0);
+        assert_eq!(bob_received.len(), 1); // Turn 1 only
     }
 
     #[tokio::test]
