@@ -4,7 +4,7 @@
 //! including broadcast and sequential execution modes.
 
 use super::super::{AgentError, Payload, PayloadMessage};
-use super::message::{DialogueMessage, Speaker};
+use super::message::{DialogueMessage, MessageMetadata, MessageOrigin, Speaker};
 use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel, ParticipantInfo};
 use tokio::task::JoinSet;
 use tracing::{info, trace};
@@ -151,6 +151,8 @@ impl BroadcastState {
                         let participant_name = participant.name().to_string();
 
                         // Store in MessageStore
+                        let metadata =
+                            MessageMetadata::new().with_origin(MessageOrigin::AgentGenerated);
                         let message = DialogueMessage::new(
                             self.current_turn,
                             Speaker::agent(
@@ -158,7 +160,8 @@ impl BroadcastState {
                                 participant.persona.role.clone(),
                             ),
                             content.clone(),
-                        );
+                        )
+                        .with_metadata(&metadata);
                         dialogue.message_store.push(message);
 
                         let turn = DialogueTurn {

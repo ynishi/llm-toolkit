@@ -3,6 +3,7 @@
 //! This module provides the foundation for handling file-based outputs from agents
 //! that can be consumed by subsequent agents in a workflow.
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
 
@@ -12,7 +13,7 @@ use url::Url;
 /// - Local files on the filesystem
 /// - Remote resources accessible via URLs
 /// - In-memory data with optional metadata
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Attachment {
     /// A file on the local filesystem.
     Local(PathBuf),

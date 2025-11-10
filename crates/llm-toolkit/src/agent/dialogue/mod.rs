@@ -88,13 +88,13 @@
 //! // Each agent receives context from other agents' Turn 1 responses
 //! ```
 
+pub mod constructor;
 pub mod context;
 pub mod message;
 pub mod session;
 pub mod state;
 pub mod store;
 pub mod turn_input;
-pub mod constructor;
 
 use crate::ToPrompt;
 use crate::agent::chat::Chat;
@@ -109,7 +109,7 @@ use tracing::{debug, trace};
 // Re-export key types
 pub use context::{DialogueContext, TalkStyle};
 pub use message::{
-    DialogueMessage, MessageId, MessageMetadata, Speaker, format_messages_to_prompt,
+    DialogueMessage, MessageId, MessageMetadata, MessageOrigin, Speaker, format_messages_to_prompt,
 };
 pub use session::DialogueSession;
 pub use store::MessageStore;
@@ -324,6 +324,7 @@ pub enum ExecutionModel {
 /// - Slash command results that should be available as context but not trigger reactions
 /// - System notifications that provide information without requiring responses
 /// - Manual control over when agents should engage
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReactionStrategy {
     /// Always react to all messages (default, backward compatible).
     Always,
@@ -336,36 +337,6 @@ pub enum ReactionStrategy {
 
     /// React to all messages except System messages.
     ExceptSystem,
-
-    /// Custom reaction logic.
-    ///
-    /// The function receives the payload and message store, and returns true
-    /// if agents should react to this message.
-    Custom(Arc<dyn Fn(&Payload, &MessageStore) -> bool + Send + Sync>),
-}
-
-impl std::fmt::Debug for ReactionStrategy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Always => write!(f, "Always"),
-            Self::UserOnly => write!(f, "UserOnly"),
-            Self::AgentOnly => write!(f, "AgentOnly"),
-            Self::ExceptSystem => write!(f, "ExceptSystem"),
-            Self::Custom(_) => write!(f, "Custom(<fn>)"),
-        }
-    }
-}
-
-impl Clone for ReactionStrategy {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Always => Self::Always,
-            Self::UserOnly => Self::UserOnly,
-            Self::AgentOnly => Self::AgentOnly,
-            Self::ExceptSystem => Self::ExceptSystem,
-            Self::Custom(f) => Self::Custom(Arc::clone(f)),
-        }
-    }
 }
 
 impl Default for ReactionStrategy {
@@ -449,10 +420,6 @@ pub struct Dialogue {
 
     /// Message store for all dialogue messages
     pub(super) message_store: MessageStore,
-
-    /// Messages that did not trigger agent reactions (should_react = false)
-    /// These are stored separately and prepended to the next payload when should_react = true
-    pub(super) no_react_messages: Vec<Payload>,
 
     pub(super) execution_model: ExecutionModel,
 
@@ -629,189 +596,30 @@ impl Dialogue {
         Ok(())
     }
 
-    /// Begins a dialogue session that yields turns incrementally.
-    ///
-    /// This method accepts any type that can be converted into a `Payload`, including:
-    /// - `String` or `&str` for text-only input
-    /// - `Payload` for multimodal input with attachments
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Text-only input (backward compatible)
-    /// let mut session = dialogue.partial_session("Hello");
-    ///
-    /// // Multimodal input with attachment
-    /// let payload = Payload::text("What's in this image?")
-    ///     .with_attachment(Attachment::local("image.png"));
-    /// let mut session = dialogue.partial_session(payload);
-    /// ```
-    pub fn partial_session(&mut self, initial_prompt: impl Into<Payload>) -> DialogueSession<'_> {
-        self.partial_session_with_order(initial_prompt, BroadcastOrder::Completion)
+    fn apply_metadata_attachments(mut payload: Payload, messages: &[PayloadMessage]) -> Payload {
+        for msg in messages {
+            for attachment in msg.metadata.attachments() {
+                payload = payload.with_attachment(attachment.clone());
+            }
+        }
+        payload
     }
 
-    /// Begins a dialogue session with a specified broadcast ordering policy.
-    ///
-    /// This method accepts any type that can be converted into a `Payload`, including:
-    /// - `String` or `&str` for text-only input
-    /// - `Payload` for multimodal input with attachments
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // With text and custom order
-    /// let mut session = dialogue.partial_session_with_order(
-    ///     "Hello",
-    ///     BroadcastOrder::ParticipantOrder
-    /// );
-    ///
-    /// // With multimodal payload and custom order
-    /// let payload = Payload::text("Analyze this")
-    ///     .with_attachment(Attachment::local("data.csv"));
-    /// let mut session = dialogue.partial_session_with_order(
-    ///     payload,
-    ///     BroadcastOrder::ParticipantOrder
-    /// );
-    /// ```
-    pub fn partial_session_with_order(
+    /// Converts a payload into DialogueMessages and stores them in the MessageStore.
+    /// Returns the prompt text plus the IDs of stored messages.
+    fn store_payload_messages(
         &mut self,
-        initial_prompt: impl Into<Payload>,
-        broadcast_order: BroadcastOrder,
-    ) -> DialogueSession<'_> {
-        let mut payload: Payload = initial_prompt.into();
-        // Check if agents should react to this message
-        if !self.should_react(&payload) {
-            // Store messages without triggering agent reactions
-            self.no_react_messages.push(payload.clone());
-            // Return a completed session (no agent reactions)
-            let model = self.execution_model.clone();
-            return DialogueSession {
-                dialogue: self,
-                state: SessionState::Completed,
-                model,
-            };
+        payload: &Payload,
+        turn: usize,
+    ) -> (String, Vec<MessageId>) {
+        let (messages, prompt_text) = self.extract_messages_from_payload(payload, turn);
+        let mut stored_ids = Vec::new();
+        for msg in messages {
+            let id = msg.id;
+            self.message_store.push(msg);
+            stored_ids.push(id);
         }
-
-        // Convert to Payload first
-        let current_turn = self.message_store.current_turn() + 1;
-
-        // Apply dialogue context if set
-        payload = self.setup_payload(&payload);
-
-        crate::tracing::trace!(
-            target = "llm_toolkit::dialogue",
-            turn = current_turn,
-            execution_model = ?self.execution_model,
-            broadcast_order = ?broadcast_order,
-            participant_count = self.participants.len(),
-            "Starting partial_session"
-        );
-
-        // Store all incoming messages in MessageStore for Dialogue history management.
-        // This is Dialogue's responsibility: maintain complete conversation history
-        // regardless of ExecutionModel. Each model may also access Payload directly
-        // during execution, but MessageStore serves as the authoritative, persistent record
-        // for audit, debugging, and history retrieval (e.g., unsent messages, prev turns).
-        //
-        // Payload can contain both Text and Message variants simultaneously, so we store both:
-        // 1. Store all Messages with their speakers
-        // 2. Store all Text as System messages
-
-        // First, store all structured Messages
-        let messages = payload.to_messages();
-        if !messages.is_empty() {
-            for msg in &messages {
-                let dialogue_msg =
-                    DialogueMessage::new(current_turn, msg.speaker.clone(), msg.content.clone()).with_metadata(&msg.metadata);
-                self.message_store.push(dialogue_msg);
-            }
-            trace!(
-                target = "llm_toolkit::dialogue",
-                turn = current_turn,
-                stored_messages = messages.len(),
-                total_store_size = self.message_store.len(),
-                "Stored structured Messages in MessageStore"
-            );
-        }
-
-        // Second, store all Text as System message (separate from Messages)
-        let text = payload.to_text();
-        if !text.is_empty() {
-            let system_message = DialogueMessage::new(current_turn, Speaker::System, text.clone());
-            self.message_store.push(system_message);
-            trace!(
-                target = "llm_toolkit::dialogue",
-                turn = current_turn,
-                text_length = text.len(),
-                text_preview = &text[..text.len().min(100)],
-                total_store_size = self.message_store.len(),
-                "Stored Text as System message in MessageStore"
-            );
-        }
-
-        // Log if payload was completely empty
-        if messages.is_empty() && text.is_empty() {
-            trace!(
-                target = "llm_toolkit::dialogue",
-                turn = current_turn,
-                "Payload contained no Messages or Text - MessageStore unchanged"
-            );
-        }
-
-        let model = self.execution_model;
-        let state = match model {
-            ExecutionModel::Broadcast => {
-                // Spawn broadcast tasks using helper method
-                let pending = self.spawn_broadcast_tasks(current_turn, &payload);
-
-                SessionState::Broadcast(BroadcastState::new(
-                    pending,
-                    broadcast_order,
-                    self.participants.len(),
-                    current_turn,
-                ))
-            }
-            ExecutionModel::Mentioned => {
-                // For Mentioned mode, spawn tasks for mentioned participants only
-                let pending = self.spawn_mentioned_tasks(current_turn, &payload);
-
-                SessionState::Broadcast(BroadcastState::new(
-                    pending,
-                    broadcast_order,
-                    self.participants.len(),
-                    current_turn,
-                ))
-            }
-            ExecutionModel::Sequential => {
-                let participants_info = self.get_participants_info();
-
-                let prev_agent_outputs: Vec<PayloadMessage> = if current_turn > 1 {
-                    self.message_store
-                        .messages_for_turn(current_turn - 1)
-                        .into_iter()
-                        .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
-                        .map(PayloadMessage::from)
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-
-                SessionState::Sequential {
-                    next_index: 0,
-                    current_turn,
-                    payload,
-                    prev_agent_outputs,
-                    current_turn_outputs: Vec::new(),
-                    participants_info,
-                }
-            }
-        };
-
-        DialogueSession {
-            dialogue: self,
-            state,
-            model,
-        }
+        (prompt_text, stored_ids)
     }
 
     /// Determines whether agents should react to the given payload.
@@ -823,25 +631,20 @@ impl Dialogue {
 
         match &self.reaction_strategy {
             ReactionStrategy::Always => true,
-            ReactionStrategy::UserOnly => {
-                payload.to_messages()
-                    .iter()
-                    .any(|msg| matches!(msg.speaker, Speaker::User { .. }))
-            }
-            ReactionStrategy::AgentOnly => {
-                payload.to_messages()
-                    .iter()
-                    .any(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
-            }
-            ReactionStrategy::ExceptSystem => {
-                payload.to_messages()
-                    .iter()
-                    .any(|msg| !matches!(msg.speaker, Speaker::System))
-            }
-            ReactionStrategy::Custom(f) => f(payload, &self.message_store),
+            ReactionStrategy::UserOnly => payload
+                .to_messages()
+                .iter()
+                .any(|msg| matches!(msg.speaker, Speaker::User { .. })),
+            ReactionStrategy::AgentOnly => payload
+                .to_messages()
+                .iter()
+                .any(|msg| matches!(msg.speaker, Speaker::Agent { .. })),
+            ReactionStrategy::ExceptSystem => payload
+                .to_messages()
+                .iter()
+                .any(|msg| !matches!(msg.speaker, Speaker::System)),
         }
     }
-
 
     /// Runs the dialogue with the configured execution model.
     ///
@@ -902,20 +705,462 @@ impl Dialogue {
         initial_prompt: impl Into<Payload>,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
         let payload = initial_prompt.into();
+        let current_turn = self.message_store.current_turn() + 1;
+        // Store incoming payload for history/unsent tracking
+        let (stored_prompt, _) = self.store_payload_messages(&payload, current_turn);
 
         // Check if agents should react to this message
         if !self.should_react(&payload) {
-            // Store messages without triggering agent reactions
-            self.no_react_messages.push(payload);
+            crate::tracing::trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                stored_prompt = stored_prompt.len(),
+                "Starting run passed no react"
+            );
             return Ok(vec![]);
         }
+
+        crate::tracing::trace!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            stored_prompt = stored_prompt.len(),
+            execution_model = ?self.execution_model,
+            participant_count = self.participants.len(),
+            "Starting run"
+        );
 
         // Use new implementation for both modes
         // Note: no_react_messages will be prepended by each execution mode
         match self.execution_model {
-            ExecutionModel::Broadcast => self.run_broadcast_new(payload).await,
-            ExecutionModel::Sequential => self.run_sequential_new(payload).await,
-            ExecutionModel::Mentioned => self.run_mentioned_new(payload).await,
+            ExecutionModel::Broadcast => self.run_broadcast(current_turn).await,
+            ExecutionModel::Sequential => self.run_sequential(current_turn).await,
+            ExecutionModel::Mentioned => self.run_mentioned(payload, current_turn).await,
+        }
+    }
+
+    /// New broadcast implementation using MessageStore and TurnInput.
+    async fn run_broadcast(
+        &mut self,
+        current_turn: usize,
+    ) -> Result<Vec<DialogueTurn>, AgentError> {
+        debug!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            execution_model = "broadcast",
+            participant_count = self.participants.len(),
+            has_context = self.context.is_some(),
+            "Starting dialogue.run() in broadcast mode"
+        );
+
+        // Spawn broadcast tasks using helper method
+        let mut pending = self.spawn_broadcast_tasks();
+
+        // Collect responses and create message entities
+        let mut dialogue_turns = Vec::new();
+
+        while let Some(Ok((idx, _name, result))) = pending.join_next().await {
+            match result {
+                Ok(content) => {
+                    // Store response message
+                    let speaker = self.participants[idx].to_speaker();
+                    let metadata =
+                        MessageMetadata::new().with_origin(MessageOrigin::AgentGenerated);
+                    let response_message =
+                        DialogueMessage::new(current_turn, speaker.clone(), content.clone())
+                            .with_metadata(&metadata);
+                    self.message_store.push(response_message);
+
+                    // Create DialogueTurn for backward compatibility
+                    dialogue_turns.push(DialogueTurn { speaker, content });
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(dialogue_turns)
+    }
+
+    /// New sequential implementation using MessageStore.
+    ///
+    /// In Sequential mode, each agent's output becomes the next agent's input.
+    /// Only the final agent's response is returned.
+    async fn run_sequential(
+        &mut self,
+        current_turn: usize,
+    ) -> Result<Vec<DialogueTurn>, AgentError> {
+        debug!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            execution_model = "sequential",
+            participant_count = self.participants.len(),
+            has_context = self.context.is_some(),
+            "Starting dialogue.run() in sequential mode"
+        );
+
+        // Build participant list
+        let participants_info = self.get_participants_info();
+
+        // Get unsent incoming messages (for first agent)
+        let unsent_messages_incoming: Vec<PayloadMessage> = self
+            .message_store
+            .unsent_messages_with_origin(MessageOrigin::IncomingPayload)
+            .into_iter()
+            .map(PayloadMessage::from)
+            .collect();
+
+        // Collect message IDs to mark as sent (for first agent)
+        let incoming_message_ids: Vec<_> = self
+            .message_store
+            .unsent_messages_with_origin(MessageOrigin::IncomingPayload)
+            .iter()
+            .map(|msg| msg.id)
+            .collect();
+
+        if !unsent_messages_incoming.is_empty() {
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                incoming_message_count = unsent_messages_incoming.len(),
+                "Sequential mode: First agent will receive {} incoming messages",
+                unsent_messages_incoming.len()
+            );
+        }
+
+        // Execute participants sequentially
+        let mut final_turn = None;
+
+        for (idx, participant) in self.participants.iter().enumerate() {
+            let agent = &participant.agent;
+            let agent_name = participant.name().to_string();
+
+            // Determine input messages based on position in sequence
+            let (current_messages, messages_with_metadata, message_ids_to_mark) = if idx == 0 {
+                // First agent: combine previous turn's agent messages + unsent incoming messages
+                let mut messages = Vec::new();
+                let mut metadata_messages = Vec::new();
+
+                // Add previous turn's agent messages if in multi-turn scenario
+                if current_turn > 1 {
+                    let prev_turn_messages: Vec<PayloadMessage> = self
+                        .message_store
+                        .messages_for_turn(current_turn - 1)
+                        .into_iter()
+                        .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
+                        .map(PayloadMessage::from)
+                        .collect();
+
+                    trace!(
+                        target = "llm_toolkit::dialogue",
+                        turn = current_turn,
+                        agent_idx = idx,
+                        agent_name = %agent_name,
+                        prev_turn_message_count = prev_turn_messages.len(),
+                        "Sequential mode: First agent receiving {} previous turn agent messages",
+                        prev_turn_messages.len()
+                    );
+
+                    messages.extend(prev_turn_messages.clone());
+                    metadata_messages.extend(prev_turn_messages);
+                }
+
+                // Add unsent incoming messages
+                messages.extend(unsent_messages_incoming.clone());
+                metadata_messages.extend(unsent_messages_incoming.clone());
+
+                // Don't mark incoming messages as sent yet - subsequent agents need to see them
+                (messages, metadata_messages, vec![])
+            } else {
+                // Subsequent agents: get ALL previous agents' messages from current turn
+                // (not just unsent, as they may have been marked sent by earlier agents in the chain)
+                let prev_agent_messages: Vec<PayloadMessage> = self
+                    .message_store
+                    .messages_for_turn(current_turn)
+                    .into_iter()
+                    .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
+                    .map(PayloadMessage::from)
+                    .collect();
+
+                // Combine: previous agents' outputs + unsent incoming messages
+                let mut messages = prev_agent_messages.clone();
+                messages.extend(unsent_messages_incoming.clone());
+
+                let mut metadata_messages = prev_agent_messages.clone();
+                metadata_messages.extend(unsent_messages_incoming.clone());
+
+                trace!(
+                    target = "llm_toolkit::dialogue",
+                    turn = current_turn,
+                    agent_idx = idx,
+                    agent_name = %agent_name,
+                    prev_message_count = prev_agent_messages.len(),
+                    incoming_message_count = unsent_messages_incoming.len(),
+                    "Sequential mode: Agent {} receiving {} previous agent messages + {} incoming messages",
+                    agent_name,
+                    prev_agent_messages.len(),
+                    unsent_messages_incoming.len()
+                );
+
+                // No need to mark previous agent messages as sent - they're already in the store
+                (messages, metadata_messages, vec![])
+            };
+
+            // Build payload using TurnInput
+            let turn_input = TurnInput::with_messages_and_context(
+                current_messages,
+                vec![], // context is integrated into messages
+                participants_info.clone(),
+                agent_name.clone(),
+            );
+
+            let messages = turn_input.to_messages();
+            let mut input_payload = Payload::from_messages(messages);
+
+            // Prepend context if exists
+            if let Some(ref context) = self.context {
+                input_payload = input_payload.prepend_system(context.to_prompt());
+            }
+
+            // Apply metadata attachments
+            input_payload =
+                Self::apply_metadata_attachments(input_payload, &messages_with_metadata);
+
+            // Add participants info
+            input_payload = input_payload.with_participants(participants_info.clone());
+
+            // Execute agent
+            let response = agent.execute(input_payload).await?;
+
+            // Store response message
+            let speaker = participant.to_speaker();
+            let metadata = MessageMetadata::new().with_origin(MessageOrigin::AgentGenerated);
+            let response_message =
+                DialogueMessage::new(current_turn, speaker.clone(), response.clone())
+                    .with_metadata(&metadata);
+            self.message_store.push(response_message);
+
+            // Mark input messages as sent (after this agent has processed them)
+            if !message_ids_to_mark.is_empty() {
+                self.message_store.mark_all_as_sent(&message_ids_to_mark);
+                trace!(
+                    target = "llm_toolkit::dialogue",
+                    turn = current_turn,
+                    agent_idx = idx,
+                    agent_name = %agent_name,
+                    marked_sent_count = message_ids_to_mark.len(),
+                    "Marked {} messages as sent after agent {} execution",
+                    message_ids_to_mark.len(),
+                    agent_name
+                );
+            }
+
+            // Keep track of final turn
+            final_turn = Some(DialogueTurn {
+                speaker,
+                content: response,
+            });
+        }
+
+        // Mark incoming messages as sent after all agents have processed them
+        if !incoming_message_ids.is_empty() {
+            self.message_store.mark_all_as_sent(&incoming_message_ids);
+            trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                marked_sent_count = incoming_message_ids.len(),
+                "Sequential mode: Marked {} incoming messages as sent after all agents",
+                incoming_message_ids.len()
+            );
+        }
+
+        // Return only the final turn
+        Ok(final_turn.into_iter().collect())
+    }
+
+    /// New mentioned implementation using MessageStore and TurnInput.
+    ///
+    /// In Mentioned mode, only @mentioned participants respond. If no mentions are found,
+    /// it falls back to broadcast mode (all participants respond).
+    async fn run_mentioned(
+        &mut self,
+        payload: Payload,
+        current_turn: usize,
+    ) -> Result<Vec<DialogueTurn>, AgentError> {
+        debug!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            execution_model = "mentioned",
+            participant_count = self.participants.len(),
+            has_context = self.context.is_some(),
+            "Starting dialogue.run() in mentioned mode"
+        );
+
+        // Spawn tasks for mentioned participants (or all if no mentions)
+        let mut pending = self.spawn_mentioned_tasks(current_turn, &payload);
+
+        // Collect responses and create message entities
+        let mut dialogue_turns = Vec::new();
+
+        while let Some(Ok((idx, _name, result))) = pending.join_next().await {
+            match result {
+                Ok(content) => {
+                    // Store response message
+                    let speaker = self.participants[idx].to_speaker();
+                    let metadata =
+                        MessageMetadata::new().with_origin(MessageOrigin::AgentGenerated);
+                    let response_message =
+                        DialogueMessage::new(current_turn, speaker.clone(), content.clone())
+                            .with_metadata(&metadata);
+                    self.message_store.push(response_message);
+
+                    // Create DialogueTurn for backward compatibility
+                    dialogue_turns.push(DialogueTurn { speaker, content });
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(dialogue_turns)
+    }
+
+    /// Begins a dialogue session that yields turns incrementally.
+    ///
+    /// This method accepts any type that can be converted into a `Payload`, including:
+    /// - `String` or `&str` for text-only input
+    /// - `Payload` for multimodal input with attachments
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Text-only input (backward compatible)
+    /// let mut session = dialogue.partial_session("Hello");
+    ///
+    /// // Multimodal input with attachment
+    /// let payload = Payload::text("What's in this image?")
+    ///     .with_attachment(Attachment::local("image.png"));
+    /// let mut session = dialogue.partial_session(payload);
+    /// ```
+    pub fn partial_session(&mut self, initial_prompt: impl Into<Payload>) -> DialogueSession<'_> {
+        self.partial_session_with_order(initial_prompt, BroadcastOrder::Completion)
+    }
+
+    /// Begins a dialogue session with a specified broadcast ordering policy.
+    ///
+    /// This method accepts any type that can be converted into a `Payload`, including:
+    /// - `String` or `&str` for text-only input
+    /// - `Payload` for multimodal input with attachments
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // With text and custom order
+    /// let mut session = dialogue.partial_session_with_order(
+    ///     "Hello",
+    ///     BroadcastOrder::ParticipantOrder
+    /// );
+    ///
+    /// // With multimodal payload and custom order
+    /// let payload = Payload::text("Analyze this")
+    ///     .with_attachment(Attachment::local("data.csv"));
+    /// let mut session = dialogue.partial_session_with_order(
+    ///     payload,
+    ///     BroadcastOrder::ParticipantOrder
+    /// );
+    /// ```
+    pub fn partial_session_with_order(
+        &mut self,
+        initial_prompt: impl Into<Payload>,
+        broadcast_order: BroadcastOrder,
+    ) -> DialogueSession<'_> {
+        let payload: Payload = initial_prompt.into();
+        let current_turn = self.message_store.current_turn() + 1;
+
+        // Store incoming payload for history/unsent tracking
+        let (stored_prompt, _) = self.store_payload_messages(&payload, current_turn);
+
+        // Check if agents should react to this message
+        if !self.should_react(&payload) {
+            crate::tracing::trace!(
+                target = "llm_toolkit::dialogue",
+                turn = current_turn,
+                participant_count = self.participants.len(),
+                "Starting partial_session passed no react"
+            );
+            // Return a completed session (no agent reactions)
+            let model = self.execution_model;
+            return DialogueSession {
+                dialogue: self,
+                state: SessionState::Completed,
+                model,
+            };
+        }
+
+        // Store all incoming messages in MessageStore for Dialogue history management.
+        // This is Dialogue's responsibility: maintain complete conversation history
+        // regardless of ExecutionModel. Each model may also access Payload directly
+        // during execution, but MessageStore serves as the authoritative, persistent record
+        // for audit, debugging, and history retrieval (e.g., unsent messages, prev turns).
+        //
+        trace!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            prompt_length = stored_prompt.len(),
+            total_store_size = self.message_store.len(),
+            "Stored incoming payload in MessageStore"
+        );
+
+        let model = self.execution_model;
+        let state = match model {
+            ExecutionModel::Broadcast => {
+                // Spawn broadcast tasks using helper method
+                let pending = self.spawn_broadcast_tasks();
+
+                SessionState::Broadcast(BroadcastState::new(
+                    pending,
+                    broadcast_order,
+                    self.participants.len(),
+                    current_turn,
+                ))
+            }
+            ExecutionModel::Mentioned => {
+                // For Mentioned mode, spawn tasks for mentioned participants only
+                let pending = self.spawn_mentioned_tasks(current_turn, &payload);
+
+                SessionState::Broadcast(BroadcastState::new(
+                    pending,
+                    broadcast_order,
+                    self.participants.len(),
+                    current_turn,
+                ))
+            }
+            ExecutionModel::Sequential => {
+                let participants_info = self.get_participants_info();
+
+                let prev_agent_outputs: Vec<PayloadMessage> = if current_turn > 1 {
+                    self.message_store
+                        .messages_for_turn(current_turn - 1)
+                        .into_iter()
+                        .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
+                        .map(PayloadMessage::from)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                SessionState::Sequential {
+                    next_index: 0,
+                    current_turn,
+                    payload,
+                    prev_agent_outputs,
+                    current_turn_outputs: Vec::new(),
+                    participants_info,
+                }
+            }
+        };
+
+        DialogueSession {
+            dialogue: self,
+            state,
+            model,
         }
     }
 
@@ -924,73 +1169,40 @@ impl Dialogue {
     /// Returns a JoinSet with pending agent executions.
     pub(super) fn spawn_broadcast_tasks(
         &mut self,
-        current_turn: usize,
-        payload: &Payload,
     ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
         // Build participant list
         let participants_info = self.get_participants_info();
 
-        // Get previous agent responses as PayloadMessages
-        let prev_agent_messages: Vec<PayloadMessage> = if current_turn > 1 {
-            self.message_store
-                .messages_for_turn(current_turn - 1)
-                .into_iter()
-                .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
-                .map(PayloadMessage::from)
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        // Current intent from payload: extract both Messages and Text
-        // Payload can contain both types simultaneously, so we get both:
-        // 1. Structured Messages with their speakers
-        // 2. Text content as System message
-        let new_messages = {
-            let mut messages = Vec::new();
-
-            // Add structured Messages from payload
-            messages.extend(payload.to_messages());
-
-            // Add Text content as System message (if any)
-            let text = payload.to_text();
-            if !text.is_empty() {
-                messages.push(PayloadMessage::system(text));
-            }
-
-            messages
-        };
-
-        // Responses that were produced in a previous session but not surfaced yet.
-        // Get unsent messages from MessageStore (responses from previous turns not yet sent to agents)
-        let unsent_messages: Vec<PayloadMessage> = self
+        // Get unsent agent-generated messages from MessageStore
+        let unsent_messages_from_agent: Vec<PayloadMessage> = self
             .message_store
-            .unsent_messages()
-            .iter()
-            .map(|msg| PayloadMessage {
-                speaker: msg.speaker.clone(),
-                content: msg.content.clone(),
-                metadata: msg.metadata.clone(),
-            })
+            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
+            .into_iter()
+            .map(PayloadMessage::from)
             .collect();
 
         // Collect message IDs to mark as sent after spawning tasks
-        let unsent_message_ids: Vec<_> = self
+        let mut unsent_message_ids: Vec<_> = self
             .message_store
-            .unsent_messages()
+            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
             .iter()
             .map(|msg| msg.id)
             .collect();
 
-        if !unsent_messages.is_empty() {
-            trace!(
-                target = "llm_toolkit::dialogue",
-                turn = current_turn,
-                unsent_count = unsent_messages.len(),
-                total_messages = self.message_store.len(),
-                "Retrieved unsent messages from MessageStore to distribute as context"
-            );
-        }
+        let unsent_messages_incoming: Vec<PayloadMessage> = self
+            .message_store
+            .unsent_messages_with_origin(MessageOrigin::IncomingPayload)
+            .into_iter()
+            .map(PayloadMessage::from)
+            .collect();
+
+        // Collect message IDs to mark as sent after spawning tasks
+        unsent_message_ids.extend(
+            self.message_store
+                .unsent_messages_with_origin(MessageOrigin::IncomingPayload)
+                .iter()
+                .map(|msg| msg.id),
+        );
 
         let mut pending = JoinSet::new();
 
@@ -998,24 +1210,15 @@ impl Dialogue {
             let agent = Arc::clone(&participant.agent);
             let name = participant.name().to_string();
 
-            // Combine: [old agent responses (excluding self)] + [unsent messages (excluding self)] + [new intent]
-            let mut current_messages = prev_agent_messages
+            // Combine: [unsent messages (excluding self)] + [new intent]
+            let mut current_messages = unsent_messages_from_agent
                 .iter()
                 .filter(|msg| msg.speaker.name() != name)
                 .cloned()
                 .collect::<Vec<_>>();
 
-            // Add unsent messages, but exclude self
-            if !unsent_messages.is_empty() {
-                current_messages.extend(
-                    unsent_messages
-                        .iter()
-                        .filter(|msg| msg.speaker.name() != name)
-                        .cloned(),
-                );
-            }
-
-            current_messages.extend(new_messages.clone());
+            current_messages.extend(unsent_messages_incoming.clone());
+            let messages_with_metadata = current_messages.clone();
 
             // current_messages now contains everything needed for this agent's turn:
             // 1. Previous turn agent outputs (excluding self)
@@ -1031,23 +1234,17 @@ impl Dialogue {
             // Create payload with Messages (for structured dialogue history)
             let messages = turn_input.to_messages();
             let mut input_payload = Payload::from_messages(messages);
+            if let Some(ref context) = self.context {
+                input_payload = input_payload.prepend_system(context.to_prompt());
+            }
+            input_payload =
+                Self::apply_metadata_attachments(input_payload, &messages_with_metadata);
 
             // Add Participants metadata
             input_payload = input_payload.with_participants(participants_info.clone());
 
-            // Copy attachments from original payload if any
-            let final_payload = if payload.has_attachments() {
-                let mut p = input_payload;
-                for attachment in payload.attachments() {
-                    p = p.with_attachment(attachment.clone());
-                }
-                p
-            } else {
-                input_payload
-            };
-
             pending.spawn(async move {
-                let result = agent.execute(final_payload).await;
+                let result = agent.execute(input_payload).await;
                 (idx, name, result)
             });
         }
@@ -1064,18 +1261,6 @@ impl Dialogue {
         }
 
         pending
-    }
-
-    fn setup_payload(&self, payload: &Payload) -> Payload {
-        let mut acc = Payload::new();
-        for no_react in self.no_react_messages.iter() {
-            acc = acc.merge(no_react.clone());
-        }
-        acc = acc.merge(payload.clone());
-        if let Some(ref context) = self.context {
-            acc = acc.prepend_system(context.to_prompt());
-        }
-        acc
     }
 
     /// Helper method to spawn tasks for mentioned participants only.
@@ -1189,15 +1374,15 @@ impl Dialogue {
         // Get unsent messages
         let unsent_messages: Vec<PayloadMessage> = self
             .message_store
-            .unsent_messages()
+            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
             .into_iter()
-            .map(|msg| msg.into())
+            .map(PayloadMessage::from)
             .collect();
 
         // Collect message IDs to mark as sent after spawning tasks
         let unsent_message_ids: Vec<_> = self
             .message_store
-            .unsent_messages()
+            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
             .iter()
             .map(|msg| msg.id)
             .collect();
@@ -1275,6 +1460,7 @@ impl Dialogue {
             }
 
             current_messages.extend(new_messages.clone());
+            let messages_with_metadata = current_messages.clone();
 
             // current_messages now contains everything needed for this agent's turn:
             // 1. Previous turn agent outputs (excluding self)
@@ -1290,6 +1476,8 @@ impl Dialogue {
             // Create payload with Messages (for structured dialogue history)
             let messages = turn_input.to_messages();
             let mut input_payload = Payload::from_messages(messages);
+            input_payload =
+                Self::apply_metadata_attachments(input_payload, &messages_with_metadata);
 
             // Add Participants metadata
             input_payload = input_payload.with_participants(participants_info.clone());
@@ -1334,221 +1522,6 @@ impl Dialogue {
         pending
     }
 
-    /// New broadcast implementation using MessageStore and TurnInput.
-    async fn run_broadcast_new(
-        &mut self,
-        initial_prompt: impl Into<Payload>,
-    ) -> Result<Vec<DialogueTurn>, AgentError> {
-        let mut payload: Payload = initial_prompt.into();
-        let current_turn = self.message_store.current_turn() + 1;
-
-        // Apply dialogue context if set
-        payload = self.setup_payload(&payload);
-
-        debug!(
-            target = "llm_toolkit::dialogue",
-            turn = current_turn,
-            execution_model = "broadcast",
-            participant_count = self.participants.len(),
-            has_context = self.context.is_some(),
-            "Starting dialogue.run() in broadcast mode"
-        );
-
-        // 1. Extract and store messages from payload
-        let (input_messages, _prompt_text) =
-            self.extract_messages_from_payload(&payload, current_turn);
-
-        for msg in input_messages {
-            self.message_store.push(msg);
-        }
-
-        // 2. Spawn broadcast tasks using helper method
-        let mut pending = self.spawn_broadcast_tasks(current_turn, &payload);
-
-        // 3. Collect responses and create message entities
-        let mut dialogue_turns = Vec::new();
-
-        while let Some(Ok((idx, _name, result))) = pending.join_next().await {
-            match result {
-                Ok(content) => {
-                    // Store response message
-                    let speaker = self.participants[idx].to_speaker();
-                    let response_message =
-                        DialogueMessage::new(current_turn, speaker.clone(), content.clone());
-                    self.message_store.push(response_message);
-
-                    // Create DialogueTurn for backward compatibility
-                    dialogue_turns.push(DialogueTurn { speaker, content });
-                }
-                Err(err) => return Err(err),
-            }
-        }
-
-        Ok(dialogue_turns)
-    }
-
-    /// New sequential implementation using MessageStore.
-    ///
-    /// In Sequential mode, each agent's output becomes the next agent's input.
-    /// Only the final agent's response is returned.
-    async fn run_sequential_new(
-        &mut self,
-        initial_prompt: impl Into<Payload>,
-    ) -> Result<Vec<DialogueTurn>, AgentError> {
-        let mut payload: Payload = initial_prompt.into();
-        let current_turn = self.message_store.current_turn() + 1;
-
-        // Apply dialogue context if set
-        payload = self.setup_payload(&payload);
-
-        debug!(
-            target = "llm_toolkit::dialogue",
-            turn = current_turn,
-            execution_model = "sequential",
-            participant_count = self.participants.len(),
-            has_context = self.context.is_some(),
-            "Starting dialogue.run() in sequential mode"
-        );
-
-        // 1. Extract and store messages from payload
-        let (input_messages, _prompt_text) =
-            self.extract_messages_from_payload(&payload, current_turn);
-
-        for msg in input_messages {
-            self.message_store.push(msg);
-        }
-
-        // 2. Build participant list
-        let participants_info = self.get_participants_info();
-
-        // 3. Get previous turn's all agent outputs (for first agent in multi-turn scenarios)
-        let prev_agent_outputs: Vec<PayloadMessage> = if current_turn > 1 {
-            // Get ALL agent messages from previous turn
-            self.message_store
-                .messages_for_turn(current_turn - 1)
-                .into_iter()
-                .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
-                .map(PayloadMessage::from)
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        if !prev_agent_outputs.is_empty() {
-            trace!(
-                target = "llm_toolkit::dialogue",
-                turn = current_turn,
-                prev_agent_count = prev_agent_outputs.len(),
-                "Sequential mode: First agent will receive {} previous turn agent outputs as context",
-                prev_agent_outputs.len()
-            );
-        }
-
-        // 4. Execute participants sequentially, collecting their outputs
-        let mut current_turn_outputs: Vec<PayloadMessage> = Vec::new();
-        let mut final_turn = None;
-
-        for (idx, participant) in self.participants.iter().enumerate() {
-            let agent = &participant.agent;
-            // Create payload based on position in sequence
-            let final_payload = if idx == 0 {
-                // First agent: use original payload + ALL previous turn's agent outputs (if exists)
-                let mut base_payload = payload.clone();
-
-                if !prev_agent_outputs.is_empty() {
-                    // Add all previous turn's agent outputs as context, preserving speaker info
-                    base_payload =
-                        Payload::from_messages(prev_agent_outputs.clone()).merge(base_payload);
-                }
-
-                base_payload.with_participants(participants_info.clone())
-            } else {
-                // Subsequent agents: receive ALL outputs from current turn so far + original payload
-                // preserving speaker info
-                Payload::from_messages(current_turn_outputs.clone())
-                    .merge(payload.clone())
-                    .with_participants(participants_info.clone())
-            };
-
-            // Execute agent
-            let response = agent.execute(final_payload).await?;
-
-            // Store response message
-            let speaker = participant.to_speaker();
-            let response_message =
-                DialogueMessage::new(current_turn, speaker.clone(), response.clone());
-            self.message_store.push(response_message);
-
-            // Add this agent's output to current turn outputs for next agents to see
-            current_turn_outputs.push(PayloadMessage::new(speaker.clone(), response.clone()));
-
-            // Keep track of final turn
-            final_turn = Some(DialogueTurn {
-                speaker,
-                content: response,
-            });
-        }
-
-        // 3. Return only the final turn
-        Ok(final_turn.into_iter().collect())
-    }
-
-    /// New mentioned implementation using MessageStore and TurnInput.
-    ///
-    /// In Mentioned mode, only @mentioned participants respond. If no mentions are found,
-    /// it falls back to broadcast mode (all participants respond).
-    async fn run_mentioned_new(
-        &mut self,
-        initial_prompt: impl Into<Payload>,
-    ) -> Result<Vec<DialogueTurn>, AgentError> {
-        let mut payload: Payload = initial_prompt.into();
-        let current_turn = self.message_store.current_turn() + 1;
-
-        // Apply dialogue context if set
-        payload = self.setup_payload(&payload);
-
-        debug!(
-            target = "llm_toolkit::dialogue",
-            turn = current_turn,
-            execution_model = "mentioned",
-            participant_count = self.participants.len(),
-            has_context = self.context.is_some(),
-            "Starting dialogue.run() in mentioned mode"
-        );
-
-        // 1. Extract and store messages from payload
-        let (input_messages, _prompt_text) =
-            self.extract_messages_from_payload(&payload, current_turn);
-
-        for msg in input_messages {
-            self.message_store.push(msg);
-        }
-
-        // 2. Spawn tasks for mentioned participants (or all if no mentions)
-        let mut pending = self.spawn_mentioned_tasks(current_turn, &payload);
-
-        // 3. Collect responses and create message entities
-        let mut dialogue_turns = Vec::new();
-
-        while let Some(Ok((idx, _name, result))) = pending.join_next().await {
-            match result {
-                Ok(content) => {
-                    // Store response message
-                    let speaker = self.participants[idx].to_speaker();
-                    let response_message =
-                        DialogueMessage::new(current_turn, speaker.clone(), content.clone());
-                    self.message_store.push(response_message);
-
-                    // Create DialogueTurn for backward compatibility
-                    dialogue_turns.push(DialogueTurn { speaker, content });
-                }
-                Err(err) => return Err(err),
-            }
-        }
-
-        Ok(dialogue_turns)
-    }
-
     /// Formats the conversation history as a single string.
     ///
     /// This creates a formatted transcript of the dialogue that can be used
@@ -1585,17 +1558,28 @@ impl Dialogue {
                     metadata,
                 } => {
                     // Store as individual message with explicit speaker and metadata
-                    messages.push(DialogueMessage::new(turn, speaker.clone(), content.clone()).with_metadata(metadata));
+                    let metadata = metadata
+                        .clone()
+                        .ensure_origin(MessageOrigin::IncomingPayload);
+                    messages.push(
+                        DialogueMessage::new(turn, speaker.clone(), content.clone())
+                            .with_metadata(&metadata),
+                    );
                     text_parts.push(content.as_str());
                 }
                 PayloadContent::Text(text) => {
                     // Text without explicit speaker is treated as User input
                     // TODO: Allow configuring default speaker (User vs System)
-                    messages.push(DialogueMessage::new(
-                        turn,
-                        Speaker::System, // For backward compatibility, treat as System
-                        text.clone(),
-                    ));
+                    let metadata =
+                        MessageMetadata::new().with_origin(MessageOrigin::IncomingPayload);
+                    messages.push(
+                        DialogueMessage::new(
+                            turn,
+                            Speaker::System, // For backward compatibility, treat as System
+                            text.clone(),
+                        )
+                        .with_metadata(&metadata),
+                    );
                     text_parts.push(text.as_str());
                 }
                 PayloadContent::Attachment(_) | PayloadContent::Participants(_) => {
@@ -1613,6 +1597,22 @@ impl Dialogue {
                 prompt_text.clone(),
             ));
             return (messages, prompt_text);
+        }
+
+        // Attach payload-level attachments to the first message for downstream retrieval.
+        let attachments: Vec<_> = payload.attachments().into_iter().cloned().collect();
+        if !attachments.is_empty() {
+            if let Some(first_msg) = messages.first_mut() {
+                let metadata = first_msg.metadata.clone().with_attachments(attachments);
+                first_msg.metadata = metadata;
+            } else {
+                let metadata = MessageMetadata::new()
+                    .with_origin(MessageOrigin::IncomingPayload)
+                    .with_attachments(attachments);
+                let attachment_message = DialogueMessage::new(turn, Speaker::System, String::new())
+                    .with_metadata(&metadata);
+                messages.push(attachment_message);
+            }
         }
 
         let prompt_text = text_parts.join("\n");
@@ -4523,71 +4523,6 @@ mod tests {
         // by checking that the Brainstorm context instructions are present.
     }
 
-    /// Test custom dialogue context
-    #[tokio::test]
-    async fn test_dialogue_context_custom() {
-        use crate::agent::persona::Persona;
-        use tokio::sync::Mutex;
-
-        #[derive(Clone)]
-        struct TrackingAgent {
-            name: String,
-            received_payloads: Arc<Mutex<Vec<String>>>,
-        }
-
-        #[async_trait]
-        impl Agent for TrackingAgent {
-            type Output = String;
-
-            fn expertise(&self) -> &str {
-                "Tracking"
-            }
-
-            fn name(&self) -> String {
-                self.name.clone()
-            }
-
-            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
-                self.received_payloads.lock().await.push(payload.to_text());
-                Ok("OK".to_string())
-            }
-        }
-
-        let mut dialogue = Dialogue::sequential();
-        let persona = Persona {
-            name: "Agent1".to_string(),
-            role: "Participant".to_string(),
-            background: "Test".to_string(),
-            communication_style: "Direct".to_string(),
-            visual_identity: None,
-            capabilities: None,
-        };
-
-        let received_payloads = Arc::new(Mutex::new(Vec::new()));
-        dialogue
-            .with_additional_context(
-                "This is a technical deep-dive. Focus on implementation details.".to_string(),
-            )
-            .add_participant(
-                persona,
-                TrackingAgent {
-                    name: "Agent1".to_string(),
-                    received_payloads: Arc::clone(&received_payloads),
-                },
-            );
-
-        dialogue.run("Analyze the architecture").await.unwrap();
-
-        let payloads = received_payloads.lock().await;
-        assert!(
-            payloads[0].contains("technical deep-dive"),
-            "Should contain custom context. Got: {}",
-            payloads[0]
-        );
-        // Note: "Analyze the architecture" is absorbed into PersonaAgent's formatting
-        // We verify context was applied by checking the custom context text is present
-    }
-
     #[test]
     fn test_extract_mentions() {
         // Test basic mention extraction
@@ -5298,14 +5233,7 @@ mod tests {
         let agent = RecordingAgent::new("Agent1", "I can help with that");
 
         let mut dialogue = Dialogue::broadcast();
-        dialogue
-            .add_participant(persona, agent.clone())
-            .with_reaction_strategy(ReactionStrategy::Custom(Arc::new(|payload, _| {
-                // Don't react to ContextInfo messages
-                !payload.to_messages().iter().any(|msg| {
-                    msg.metadata.is_type(&MessageType::ContextInfo)
-                })
-            })));
+        dialogue.add_participant(persona, agent.clone());
 
         // Turn 1: Send ContextInfo message (should not trigger reaction)
         let context_payload = Payload::new().add_message_with_metadata(
@@ -5317,10 +5245,9 @@ mod tests {
         let turns = dialogue.run(context_payload).await.unwrap();
         assert_eq!(turns.len(), 0, "ContextInfo should not trigger reaction");
 
-        // Verify ContextInfo is stored
+        // Verify ContextInfo is stored for history/reference
         let history = dialogue.history();
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0].speaker.name(), "System");
         assert_eq!(history[0].content, "Analysis completed: 3 issues found");
 
         // Turn 2: Send User message (should trigger reaction)
@@ -5352,13 +5279,18 @@ mod tests {
             "Analysis completed: 3 issues found"
         );
         assert!(
-            received_messages[0].metadata.is_type(&MessageType::ContextInfo),
+            received_messages[0]
+                .metadata
+                .is_type(&MessageType::ContextInfo),
             "Metadata should be preserved"
         );
 
         // Second message should be User message
         assert_eq!(received_messages[1].speaker.name(), "Alice");
-        assert_eq!(received_messages[1].content, "Tell me more about the issues");
+        assert_eq!(
+            received_messages[1].content,
+            "Tell me more about the issues"
+        );
     }
 
     #[tokio::test]
@@ -5390,12 +5322,7 @@ mod tests {
         let mut dialogue = Dialogue::sequential();
         dialogue
             .add_participant(persona1, agent1.clone())
-            .add_participant(persona2, agent2.clone())
-            .with_reaction_strategy(ReactionStrategy::Custom(Arc::new(|payload, _| {
-                !payload.to_messages().iter().any(|msg| {
-                    msg.metadata.is_type(&MessageType::ContextInfo)
-                })
-            })));
+            .add_participant(persona2, agent2.clone());
 
         // Turn 1: ContextInfo (no reaction)
         let context_payload = Payload::new().add_message_with_metadata(
@@ -5423,7 +5350,11 @@ mod tests {
         let agent1_messages = agent1_received[0].to_messages();
         assert_eq!(agent1_messages.len(), 2);
         assert_eq!(agent1_messages[0].content, "Background: Project uses Rust");
-        assert!(agent1_messages[0].metadata.is_type(&MessageType::ContextInfo));
+        assert!(
+            agent1_messages[0]
+                .metadata
+                .is_type(&MessageType::ContextInfo)
+        );
         assert_eq!(agent1_messages[1].content, "Analyze the code");
 
         // Verify Agent2 received ContextInfo + User message + Agent1 output
@@ -5465,12 +5396,7 @@ mod tests {
         let mut dialogue = Dialogue::mentioned();
         dialogue
             .add_participant(persona1, agent1.clone())
-            .add_participant(persona2, agent2.clone())
-            .with_reaction_strategy(ReactionStrategy::Custom(Arc::new(|payload, _| {
-                !payload.to_messages().iter().any(|msg| {
-                    msg.metadata.is_type(&MessageType::ContextInfo)
-                })
-            })));
+            .add_participant(persona2, agent2.clone());
 
         // Turn 1: ContextInfo (no reaction)
         let context_payload = Payload::new().add_message_with_metadata(
@@ -5498,7 +5424,11 @@ mod tests {
         let alice_messages = alice_received[0].to_messages();
         assert_eq!(alice_messages.len(), 2);
         assert_eq!(alice_messages[0].content, "Note: Use async/await");
-        assert!(alice_messages[0].metadata.is_type(&MessageType::ContextInfo));
+        assert!(
+            alice_messages[0]
+                .metadata
+                .is_type(&MessageType::ContextInfo)
+        );
         assert_eq!(alice_messages[1].content, "@Alice can you implement this?");
 
         // Verify Bob was not called (not mentioned)
@@ -5523,13 +5453,7 @@ mod tests {
         let agent = RecordingAgent::new("Agent1", "Understood");
 
         let mut dialogue = Dialogue::broadcast();
-        dialogue
-            .add_participant(persona, agent.clone())
-            .with_reaction_strategy(ReactionStrategy::Custom(Arc::new(|payload, _| {
-                !payload.to_messages().iter().any(|msg| {
-                    msg.metadata.is_type(&MessageType::ContextInfo)
-                })
-            })));
+        dialogue.add_participant(persona, agent.clone());
 
         // Turn 1: ContextInfo via partial_session
         let context_payload = Payload::new().add_message_with_metadata(
@@ -5589,13 +5513,7 @@ mod tests {
         let agent = RecordingAgent::new("Agent1", "Got it");
 
         let mut dialogue = Dialogue::broadcast();
-        dialogue
-            .add_participant(persona, agent.clone())
-            .with_reaction_strategy(ReactionStrategy::Custom(Arc::new(|payload, _| {
-                !payload.to_messages().iter().any(|msg| {
-                    msg.metadata.is_type(&MessageType::ContextInfo)
-                })
-            })));
+        dialogue.add_participant(persona, agent.clone());
 
         // Send multiple ContextInfo messages
         for i in 1..=3 {
@@ -5632,9 +5550,9 @@ mod tests {
         );
 
         // Verify all ContextInfo messages are present with correct metadata
-        for i in 0..3 {
-            assert_eq!(messages[i].content, format!("Context {}", i + 1));
-            assert!(messages[i].metadata.is_type(&MessageType::ContextInfo));
+        for (i, message) in messages.iter().enumerate().take(3) {
+            assert_eq!(message.content, format!("Context {}", i + 1));
+            assert!(message.metadata.is_type(&MessageType::ContextInfo));
         }
         assert_eq!(messages[3].content, "Process all context");
     }

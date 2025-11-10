@@ -1,4 +1,14 @@
-use crate::{Agent, AgentError, ToPrompt, agent::{dialogue::{Dialogue, DialogueBlueprint, DialogueContext, DialogueMessage, DialogueTurn, ExecutionModel, MessageId, MessageStore, ReactionStrategy, Speaker, TalkStyle, format_dialogue_history_as_text, message}, persona::{PersonaTeam, PersonaTeamGenerationRequest}}};
+use crate::{
+    Agent, AgentError, ToPrompt,
+    agent::{
+        dialogue::{
+            Dialogue, DialogueBlueprint, DialogueContext, DialogueMessage, DialogueTurn,
+            ExecutionModel, MessageId, MessageStore, ReactionStrategy, Speaker, TalkStyle,
+            format_dialogue_history_as_text, message,
+        },
+        persona::{PersonaTeam, PersonaTeamGenerationRequest},
+    },
+};
 
 impl Dialogue {
     /// Creates a new dialogue with the specified execution model.
@@ -8,7 +18,6 @@ impl Dialogue {
         Self {
             participants: Vec::new(),
             message_store: MessageStore::new(),
-            no_react_messages: Vec::new(),
             execution_model,
             context: None,
             reaction_strategy: ReactionStrategy::default(),
@@ -213,7 +222,7 @@ impl Dialogue {
         self
     }
 
-        /// Creates a Dialogue from a blueprint.
+    /// Creates a Dialogue from a blueprint.
     ///
     /// If the blueprint contains pre-defined participants, they are used directly.
     /// Otherwise, an LLM generates a team of personas based on the blueprint's context.
@@ -475,5 +484,4 @@ impl Dialogue {
         self.context = Some(context);
         self
     }
-
 }

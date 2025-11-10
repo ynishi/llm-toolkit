@@ -5,7 +5,7 @@
 //! and responsive UIs.
 
 use super::super::{AgentError, Payload, PayloadMessage};
-use super::message::{DialogueMessage, Speaker};
+use super::message::{DialogueMessage, MessageMetadata, MessageOrigin, Speaker};
 use super::state::SessionState;
 use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel, ParticipantInfo};
 use tracing::{error, info};
@@ -46,6 +46,8 @@ impl<'a> DialogueSession<'a> {
                                         Ok(content) => {
                                             // Store in MessageStore
                                             let participant = &self.dialogue.participants[idx];
+                                            let metadata = MessageMetadata::new()
+                                                .with_origin(MessageOrigin::AgentGenerated);
                                             let message = DialogueMessage::new(
                                                 current_turn,
                                                 Speaker::agent(
@@ -53,7 +55,8 @@ impl<'a> DialogueSession<'a> {
                                                     participant.persona.role.clone(),
                                                 ),
                                                 content.clone(),
-                                            );
+                                            )
+                                            .with_metadata(&metadata);
                                             self.dialogue.message_store.push(message);
 
                                             info!(
@@ -172,8 +175,11 @@ impl<'a> DialogueSession<'a> {
                             );
 
                             // Store in MessageStore
+                            let metadata =
+                                MessageMetadata::new().with_origin(MessageOrigin::AgentGenerated);
                             let message =
-                                DialogueMessage::new(turn, speaker.clone(), content.clone());
+                                DialogueMessage::new(turn, speaker.clone(), content.clone())
+                                    .with_metadata(&metadata);
                             self.dialogue.message_store.push(message);
 
                             current_turn_outputs

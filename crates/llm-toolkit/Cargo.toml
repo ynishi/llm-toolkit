@@ -29,7 +29,7 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["full"], optional = true }
 tokio-util = { version = "0.7", optional = true }
 futures = { workspace = true, optional = true }
-url = "2.5"
+url = { version = "2.5", features = ["serde"] }
 mime_guess = "2.0"
 
 [dev-dependencies]

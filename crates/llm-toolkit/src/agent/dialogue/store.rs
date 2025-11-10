@@ -3,7 +3,7 @@
 //! This module provides the central repository for managing dialogue messages
 //! with efficient lookup by ID and chronological ordering.
 
-use super::message::{DialogueMessage, MessageId, Speaker};
+use super::message::{DialogueMessage, MessageId, MessageMetadata, MessageOrigin, Speaker};
 use std::collections::HashMap;
 
 /// Central message repository within a Dialogue.
@@ -112,6 +112,14 @@ impl MessageStore {
                     && (matches!(msg.speaker, Speaker::Agent { .. })
                         || matches!(msg.speaker, Speaker::System))
             })
+            .collect()
+    }
+
+    /// Returns unsent messages filtered by origin.
+    pub fn unsent_messages_with_origin(&self, origin: MessageOrigin) -> Vec<&DialogueMessage> {
+        self.all_messages()
+            .into_iter()
+            .filter(|msg| !msg.sent_to_agents && msg.metadata.origin() == Some(origin))
             .collect()
     }
 
@@ -423,5 +431,34 @@ mod tests {
         // The real message should still be unsent
         assert_eq!(store.unsent_messages().len(), 1);
         assert!(!store.get(msg_id).unwrap().sent_to_agents);
+    }
+
+    #[test]
+    fn test_unsent_messages_with_origin_filters_results() {
+        let mut store = MessageStore::new();
+
+        let mut payload_msg =
+            DialogueMessage::new(1, Speaker::System, "Payload system".to_string());
+        let payload_metadata = MessageMetadata::new().with_origin(MessageOrigin::IncomingPayload);
+        payload_msg = payload_msg.with_metadata(&payload_metadata);
+
+        let mut agent_msg = DialogueMessage::new(
+            1,
+            Speaker::agent("Agent", "Role"),
+            "Agent output".to_string(),
+        );
+        let agent_metadata = MessageMetadata::new().with_origin(MessageOrigin::AgentGenerated);
+        agent_msg = agent_msg.with_metadata(&agent_metadata);
+
+        store.push(payload_msg);
+        store.push(agent_msg);
+
+        let payload_results = store.unsent_messages_with_origin(MessageOrigin::IncomingPayload);
+        assert_eq!(payload_results.len(), 1);
+        assert_eq!(payload_results[0].content, "Payload system");
+
+        let agent_results = store.unsent_messages_with_origin(MessageOrigin::AgentGenerated);
+        assert_eq!(agent_results.len(), 1);
+        assert_eq!(agent_results[0].content, "Agent output");
     }
 }

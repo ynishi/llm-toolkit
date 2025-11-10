@@ -230,12 +230,12 @@ impl Payload {
     ///
     /// This is useful for adding system instructions or context messages
     /// with explicit speaker attribution before the existing content.
-    pub fn prepend_messages(
-        self,
-        messages: Vec<PayloadContent>,
-    ) -> Self {
+    pub fn prepend_messages(self, messages: Vec<PayloadContent>) -> Self {
         let mut new_contents = self.inner.contents.clone();
-        let mut new_messages = messages.into_iter().filter(|p|matches!(p, PayloadContent::Message{..})).collect::<Vec<PayloadContent>>();
+        let mut new_messages = messages
+            .into_iter()
+            .filter(|p| matches!(p, PayloadContent::Message { .. }))
+            .collect::<Vec<PayloadContent>>();
         new_messages.append(&mut new_contents);
         Self {
             inner: Arc::new(PayloadInner {

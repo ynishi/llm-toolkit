@@ -24,6 +24,7 @@ fn is_metadata_default(metadata: &MessageMetadata) -> bool {
     metadata.token_count.is_none()
         && !metadata.has_attachments
         && metadata.message_type.is_none()
+        && metadata.attachments.is_empty()
         && metadata.custom.is_empty()
 }
 
