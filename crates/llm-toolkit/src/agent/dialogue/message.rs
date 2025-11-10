@@ -118,38 +118,99 @@ pub struct DialogueMessage {
     #[serde(default)]
     pub metadata: MessageMetadata,
 
-    /// Whether this message has been sent to agents as context
+    /// Tracks which agents have received this message as context.
     ///
-    /// This flag tracks if the message has been included in the context
-    /// passed to other agents in subsequent turns. It ensures each agent
-    /// receives other agents' responses exactly once as context.
+    /// This field prevents duplicate context delivery - each agent receives
+    /// other agents' responses exactly once as context in subsequent turns.
+    ///
+    /// # Variants
+    ///
+    /// - `Agents(Vec<Speaker>)`: List of specific agents that received this message
+    /// - `All`: Message has been broadcast to all agents
+    ///
+    /// # Usage
+    ///
+    /// When a message is included in a payload sent to an agent, that agent's
+    /// Speaker is added to this list. The MessageStore uses this to filter
+    /// unsent messages when building context for the next turn.
     #[serde(default)]
     pub sent_agents: SentAgents,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Tracks which agents have received a message as context.
+///
+/// This enum prevents duplicate context delivery by recording which agents
+/// have already seen this message.
+///
+/// # Design
+///
+/// - **Agents(Vec<Speaker>)**: Tracks individual agents that received the message
+/// - **All**: Optimization for broadcast scenarios where all agents received the message
+///
+/// # State Transitions
+///
+/// ```text
+/// Agents([])                  // Initial state (no one received)
+///   -> Agents([Alice])        // Alice received
+///   -> Agents([Alice, Bob])   // Alice and Bob received
+///   -> All                    // Broadcast to all (optional optimization)
+/// ```
+///
+/// # Serialization
+///
+/// Uses internally tagged representation for better JSON structure:
+/// - `Agents([...])` → `{"type": "agents", "agents": [...]}`
+/// - `All` → `{"type": "all"}`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum SentAgents {
-    Agents(Vec<Speaker>),
+    /// Specific agents that received this message.
+    #[serde(rename = "agents")]
+    Agents {
+        /// List of agents that received this message.
+        agents: Vec<Speaker>,
+    },
+
+    /// All agents have received this message (broadcast).
     All,
 }
 
 impl Default for SentAgents {
     fn default() -> Self {
-        Self::Agents(vec![])
+        Self::Agents { agents: vec![] }
     }
 }
 
 impl SentAgents {
+    /// Records that this message was sent to the given agent.
+    ///
+    /// # Arguments
+    ///
+    /// * `speaker` - The agent that received this message as context
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let mut sent = SentAgents::default();
+    /// sent.sent(Speaker::agent("Alice", "Engineer"));
+    /// sent.sent(Speaker::agent("Bob", "Designer"));
+    /// ```
     pub fn sent(&mut self, speaker: Speaker) {
         match self {
-            Self::Agents(vs) => vs.push(speaker),
+            Self::Agents { agents } => agents.push(speaker),
             Self::All => {} // Already All
         }
     }
 
+    /// Returns true if no agents have received this message yet.
+    ///
+    /// # Returns
+    ///
+    /// - `true`: No agents received this message (Agents { agents: [] })
+    /// - `false`: At least one agent received, or All
     pub fn is_empty(&self) -> bool {
         match self {
-            Self::Agents(vs) => vs.is_empty(),
+            Self::Agents { agents } => agents.is_empty(),
             Self::All => false,
         }
     }
@@ -194,10 +255,25 @@ impl DialogueMessage {
         self.speaker.role()
     }
 
+    /// Returns true if this message has been sent to at least one agent as context.
+    ///
+    /// This is used to filter unsent messages when building context for subsequent turns.
+    ///
+    /// # Returns
+    ///
+    /// - `true`: Message has been delivered to at least one agent
+    /// - `false`: Message has not been sent to any agent yet
     pub fn sent_to_agents(&self) -> bool {
         !self.sent_agents.is_empty()
     }
 
+    /// Records that this message was sent to the given agent as context.
+    ///
+    /// This should be called after including this message in a payload sent to an agent.
+    ///
+    /// # Arguments
+    ///
+    /// * `speaker` - The agent that received this message as context
     pub fn sent(&mut self, speaker: Speaker) {
         self.sent_agents.sent(speaker);
     }
@@ -695,5 +771,189 @@ mod tests {
             prompt_at.contains("==="),
             "Should use multipart format for 1000 chars"
         );
+    }
+
+    // === SentAgents Tests ===
+
+    #[test]
+    fn test_sent_agents_default() {
+        let sent = SentAgents::default();
+        assert!(sent.is_empty());
+        assert_eq!(sent, SentAgents::Agents { agents: vec![] });
+    }
+
+    #[test]
+    fn test_sent_agents_add_single_agent() {
+        let mut sent = SentAgents::default();
+        let alice = Speaker::agent("Alice", "Engineer");
+
+        sent.sent(alice.clone());
+
+        assert!(!sent.is_empty());
+        match sent {
+            SentAgents::Agents { agents } => {
+                assert_eq!(agents.len(), 1);
+                assert_eq!(agents[0].name(), "Alice");
+            }
+            SentAgents::All => panic!("Expected Agents variant"),
+        }
+    }
+
+    #[test]
+    fn test_sent_agents_add_multiple_agents() {
+        let mut sent = SentAgents::default();
+        let alice = Speaker::agent("Alice", "Engineer");
+        let bob = Speaker::agent("Bob", "Designer");
+
+        sent.sent(alice.clone());
+        sent.sent(bob.clone());
+
+        assert!(!sent.is_empty());
+        match sent {
+            SentAgents::Agents { agents } => {
+                assert_eq!(agents.len(), 2);
+                assert_eq!(agents[0].name(), "Alice");
+                assert_eq!(agents[1].name(), "Bob");
+            }
+            SentAgents::All => panic!("Expected Agents variant"),
+        }
+    }
+
+    #[test]
+    fn test_sent_agents_all_variant() {
+        let sent = SentAgents::All;
+        assert!(!sent.is_empty());
+    }
+
+    #[test]
+    fn test_sent_agents_all_ignores_additional_agents() {
+        let mut sent = SentAgents::All;
+        let alice = Speaker::agent("Alice", "Engineer");
+
+        sent.sent(alice);
+
+        // Should remain All
+        assert_eq!(sent, SentAgents::All);
+        assert!(!sent.is_empty());
+    }
+
+    #[test]
+    fn test_sent_agents_serialize_empty() {
+        let sent = SentAgents::default();
+        let json = serde_json::to_string(&sent).unwrap();
+
+        // Should serialize as internally tagged
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["type"], "agents");
+        assert!(value["agents"].is_array());
+        assert_eq!(value["agents"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_sent_agents_serialize_with_agents() {
+        let mut sent = SentAgents::default();
+        sent.sent(Speaker::agent("Alice", "Engineer"));
+        sent.sent(Speaker::agent("Bob", "Designer"));
+
+        let json = serde_json::to_string(&sent).unwrap();
+
+        // Should serialize as internally tagged
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["type"], "agents");
+        assert!(value["agents"].is_array());
+        assert_eq!(value["agents"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_sent_agents_serialize_all() {
+        let sent = SentAgents::All;
+        let json = serde_json::to_string(&sent).unwrap();
+
+        // Should serialize as internally tagged
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["type"], "all");
+        // All variant should not have any other fields
+        assert!(value.get("agents").is_none());
+    }
+
+    #[test]
+    fn test_sent_agents_deserialize_empty() {
+        let json = r#"{"type":"agents","agents":[]}"#;
+        let sent: SentAgents = serde_json::from_str(json).unwrap();
+
+        assert!(sent.is_empty());
+        assert_eq!(sent, SentAgents::Agents { agents: vec![] });
+    }
+
+    #[test]
+    fn test_sent_agents_deserialize_with_agents() {
+        let json = r#"{"type":"agents","agents":[
+            {"type":"agent","name":"Alice","role":"Engineer"},
+            {"type":"agent","name":"Bob","role":"Designer"}
+        ]}"#;
+        let sent: SentAgents = serde_json::from_str(json).unwrap();
+
+        assert!(!sent.is_empty());
+        match sent {
+            SentAgents::Agents { agents } => {
+                assert_eq!(agents.len(), 2);
+                assert_eq!(agents[0].name(), "Alice");
+                assert_eq!(agents[1].name(), "Bob");
+            }
+            SentAgents::All => panic!("Expected Agents variant"),
+        }
+    }
+
+    #[test]
+    fn test_sent_agents_deserialize_all() {
+        let json = r#"{"type":"all"}"#;
+        let sent: SentAgents = serde_json::from_str(json).unwrap();
+
+        assert!(!sent.is_empty());
+        assert_eq!(sent, SentAgents::All);
+    }
+
+    #[test]
+    fn test_sent_agents_round_trip() {
+        let mut original = SentAgents::default();
+        original.sent(Speaker::agent("Alice", "Engineer"));
+        original.sent(Speaker::agent("Bob", "Designer"));
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: SentAgents = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn test_sent_agents_all_round_trip() {
+        let original = SentAgents::All;
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: SentAgents = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn test_dialogue_message_sent_to_agents() {
+        let mut msg = DialogueMessage::new(1, Speaker::System, "Test".to_string());
+
+        assert!(!msg.sent_to_agents());
+
+        msg.sent(Speaker::agent("Alice", "Engineer"));
+        assert!(msg.sent_to_agents());
+    }
+
+    #[test]
+    fn test_dialogue_message_serialization_with_sent_agents() {
+        let mut msg =
+            DialogueMessage::new(1, Speaker::agent("Alice", "Engineer"), "Hello".to_string());
+        msg.sent(Speaker::agent("Bob", "Designer"));
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: DialogueMessage = serde_json::from_str(&json).unwrap();
+
+        assert!(deserialized.sent_to_agents());
     }
 }

@@ -2602,6 +2602,30 @@ mod tests {
         assert_eq!(dialogue.history().len(), 2);
         assert_eq!(dialogue.history()[0].speaker.name(), "System");
         assert_eq!(dialogue.history()[0].content, "Analyze this image");
+
+        // Verify attachment is stored in MessageStore
+        let messages = dialogue.message_store().all_messages();
+        assert_eq!(messages.len(), 2);
+
+        let first_message = messages[0];
+
+        assert!(
+            first_message.metadata.has_attachments,
+            "First message should have attachments flag set"
+        );
+        assert_eq!(
+            first_message.metadata.attachments.len(),
+            1,
+            "First message should contain 1 attachment"
+        );
+
+        // Verify the attachment is a Local variant with the correct path
+        match &first_message.metadata.attachments[0] {
+            Attachment::Local(path) => {
+                assert_eq!(path.to_str().unwrap(), "/test/image.png");
+            }
+            _ => panic!("Expected Local attachment"),
+        }
     }
 
     #[tokio::test]
@@ -2680,6 +2704,44 @@ mod tests {
 
         // Verify history has both turns
         assert_eq!(dialogue.history().len(), 3); // System + 2 participants
+
+        // Verify attachments are stored in MessageStore
+        let messages = dialogue.message_store().all_messages();
+        assert_eq!(messages.len(), 3);
+
+        let first_message = messages[0];
+
+        // Check that the message has attachments
+        assert!(
+            first_message.metadata.has_attachments,
+            "First message should have attachments flag set"
+        );
+        assert_eq!(
+            first_message.metadata.attachments.len(),
+            2,
+            "First message should contain 2 attachments"
+        );
+
+        // Verify attachment paths by matching on the enum variants
+        let attachment_paths: Vec<String> = first_message
+            .metadata
+            .attachments
+            .iter()
+            .filter_map(|a| match a {
+                Attachment::Local(path) => path.to_str().map(|s| s.to_string()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(attachment_paths.len(), 2);
+        assert!(
+            attachment_paths.contains(&"/test/data.csv".to_string()),
+            "Should contain data.csv attachment"
+        );
+        assert!(
+            attachment_paths.contains(&"/test/metadata.json".to_string()),
+            "Should contain metadata.json attachment"
+        );
     }
 
     #[tokio::test]
