@@ -1546,6 +1546,78 @@ let cap4: Capability = ("api:call", "Call external APIs").into();
 - ✅ **Dialogue Coordination**: Agents discover and leverage each other's capabilities
 - ✅ **Dynamic Policy**: Different sessions can enforce different restrictions on the same agents
 
+**Reaction Control with ReactionStrategy:**
+
+The `ReactionStrategy` allows you to control when agents should react to messages, providing fine-grained control over dialogue participation.
+
+```rust
+use llm_toolkit::agent::dialogue::{Dialogue, ReactionStrategy};
+
+let mut dialogue = Dialogue::broadcast();
+dialogue
+    .with_reaction_strategy(ReactionStrategy::UserOnly)  // Only react to user messages
+    .add_participant(persona1, agent1)
+    .add_participant(persona2, agent2);
+```
+
+**Available Strategies:**
+
+- **`ReactionStrategy::Always`** (default) - React to all messages
+  ```rust
+  // Default behavior - agents react to everything
+  let dialogue = Dialogue::broadcast();  // Uses Always by default
+  ```
+
+- **`ReactionStrategy::UserOnly`** - Only react to User messages
+  ```rust
+  dialogue.with_reaction_strategy(ReactionStrategy::UserOnly);
+  // Agents only react when users speak, ignoring agent-to-agent or system messages
+  ```
+
+- **`ReactionStrategy::AgentOnly`** - Only react to Agent messages
+  ```rust
+  dialogue.with_reaction_strategy(ReactionStrategy::AgentOnly);
+  // Useful for observer agents that analyze other agents' responses
+  ```
+
+- **`ReactionStrategy::ExceptSystem`** - React to all messages except System messages
+  ```rust
+  dialogue.with_reaction_strategy(ReactionStrategy::ExceptSystem);
+  // Ignore system notifications while responding to users and other agents
+  ```
+
+**Message Metadata and Types:**
+
+The dialogue system supports rich message metadata including message types for context-aware processing:
+
+```rust
+use llm_toolkit::agent::dialogue::message::{MessageMetadata, MessageType};
+use llm_toolkit::agent::{Payload, Speaker};
+
+// Send a context information message (won't trigger reactions)
+let context_payload = Payload::new().add_message_with_metadata(
+    Speaker::System,
+    "Background: Project uses Rust",
+    MessageMetadata::new().with_type(MessageType::ContextInfo),
+);
+
+dialogue.run(context_payload).await?;  // Stored in history but doesn't trigger reactions
+```
+
+**Available Message Types:**
+
+- `MessageType::Conversational` - Regular dialogue messages (default)
+- `MessageType::ContextInfo` - Background information (never triggers reactions)
+- `MessageType::Notification` - Status updates
+- `MessageType::Alert` - Important notifications
+
+**Use Cases:**
+
+- ✅ **Selective Participation**: Control which messages trigger agent responses
+- ✅ **Observer Agents**: Create agents that only analyze other agents' outputs
+- ✅ **User-Focused Dialogues**: Ensure agents only respond to user input
+- ✅ **Context Management**: Share background information without triggering unnecessary reactions
+
 **Session Resumption and History Injection:**
 
 The `Dialogue` component supports saving and resuming conversations, enabling persistent multi-turn dialogues across process restarts or session boundaries.
