@@ -548,7 +548,34 @@ where
             .unwrap_or_default();
 
         // 2. Get context text from HistoryAwareAgent (if provided)
-        let context_text = intent.to_text();
+        // Include both Text content AND System messages (e.g., DialogueContext)
+        let mut context_text = String::new();
+
+        // Extract pure Text contents
+        let text_content = intent.to_text();
+        if !text_content.is_empty() {
+            context_text.push_str(&text_content);
+        }
+
+        // Extract System messages (e.g., prepended context via prepend_system)
+        let system_messages: Vec<String> = intent
+            .to_messages()
+            .into_iter()
+            .filter_map(|msg| {
+                if matches!(msg.speaker, super::dialogue::Speaker::System) {
+                    Some(msg.content)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !system_messages.is_empty() {
+            if !context_text.is_empty() {
+                context_text.push_str("\n\n");
+            }
+            context_text.push_str(&system_messages.join("\n\n"));
+        }
 
         // 3. Extract and format current messages (the diff) with YOU/ME marking
         let messages = intent.to_messages();

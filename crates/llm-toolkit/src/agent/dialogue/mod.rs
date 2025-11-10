@@ -635,7 +635,21 @@ impl Dialogue {
     /// - Add test coverage for UserOnly, AgentOnly, ExceptSystem strategies
     /// - Review overall ReactionStrategy design and semantics
     fn should_react(&self, payload: &Payload) -> bool {
+        use crate::agent::dialogue::message::MessageType;
         use crate::agent::dialogue::Speaker;
+
+        // Never react to ContextInfo messages, regardless of strategy
+        let has_only_context_info = payload.to_messages().iter().all(|msg| {
+            msg.metadata
+                .message_type
+                .as_ref()
+                .map(|t| matches!(t, MessageType::ContextInfo))
+                .unwrap_or(false)
+        });
+
+        if has_only_context_info && !payload.to_messages().is_empty() {
+            return false;
+        }
 
         match &self.reaction_strategy {
             ReactionStrategy::Always => true,
@@ -4322,11 +4336,7 @@ mod tests {
     }
 
     /// Ensure partial sequential sessions prepend dialogue context for each participant.
-    // TODO: Fix DialogueContext application in sequential mode
-    // This test fails because context is not properly applied when using to_text()
-    // Need to investigate how context should be included in the payload
     #[tokio::test]
-    #[ignore]
     async fn test_partial_session_sequential_applies_context() {
         use crate::agent::persona::Persona;
         use tokio::sync::Mutex;
@@ -4350,14 +4360,25 @@ mod tests {
             }
 
             async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                // Get full text representation including both Text and Message contents
+                let mut full_text = String::new();
+
+                // Add all messages (converted to text)
+                for msg in payload.to_messages() {
+                    full_text.push_str(&msg.content);
+                    full_text.push('\n');
+                }
+
+                // Also add pure Text contents
                 let text = payload.to_text();
-                self.payloads.lock().await.push(text);
+                if !text.is_empty() {
+                    full_text.push_str(&text);
+                }
+
+                self.payloads.lock().await.push(full_text);
                 Ok(format!("[{}] ok", self.name))
             }
         }
-
-        let mut dialogue = Dialogue::sequential();
-        dialogue.with_talk_style(TalkStyle::Brainstorm);
 
         let persona_a = Persona {
             name: "AgentA".to_string(),
@@ -4379,7 +4400,9 @@ mod tests {
 
         let payloads = Arc::new(Mutex::new(Vec::new()));
 
+        let mut dialogue = Dialogue::sequential();
         dialogue
+            .with_talk_style(TalkStyle::Brainstorm)
             .add_participant(
                 persona_a,
                 TrackingAgent {
@@ -5293,7 +5316,7 @@ mod tests {
             .add_participant(persona1, agent1.clone())
             .add_participant(persona2, agent2.clone());
 
-        // Turn 1: ContextInfo (ReactionStrategy::Always = reacts to everything)
+        // Turn 1: ContextInfo (should not trigger reaction, even with Always strategy)
         let context_payload = Payload::new().add_message_with_metadata(
             Speaker::System,
             "Background: Project uses Rust",
@@ -5301,8 +5324,7 @@ mod tests {
         );
 
         let turns = dialogue.run(context_payload).await.unwrap();
-        assert_eq!(turns.len(), 1); // Sequential returns only final turn
-        assert_eq!(turns[0].speaker.name(), "Agent2");
+        assert_eq!(turns.len(), 0, "ContextInfo should not trigger reactions");
 
         // Turn 2: User message (triggers sequential execution)
         let user_payload = Payload::from_messages(vec![PayloadMessage::new(
@@ -5314,23 +5336,18 @@ mod tests {
         assert_eq!(turns.len(), 1); // Sequential returns only final turn
         assert_eq!(turns[0].speaker.name(), "Agent2");
 
-        // Verify Agent1 executed twice (Turn 1: ContextInfo, Turn 2: User message)
+        // Verify Agent1 executed once (Turn 2: User message; Turn 1: ContextInfo did not trigger)
         let agent1_received = agent1.get_received_payloads();
-        assert_eq!(agent1_received.len(), 2); // Turn 1 + Turn 2
+        assert_eq!(agent1_received.len(), 1, "Agent1 should execute once for User message");
 
-        // Turn 1: Agent1 received only ContextInfo
-        let agent1_turn1 = agent1_received[0].to_messages();
-        assert_eq!(agent1_turn1.len(), 1);
-        assert_eq!(agent1_turn1[0].content, "Background: Project uses Rust");
-        assert!(agent1_turn1[0].metadata.is_type(&MessageType::ContextInfo));
+        // Agent1 received ContextInfo in history + User message
+        let agent1_payload = agent1_received[0].to_messages();
+        assert!(agent1_payload.iter().any(|m| m.content == "Analyze the code"), "Should contain user message");
+        assert!(agent1_payload.iter().any(|m| m.content == "Background: Project uses Rust"), "ContextInfo should be in history");
 
-        // Turn 2: Agent1 received previous turn outputs + User message
-        let agent1_turn2 = agent1_received[1].to_messages();
-        assert!(agent1_turn2.len() >= 2, "Agent1 should receive previous outputs + user message");
-
-        // Verify Agent2 executed twice as well
+        // Verify Agent2 executed once as well (sequential: receives Agent1's output + user input)
         let agent2_received = agent2.get_received_payloads();
-        assert_eq!(agent2_received.len(), 2); // Turn 1 + Turn 2
+        assert_eq!(agent2_received.len(), 1, "Agent2 should execute once");
     }
 
     #[tokio::test]
@@ -5364,7 +5381,7 @@ mod tests {
             .add_participant(persona1, agent1.clone())
             .add_participant(persona2, agent2.clone());
 
-        // Turn 1: ContextInfo (ReactionStrategy::Always = reacts to everything)
+        // Turn 1: ContextInfo (should not trigger reaction, even with Always strategy)
         let context_payload = Payload::new().add_message_with_metadata(
             Speaker::System,
             "Note: Use async/await",
@@ -5372,7 +5389,7 @@ mod tests {
         );
 
         let turns = dialogue.run(context_payload).await.unwrap();
-        assert_eq!(turns.len(), 2); // Both Alice and Bob react (no mentions = broadcast)
+        assert_eq!(turns.len(), 0, "ContextInfo should not trigger reactions");
 
         // Turn 2: Mention only Alice
         let user_payload = Payload::from_messages(vec![PayloadMessage::new(
@@ -5384,23 +5401,19 @@ mod tests {
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].speaker.name(), "Alice");
 
-        // Verify Alice executed twice (Turn 1: ContextInfo, Turn 2: @mention)
+        // Verify Alice executed once (Turn 2: @mention, Turn 1: ContextInfo did not trigger)
         let alice_received = agent1.get_received_payloads();
-        assert_eq!(alice_received.len(), 2); // Turn 1 + Turn 2
+        assert_eq!(alice_received.len(), 1, "Alice should execute once for @mention");
 
-        // Turn 1: Alice received ContextInfo only
-        let alice_turn1 = alice_received[0].to_messages();
-        assert_eq!(alice_turn1.len(), 1);
-        assert_eq!(alice_turn1[0].content, "Note: Use async/await");
-        assert!(alice_turn1[0].metadata.is_type(&MessageType::ContextInfo));
+        // Alice received ContextInfo in history + @mention message
+        let alice_payload = alice_received[0].to_messages();
+        assert!(alice_payload.iter().any(|m| m.content.contains("@Alice")));
+        // ContextInfo should be in history but did not trigger this execution
+        assert!(alice_payload.iter().any(|m| m.content == "Note: Use async/await"));
 
-        // Turn 2: Alice received previous messages + @mention
-        let alice_turn2 = alice_received[1].to_messages();
-        assert!(alice_turn2.iter().any(|m| m.content.contains("@Alice")));
-
-        // Verify Bob executed once (Turn 1 only, not mentioned in Turn 2)
+        // Verify Bob did not execute (no mentions for Bob)
         let bob_received = agent2.get_received_payloads();
-        assert_eq!(bob_received.len(), 1); // Turn 1 only
+        assert_eq!(bob_received.len(), 0, "Bob should not execute (no mentions)");
     }
 
     #[tokio::test]

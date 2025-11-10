@@ -8,6 +8,7 @@ use super::super::{AgentError, Payload, PayloadMessage};
 use super::message::{DialogueMessage, MessageMetadata, MessageOrigin, Speaker};
 use super::state::SessionState;
 use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel, ParticipantInfo};
+use crate::prompt::ToPrompt;
 use tracing::{error, info};
 
 /// Represents an in-flight dialogue execution that can yield turns incrementally.
@@ -152,13 +153,18 @@ impl<'a> DialogueSession<'a> {
                     *next_index += 1;
                     let step_number = idx + 1;
 
-                    let response_payload = build_sequential_payload(
+                    let mut response_payload = build_sequential_payload(
                         payload,
                         prev_agent_outputs.as_slice(),
                         current_turn_outputs.as_slice(),
                         participants_info.as_slice(),
                         idx,
                     );
+
+                    // Apply dialogue context if exists
+                    if let Some(ref context) = self.dialogue.context {
+                        response_payload = response_payload.prepend_system(context.to_prompt());
+                    }
 
                     let response_result = {
                         let participant = &self.dialogue.participants[idx];
