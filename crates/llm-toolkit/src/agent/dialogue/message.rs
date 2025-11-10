@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::agent::PayloadMessage;
+
 /// Returns the current Unix timestamp in seconds.
 pub(super) fn current_unix_timestamp() -> u64 {
     SystemTime::now()
@@ -124,6 +126,12 @@ pub struct DialogueMessage {
     pub sent_to_agents: bool,
 }
 
+impl Into<PayloadMessage> for DialogueMessage {
+    fn into(self) -> PayloadMessage {
+        PayloadMessage { speaker: self.speaker, content: self.content, metadata: self.metadata }
+    }
+}
+
 impl DialogueMessage {
     /// Creates a new dialogue message.
     pub fn new(turn: usize, speaker: Speaker, content: String) -> Self {
@@ -136,6 +144,11 @@ impl DialogueMessage {
             metadata: MessageMetadata::default(),
             sent_to_agents: false,
         }
+    }
+
+    pub fn with_metadata(&mut self, metadata: &MessageMetadata) -> Self {
+        self.metadata = metadata.clone();
+        self.clone()
     }
 
     /// Returns the speaker's name.

@@ -226,6 +226,24 @@ impl Payload {
         }
     }
 
+    /// Prepends a dialogue messages to the beginning of this payload.
+    ///
+    /// This is useful for adding system instructions or context messages
+    /// with explicit speaker attribution before the existing content.
+    pub fn prepend_messages(
+        self,
+        messages: Vec<PayloadContent>,
+    ) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        let mut new_messages = messages.into_iter().filter(|p|matches!(p, PayloadContent::Message{..})).collect::<Vec<PayloadContent>>();
+        new_messages.append(&mut new_contents);
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_messages,
+            }),
+        }
+    }
+
     /// Adds a dialogue message with metadata to this payload.
     ///
     /// This allows fine-grained control over message reaction behavior.

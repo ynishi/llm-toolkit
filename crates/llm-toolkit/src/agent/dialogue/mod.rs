@@ -94,10 +94,11 @@ pub mod session;
 pub mod state;
 pub mod store;
 pub mod turn_input;
+pub mod constructor;
 
 use crate::ToPrompt;
 use crate::agent::chat::Chat;
-use crate::agent::persona::{Persona, PersonaTeam, PersonaTeamGenerationRequest};
+use crate::agent::persona::Persona;
 use crate::agent::{Agent, AgentError, Payload, PayloadMessage};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -316,6 +317,63 @@ pub enum ExecutionModel {
     Mentioned,
 }
 
+/// Determines when agents should react to messages in a dialogue.
+///
+/// This strategy controls whether a message triggers agent responses or is
+/// stored as context-only information. Useful for scenarios like:
+/// - Slash command results that should be available as context but not trigger reactions
+/// - System notifications that provide information without requiring responses
+/// - Manual control over when agents should engage
+pub enum ReactionStrategy {
+    /// Always react to all messages (default, backward compatible).
+    Always,
+
+    /// Only react to User messages.
+    UserOnly,
+
+    /// Only react to Agent messages.
+    AgentOnly,
+
+    /// React to all messages except System messages.
+    ExceptSystem,
+
+    /// Custom reaction logic.
+    ///
+    /// The function receives the payload and message store, and returns true
+    /// if agents should react to this message.
+    Custom(Arc<dyn Fn(&Payload, &MessageStore) -> bool + Send + Sync>),
+}
+
+impl std::fmt::Debug for ReactionStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Always => write!(f, "Always"),
+            Self::UserOnly => write!(f, "UserOnly"),
+            Self::AgentOnly => write!(f, "AgentOnly"),
+            Self::ExceptSystem => write!(f, "ExceptSystem"),
+            Self::Custom(_) => write!(f, "Custom(<fn>)"),
+        }
+    }
+}
+
+impl Clone for ReactionStrategy {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Always => Self::Always,
+            Self::UserOnly => Self::UserOnly,
+            Self::AgentOnly => Self::AgentOnly,
+            Self::ExceptSystem => Self::ExceptSystem,
+            Self::Custom(f) => Self::Custom(Arc::clone(f)),
+        }
+    }
+}
+
+impl Default for ReactionStrategy {
+    fn default() -> Self {
+        Self::Always
+    }
+}
+
 /// Internal representation of a dialogue participant.
 ///
 /// Wraps a persona and its associated agent implementation.
@@ -392,222 +450,21 @@ pub struct Dialogue {
     /// Message store for all dialogue messages
     pub(super) message_store: MessageStore,
 
+    /// Messages that did not trigger agent reactions (should_react = false)
+    /// These are stored separately and prepended to the next payload when should_react = true
+    pub(super) no_react_messages: Vec<Payload>,
+
     pub(super) execution_model: ExecutionModel,
 
     /// Optional dialogue context that shapes conversation tone and behavior
     pub(super) context: Option<DialogueContext>,
+
+    /// Strategy for determining when agents should react to messages
+    pub(super) reaction_strategy: ReactionStrategy,
 }
 
 impl Dialogue {
-    /// Creates a new dialogue with the specified execution model.
-    ///
-    /// This is private - use `broadcast()` or `sequential()` instead.
-    fn new(execution_model: ExecutionModel) -> Self {
-        Self {
-            participants: Vec::new(),
-            message_store: MessageStore::new(),
-            execution_model,
-            context: None,
-        }
-    }
-
-    /// Creates a new dialogue with broadcast execution.
-    ///
-    /// In broadcast mode, all participants respond in parallel to the same input.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use llm_toolkit::agent::dialogue::Dialogue;
-    ///
-    /// let mut dialogue = Dialogue::broadcast()
-    ///     .add_participant(agent1)
-    ///     .add_participant(agent2);
-    /// ```
-    pub fn broadcast() -> Self {
-        Self::new(ExecutionModel::Broadcast)
-    }
-
-    /// Creates a new dialogue with sequential execution.
-    ///
-    /// In sequential mode, the output of one participant becomes the input to the next.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use llm_toolkit::agent::dialogue::Dialogue;
-    ///
-    /// let mut dialogue = Dialogue::sequential()
-    ///     .add_participant(persona1, summarizer)
-    ///     .add_participant(persona2, translator)
-    ///     .add_participant(persona3, formatter);
-    /// ```
-    pub fn sequential() -> Self {
-        Self::new(ExecutionModel::Sequential)
-    }
-
-    /// Creates a new dialogue with mentioned execution.
-    ///
-    /// In mentioned mode, only participants explicitly mentioned with `@name` will respond.
-    /// If no mentions are found, it falls back to broadcast mode (all participants respond).
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use llm_toolkit::agent::dialogue::Dialogue;
-    ///
-    /// let mut dialogue = Dialogue::mentioned()
-    ///     .add_participant(alice_persona, agent1)
-    ///     .add_participant(bob_persona, agent2);
-    ///
-    /// // Only Alice will respond
-    /// let turns = dialogue.run("@Alice what do you think?").await?;
-    ///
-    /// // Both Alice and Bob will respond
-    /// let turns = dialogue.run("@Alice @Bob discuss this").await?;
-    ///
-    /// // Falls back to broadcast - all participants respond
-    /// let turns = dialogue.run("What does everyone think?").await?;
-    /// ```
-    pub fn mentioned() -> Self {
-        Self::new(ExecutionModel::Mentioned)
-    }
-
-    /// Sets initial conversation history for session resumption.
-    ///
-    /// This method allows you to inject a saved conversation history into a new
-    /// dialogue instance, enabling session restoration and continuation of
-    /// previous discussions.
-    ///
-    /// Following the Orchestrator Step pattern, this creates a new dialogue
-    /// instance with pre-populated history rather than mutating existing state.
-    ///
-    /// # Arguments
-    ///
-    /// * `history` - A vector of `DialogueTurn` representing the conversation history
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use llm_toolkit::agent::dialogue::Dialogue;
-    ///
-    /// // Session 1: Initial conversation
-    /// let mut dialogue = Dialogue::broadcast()
-    ///     .add_participant(persona1, agent1)
-    ///     .add_participant(persona2, agent2);
-    /// let turns = dialogue.run("Discuss project architecture").await?;
-    /// dialogue.save_history("session_123.json")?;
-    ///
-    /// // --- Process restart or session end ---
-    ///
-    /// // Session 2: Resume conversation
-    /// let saved_history = Dialogue::load_history("session_123.json")?;
-    /// let mut dialogue = Dialogue::broadcast()
-    ///     .with_history(saved_history)  // ← Inject saved history
-    ///     .add_participant(persona1, agent1)
-    ///     .add_participant(persona2, agent2);
-    ///
-    /// // Continue from where we left off
-    /// let more_turns = dialogue.run("Continue from last discussion").await?;
-    /// ```
-    pub fn with_history(mut self, history: Vec<DialogueTurn>) -> Self {
-        // Convert DialogueTurn to DialogueMessage and populate MessageStore
-        // Assume each DialogueTurn is from turn 1, in order
-        let mut turn_counter = 1;
-
-        for dialogue_turn in history {
-            let message = DialogueMessage {
-                id: MessageId::new(),
-                turn: turn_counter,
-                speaker: dialogue_turn.speaker.clone(),
-                content: dialogue_turn.content,
-                timestamp: message::current_unix_timestamp(),
-                metadata: Default::default(),
-                sent_to_agents: true, // Historical messages are considered already sent
-            };
-
-            self.message_store.push(message);
-
-            // Increment turn when we see a System message
-            if matches!(dialogue_turn.speaker, Speaker::System) {
-                turn_counter += 1;
-            }
-        }
-
-        self
-    }
-
-    /// Sets initial conversation history as a SYSTEM prompt for session resumption.
-    ///
-    /// This method provides a simpler alternative to `with_history()` by converting
-    /// the entire conversation history into a single SYSTEM message. This approach:
-    /// - Is simpler to implement and maintain
-    /// - Leverages modern LLMs' long context capabilities
-    /// - Ensures agents can "remember" previous conversations
-    ///
-    /// The history is formatted as a human-readable conversation log and prepended
-    /// to the first prompt that agents receive.
-    ///
-    /// # When to use this vs `with_history()`
-    ///
-    /// - **Use `with_history_as_system_prompt()`** when:
-    ///   - You want simple session restoration with minimal complexity
-    ///   - Your conversation history fits within the LLM's context window
-    ///   - You don't need structured history management
-    ///
-    /// - **Use `with_history()`** when:
-    ///   - You need the structured MessageStore for querying/filtering
-    ///   - You want agents to manage their own history independently
-    ///   - You're building advanced dialogue features
-    ///
-    /// # Arguments
-    ///
-    /// * `history` - A vector of `DialogueTurn` representing the conversation history
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use llm_toolkit::agent::dialogue::Dialogue;
-    ///
-    /// // Session 1: Initial conversation
-    /// let mut dialogue = Dialogue::broadcast()
-    ///     .add_participant(persona1, agent1)
-    ///     .add_participant(persona2, agent2);
-    /// let turns = dialogue.run("Discuss project architecture").await?;
-    /// dialogue.save_history("session_123.json")?;
-    ///
-    /// // --- Process restart or session end ---
-    ///
-    /// // Session 2: Resume conversation with system prompt approach
-    /// let saved_history = Dialogue::load_history("session_123.json")?;
-    /// let mut dialogue = Dialogue::broadcast()
-    ///     .with_history_as_system_prompt(saved_history)  // ← Inject as system message
-    ///     .add_participant(persona1, agent1)
-    ///     .add_participant(persona2, agent2);
-    ///
-    /// // Agents will have context from previous conversation
-    /// let more_turns = dialogue.run("Continue from last discussion").await?;
-    /// ```
-    pub fn with_history_as_system_prompt(mut self, history: Vec<DialogueTurn>) -> Self {
-        if history.is_empty() {
-            return self;
-        }
-
-        // Format the history as a readable conversation log
-        // Store it in the context which will be prepended to all prompts
-        let history_text = format_dialogue_history_as_text(&history);
-
-        // Add the history as additional context that will be included
-        // in the dialogue context for all participants
-        let context = self
-            .context
-            .take()
-            .unwrap_or_default()
-            .with_additional_context(history_text);
-        self.context = Some(context);
-
-        self
-    }
+    // Constructor is in constructor.rs
 
     /// Creates a single Participant from a Persona and LLM agent.
     ///
@@ -676,242 +533,6 @@ impl Dialogue {
                 .with_capabilities(capabilities.unwrap_or_default())
             })
             .collect()
-    }
-
-    /// Creates a Dialogue from a blueprint.
-    ///
-    /// If the blueprint contains pre-defined participants, they are used directly.
-    /// Otherwise, an LLM generates a team of personas based on the blueprint's context.
-    ///
-    /// # Arguments
-    ///
-    /// * `blueprint` - The dialogue blueprint containing agenda, context, and optional participants
-    /// * `generator_agent` - LLM agent for generating personas (used only if blueprint.participants is None)
-    /// * `dialogue_agent` - LLM agent for the actual dialogue interactions
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use llm_toolkit::agent::dialogue::{Dialogue, DialogueBlueprint};
-    /// use llm_toolkit::agent::impls::{ClaudeCodeAgent, ClaudeCodeJsonAgent};
-    ///
-    /// // Create blueprint with auto-generated team
-    /// let blueprint = DialogueBlueprint {
-    ///     agenda: "1on1 Feature Planning".to_string(),
-    ///     context: "Product planning meeting for new 1on1 feature in HR SaaS".to_string(),
-    ///     participants: None,  // Will be auto-generated
-    ///     execution_strategy: Some(ExecutionModel::Broadcast),
-    /// };
-    ///
-    /// let mut dialogue = Dialogue::from_blueprint(
-    ///     blueprint,
-    ///     ClaudeCodeJsonAgent::new(),  // For team generation
-    ///     ClaudeCodeAgent::new(),       // For dialogue
-    /// ).await?;
-    /// ```
-    pub async fn from_blueprint<G, D>(
-        blueprint: DialogueBlueprint,
-        generator_agent: G,
-        dialogue_agent: D,
-    ) -> Result<Self, AgentError>
-    where
-        G: Agent<Output = PersonaTeam>,
-        D: Agent<Output = String> + Clone + 'static,
-    {
-        // Determine execution model from blueprint
-        let execution_model = blueprint
-            .execution_strategy
-            .unwrap_or(ExecutionModel::Broadcast);
-
-        let mut dialogue = Self::new(execution_model);
-
-        // Use provided participants or generate them
-        let personas = match blueprint.participants {
-            Some(personas) => personas,
-            None => {
-                // Generate PersonaTeam using LLM
-                let request = PersonaTeamGenerationRequest::new(blueprint.context);
-                let prompt = request.to_prompt();
-                let team = generator_agent.execute(prompt.into()).await?;
-                team.personas
-            }
-        };
-
-        // Build participants from personas
-        dialogue.participants = Self::create_participants(personas, dialogue_agent);
-
-        Ok(dialogue)
-    }
-
-    /// Creates a Dialogue from a pre-generated PersonaTeam.
-    ///
-    /// This is useful for loading and reusing persona teams across different tasks.
-    ///
-    /// # Arguments
-    ///
-    /// * `team` - The PersonaTeam to create participants from
-    /// * `llm_agent` - The base LLM agent to use for all participants
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use llm_toolkit::agent::dialogue::Dialogue;
-    /// use llm_toolkit::agent::persona::PersonaTeam;
-    /// use llm_toolkit::agent::impls::ClaudeCodeAgent;
-    ///
-    /// // Load team from JSON
-    /// let team = PersonaTeam::load("teams/dev_team.json")?;
-    ///
-    /// // Create dialogue
-    /// let mut dialogue = Dialogue::from_persona_team(
-    ///     team,
-    ///     ClaudeCodeAgent::new(),
-    /// )?;
-    ///
-    /// let result = dialogue.run("Discuss API design").await?;
-    /// ```
-    pub fn from_persona_team<T>(team: PersonaTeam, llm_agent: T) -> Result<Self, AgentError>
-    where
-        T: Agent<Output = String> + Clone + 'static,
-    {
-        // Determine execution model from team hint
-        let execution_model = team.execution_strategy.unwrap_or(ExecutionModel::Broadcast);
-
-        let mut dialogue = Self::new(execution_model);
-
-        // Build participants from personas
-        dialogue.participants = Self::create_participants(team.personas, llm_agent);
-
-        Ok(dialogue)
-    }
-
-    /// Adds a participant to the dialogue dynamically.
-    ///
-    /// Unlike StrategyMap (which has a fixed execution plan), Dialogue
-    /// supports adding participants at runtime for flexible conversation scenarios.
-    ///
-    /// # Arguments
-    ///
-    /// * `persona` - The persona to add
-    /// * `llm_agent` - The LLM agent to use for this participant
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use llm_toolkit::agent::dialogue::Dialogue;
-    /// use llm_toolkit::agent::persona::Persona;
-    /// use llm_toolkit::agent::impls::ClaudeCodeAgent;
-    ///
-    /// let mut dialogue = Dialogue::broadcast();
-    /// // ... initial setup ...
-    ///
-    /// // Mid-discussion: bring in a domain expert
-    /// let expert = Persona {
-    ///     name: "Dr. Smith".to_string(),
-    ///     role: "Security Consultant".to_string(),
-    ///     background: "20 years in enterprise security...".to_string(),
-    ///     communication_style: "Detail-oriented and cautious...".to_string(),
-    ///     visual_identity: None,
-    ///     capabilities: None,
-    /// };
-    ///
-    /// dialogue.add_participant(expert, ClaudeCodeAgent::new());
-    /// ```
-    /// Sets the dialogue context, which shapes the tone and behavior of the conversation.
-    ///
-    /// The context provides implicit instructions to all participants, eliminating
-    /// the need to explain the conversation's purpose in each message.
-    ///
-    /// # Arguments
-    ///
-    /// * `context` - The dialogue context to set
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use llm_toolkit::agent::dialogue::{Dialogue, DialogueContext};
-    ///
-    /// // Brainstorming session
-    /// let mut dialogue = Dialogue::broadcast()
-    ///     .with_context(DialogueContext::Brainstorm)
-    ///     .add_participant(persona1, agent1);
-    ///
-    /// // Custom context
-    /// let mut dialogue = Dialogue::sequential()
-    ///     .with_context(DialogueContext::Custom(
-    ///         "This is a technical deep-dive. Focus on implementation details."
-    ///     ))
-    ///     .add_participant(persona1, agent1);
-    /// ```
-    /// Sets the full dialogue context (talk style, environment, additional context).
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let context = DialogueContext::default()
-    ///     .with_talk_style(TalkStyle::Brainstorm)
-    ///     .with_environment("Production environment")
-    ///     .with_additional_context("Focus on security".to_string());
-    ///
-    /// dialogue.with_context(context);
-    /// ```
-    pub fn with_context(&mut self, context: DialogueContext) -> &mut Self {
-        self.context = Some(context);
-        self
-    }
-
-    /// Sets the talk style for the dialogue.
-    ///
-    /// This is a convenience method for setting only the talk style without
-    /// constructing a full DialogueContext.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// dialogue.with_talk_style(TalkStyle::Debate);
-    /// ```
-    pub fn with_talk_style(&mut self, style: TalkStyle) -> &mut Self {
-        let context = self
-            .context
-            .take()
-            .unwrap_or_default()
-            .with_talk_style(style);
-        self.context = Some(context);
-        self
-    }
-
-    /// Sets the environment information for the dialogue.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// dialogue.with_environment("ClaudeCode environment");
-    /// ```
-    pub fn with_environment(&mut self, env: impl Into<String>) -> &mut Self {
-        let context = self
-            .context
-            .take()
-            .unwrap_or_default()
-            .with_environment(env);
-        self.context = Some(context);
-        self
-    }
-
-    /// Adds additional context to the dialogue.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// dialogue.with_additional_context("Focus on performance".to_string());
-    /// ```
-    pub fn with_additional_context(&mut self, ctx: String) -> &mut Self {
-        let context = self
-            .context
-            .take()
-            .unwrap_or_default()
-            .with_additional_context(ctx);
-        self.context = Some(context);
-        self
     }
 
     pub fn add_participant<T>(&mut self, persona: Persona, llm_agent: T) -> &mut Self
@@ -1057,12 +678,25 @@ impl Dialogue {
         initial_prompt: impl Into<Payload>,
         broadcast_order: BroadcastOrder,
     ) -> DialogueSession<'_> {
-        // Convert to Payload first
         let mut payload: Payload = initial_prompt.into();
-        if let Some(ref context) = self.context {
-            payload = payload.prepend_system(context.to_prompt());
+        // Check if agents should react to this message
+        if !self.should_react(&payload) {
+            // Store messages without triggering agent reactions
+            self.no_react_messages.push(payload.clone());
+            // Return a completed session (no agent reactions)
+            let model = self.execution_model.clone();
+            return DialogueSession {
+                dialogue: self,
+                state: SessionState::Completed,
+                model,
+            };
         }
+
+        // Convert to Payload first
         let current_turn = self.message_store.current_turn() + 1;
+
+        // Apply dialogue context if set
+        payload = self.setup_payload(&payload);
 
         crate::tracing::trace!(
             target = "llm_toolkit::dialogue",
@@ -1088,7 +722,7 @@ impl Dialogue {
         if !messages.is_empty() {
             for msg in &messages {
                 let dialogue_msg =
-                    DialogueMessage::new(current_turn, msg.speaker.clone(), msg.content.clone());
+                    DialogueMessage::new(current_turn, msg.speaker.clone(), msg.content.clone()).with_metadata(&msg.metadata);
                 self.message_store.push(dialogue_msg);
             }
             trace!(
@@ -1180,6 +814,35 @@ impl Dialogue {
         }
     }
 
+    /// Determines whether agents should react to the given payload.
+    ///
+    /// This checks the reaction strategy to decide if the message should trigger
+    /// agent responses or be stored as context-only information.
+    fn should_react(&self, payload: &Payload) -> bool {
+        use crate::agent::dialogue::Speaker;
+
+        match &self.reaction_strategy {
+            ReactionStrategy::Always => true,
+            ReactionStrategy::UserOnly => {
+                payload.to_messages()
+                    .iter()
+                    .any(|msg| matches!(msg.speaker, Speaker::User { .. }))
+            }
+            ReactionStrategy::AgentOnly => {
+                payload.to_messages()
+                    .iter()
+                    .any(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
+            }
+            ReactionStrategy::ExceptSystem => {
+                payload.to_messages()
+                    .iter()
+                    .any(|msg| !matches!(msg.speaker, Speaker::System))
+            }
+            ReactionStrategy::Custom(f) => f(payload, &self.message_store),
+        }
+    }
+
+
     /// Runs the dialogue with the configured execution model.
     ///
     /// The behavior depends on the execution model:
@@ -1238,11 +901,21 @@ impl Dialogue {
         &mut self,
         initial_prompt: impl Into<Payload>,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
+        let payload = initial_prompt.into();
+
+        // Check if agents should react to this message
+        if !self.should_react(&payload) {
+            // Store messages without triggering agent reactions
+            self.no_react_messages.push(payload);
+            return Ok(vec![]);
+        }
+
         // Use new implementation for both modes
+        // Note: no_react_messages will be prepended by each execution mode
         match self.execution_model {
-            ExecutionModel::Broadcast => self.run_broadcast_new(initial_prompt).await,
-            ExecutionModel::Sequential => self.run_sequential_new(initial_prompt).await,
-            ExecutionModel::Mentioned => self.run_mentioned_new(initial_prompt).await,
+            ExecutionModel::Broadcast => self.run_broadcast_new(payload).await,
+            ExecutionModel::Sequential => self.run_sequential_new(payload).await,
+            ExecutionModel::Mentioned => self.run_mentioned_new(payload).await,
         }
     }
 
@@ -1294,7 +967,11 @@ impl Dialogue {
             .message_store
             .unsent_messages()
             .iter()
-            .map(|msg| PayloadMessage::new(msg.speaker.clone(), msg.content.clone()))
+            .map(|msg| PayloadMessage {
+                speaker: msg.speaker.clone(),
+                content: msg.content.clone(),
+                metadata: msg.metadata.clone(),
+            })
             .collect();
 
         // Collect message IDs to mark as sent after spawning tasks
@@ -1387,6 +1064,18 @@ impl Dialogue {
         }
 
         pending
+    }
+
+    fn setup_payload(&self, payload: &Payload) -> Payload {
+        let mut acc = Payload::new();
+        for no_react in self.no_react_messages.iter() {
+            acc = acc.merge(no_react.clone());
+        }
+        acc = acc.merge(payload.clone());
+        if let Some(ref context) = self.context {
+            acc = acc.prepend_system(context.to_prompt());
+        }
+        acc
     }
 
     /// Helper method to spawn tasks for mentioned participants only.
@@ -1501,8 +1190,8 @@ impl Dialogue {
         let unsent_messages: Vec<PayloadMessage> = self
             .message_store
             .unsent_messages()
-            .iter()
-            .map(|msg| PayloadMessage::new(msg.speaker.clone(), msg.content.clone()))
+            .into_iter()
+            .map(|msg| msg.into())
             .collect();
 
         // Collect message IDs to mark as sent after spawning tasks
@@ -1654,9 +1343,7 @@ impl Dialogue {
         let current_turn = self.message_store.current_turn() + 1;
 
         // Apply dialogue context if set
-        if let Some(ref context) = self.context {
-            payload = payload.prepend_system(context.to_prompt());
-        }
+        payload = self.setup_payload(&payload);
 
         debug!(
             target = "llm_toolkit::dialogue",
@@ -1712,9 +1399,7 @@ impl Dialogue {
         let current_turn = self.message_store.current_turn() + 1;
 
         // Apply dialogue context if set
-        if let Some(ref context) = self.context {
-            payload = payload.prepend_system(context.to_prompt());
-        }
+        payload = self.setup_payload(&payload);
 
         debug!(
             target = "llm_toolkit::dialogue",
@@ -1765,8 +1450,6 @@ impl Dialogue {
 
         for (idx, participant) in self.participants.iter().enumerate() {
             let agent = &participant.agent;
-            let _name = participant.name().to_string();
-
             // Create payload based on position in sequence
             let final_payload = if idx == 0 {
                 // First agent: use original payload + ALL previous turn's agent outputs (if exists)
@@ -1822,9 +1505,7 @@ impl Dialogue {
         let current_turn = self.message_store.current_turn() + 1;
 
         // Apply dialogue context if set
-        if let Some(ref context) = self.context {
-            payload = payload.prepend_system(context.to_prompt());
-        }
+        payload = self.setup_payload(&payload);
 
         debug!(
             target = "llm_toolkit::dialogue",
@@ -1898,9 +1579,13 @@ impl Dialogue {
 
         for content in payload.contents() {
             match content {
-                PayloadContent::Message { speaker, content } => {
-                    // Store as individual message with explicit speaker
-                    messages.push(DialogueMessage::new(turn, speaker.clone(), content.clone()));
+                PayloadContent::Message {
+                    speaker,
+                    content,
+                    metadata,
+                } => {
+                    // Store as individual message with explicit speaker and metadata
+                    messages.push(DialogueMessage::new(turn, speaker.clone(), content.clone()).with_metadata(metadata));
                     text_parts.push(content.as_str());
                 }
                 PayloadContent::Text(text) => {
@@ -5554,5 +5239,403 @@ mod tests {
         assert_eq!(history[1].speaker.name(), "Alice");
         assert_eq!(history[2].speaker.name(), "System");
         assert_eq!(history[3].speaker.name(), "Bob");
+    }
+
+    // Helper agent that records received payloads for testing
+    #[derive(Clone)]
+    struct RecordingAgent {
+        name: String,
+        response: String,
+        received_payloads: std::sync::Arc<std::sync::Mutex<Vec<Payload>>>,
+    }
+
+    impl RecordingAgent {
+        fn new(name: impl Into<String>, response: impl Into<String>) -> Self {
+            Self {
+                name: name.into(),
+                response: response.into(),
+                received_payloads: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn get_received_payloads(&self) -> Vec<Payload> {
+            self.received_payloads.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl Agent for RecordingAgent {
+        type Output = String;
+
+        fn expertise(&self) -> &str {
+            "Recording agent for testing"
+        }
+
+        fn name(&self) -> String {
+            self.name.clone()
+        }
+
+        async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+            self.received_payloads.lock().unwrap().push(payload);
+            Ok(self.response.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reaction_strategy_broadcast_context_info() {
+        use crate::agent::dialogue::message::{MessageMetadata, MessageType};
+        use crate::agent::persona::Persona;
+
+        let persona = Persona {
+            name: "Agent1".to_string(),
+            role: "Assistant".to_string(),
+            background: "Test agent".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent = RecordingAgent::new("Agent1", "I can help with that");
+
+        let mut dialogue = Dialogue::broadcast();
+        dialogue
+            .add_participant(persona, agent.clone())
+            .with_reaction_strategy(ReactionStrategy::Custom(Arc::new(|payload, _| {
+                // Don't react to ContextInfo messages
+                !payload.to_messages().iter().any(|msg| {
+                    msg.metadata.is_type(&MessageType::ContextInfo)
+                })
+            })));
+
+        // Turn 1: Send ContextInfo message (should not trigger reaction)
+        let context_payload = Payload::new().add_message_with_metadata(
+            Speaker::System,
+            "Analysis completed: 3 issues found",
+            MessageMetadata::new().with_type(MessageType::ContextInfo),
+        );
+
+        let turns = dialogue.run(context_payload).await.unwrap();
+        assert_eq!(turns.len(), 0, "ContextInfo should not trigger reaction");
+
+        // Verify ContextInfo is stored
+        let history = dialogue.history();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].speaker.name(), "System");
+        assert_eq!(history[0].content, "Analysis completed: 3 issues found");
+
+        // Turn 2: Send User message (should trigger reaction)
+        let user_payload = Payload::from_messages(vec![PayloadMessage::new(
+            Speaker::user("Alice", "User"),
+            "Tell me more about the issues",
+        )]);
+
+        let turns = dialogue.run(user_payload).await.unwrap();
+        assert_eq!(turns.len(), 1, "User message should trigger reaction");
+        assert_eq!(turns[0].speaker.name(), "Agent1");
+        assert_eq!(turns[0].content, "I can help with that");
+
+        // Verify agent received both ContextInfo and User message
+        let received = agent.get_received_payloads();
+        assert_eq!(received.len(), 1, "Agent should have been called once");
+
+        let received_messages = received[0].to_messages();
+        assert_eq!(
+            received_messages.len(),
+            2,
+            "Agent should receive both ContextInfo and User message"
+        );
+
+        // First message should be ContextInfo
+        assert_eq!(received_messages[0].speaker.name(), "System");
+        assert_eq!(
+            received_messages[0].content,
+            "Analysis completed: 3 issues found"
+        );
+        assert!(
+            received_messages[0].metadata.is_type(&MessageType::ContextInfo),
+            "Metadata should be preserved"
+        );
+
+        // Second message should be User message
+        assert_eq!(received_messages[1].speaker.name(), "Alice");
+        assert_eq!(received_messages[1].content, "Tell me more about the issues");
+    }
+
+    #[tokio::test]
+    async fn test_reaction_strategy_sequential_context_info() {
+        use crate::agent::dialogue::message::{MessageMetadata, MessageType};
+        use crate::agent::persona::Persona;
+
+        let persona1 = Persona {
+            name: "Agent1".to_string(),
+            role: "Analyzer".to_string(),
+            background: "First agent".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let persona2 = Persona {
+            name: "Agent2".to_string(),
+            role: "Reviewer".to_string(),
+            background: "Second agent".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent1 = RecordingAgent::new("Agent1", "Analysis done");
+        let agent2 = RecordingAgent::new("Agent2", "Review complete");
+
+        let mut dialogue = Dialogue::sequential();
+        dialogue
+            .add_participant(persona1, agent1.clone())
+            .add_participant(persona2, agent2.clone())
+            .with_reaction_strategy(ReactionStrategy::Custom(Arc::new(|payload, _| {
+                !payload.to_messages().iter().any(|msg| {
+                    msg.metadata.is_type(&MessageType::ContextInfo)
+                })
+            })));
+
+        // Turn 1: ContextInfo (no reaction)
+        let context_payload = Payload::new().add_message_with_metadata(
+            Speaker::System,
+            "Background: Project uses Rust",
+            MessageMetadata::new().with_type(MessageType::ContextInfo),
+        );
+
+        let turns = dialogue.run(context_payload).await.unwrap();
+        assert_eq!(turns.len(), 0);
+
+        // Turn 2: User message (triggers sequential execution)
+        let user_payload = Payload::from_messages(vec![PayloadMessage::new(
+            Speaker::user("Bob", "User"),
+            "Analyze the code",
+        )]);
+
+        let turns = dialogue.run(user_payload).await.unwrap();
+        assert_eq!(turns.len(), 1); // Sequential returns only final turn
+        assert_eq!(turns[0].speaker.name(), "Agent2");
+
+        // Verify Agent1 received ContextInfo + User message
+        let agent1_received = agent1.get_received_payloads();
+        assert_eq!(agent1_received.len(), 1);
+        let agent1_messages = agent1_received[0].to_messages();
+        assert_eq!(agent1_messages.len(), 2);
+        assert_eq!(agent1_messages[0].content, "Background: Project uses Rust");
+        assert!(agent1_messages[0].metadata.is_type(&MessageType::ContextInfo));
+        assert_eq!(agent1_messages[1].content, "Analyze the code");
+
+        // Verify Agent2 received ContextInfo + User message + Agent1 output
+        let agent2_received = agent2.get_received_payloads();
+        assert_eq!(agent2_received.len(), 1);
+        let agent2_messages = agent2_received[0].to_messages();
+        assert!(
+            agent2_messages.len() >= 2,
+            "Agent2 should receive at least ContextInfo and Agent1's output"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reaction_strategy_mentioned_context_info() {
+        use crate::agent::dialogue::message::{MessageMetadata, MessageType};
+        use crate::agent::persona::Persona;
+
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "First agent".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Reviewer".to_string(),
+            background: "Second agent".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent1 = RecordingAgent::new("Alice", "I'll handle it");
+        let agent2 = RecordingAgent::new("Bob", "Sounds good");
+
+        let mut dialogue = Dialogue::mentioned();
+        dialogue
+            .add_participant(persona1, agent1.clone())
+            .add_participant(persona2, agent2.clone())
+            .with_reaction_strategy(ReactionStrategy::Custom(Arc::new(|payload, _| {
+                !payload.to_messages().iter().any(|msg| {
+                    msg.metadata.is_type(&MessageType::ContextInfo)
+                })
+            })));
+
+        // Turn 1: ContextInfo (no reaction)
+        let context_payload = Payload::new().add_message_with_metadata(
+            Speaker::System,
+            "Note: Use async/await",
+            MessageMetadata::new().with_type(MessageType::ContextInfo),
+        );
+
+        let turns = dialogue.run(context_payload).await.unwrap();
+        assert_eq!(turns.len(), 0);
+
+        // Turn 2: Mention only Alice
+        let user_payload = Payload::from_messages(vec![PayloadMessage::new(
+            Speaker::user("User", "User"),
+            "@Alice can you implement this?",
+        )]);
+
+        let turns = dialogue.run(user_payload).await.unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].speaker.name(), "Alice");
+
+        // Verify Alice received ContextInfo + User message
+        let alice_received = agent1.get_received_payloads();
+        assert_eq!(alice_received.len(), 1);
+        let alice_messages = alice_received[0].to_messages();
+        assert_eq!(alice_messages.len(), 2);
+        assert_eq!(alice_messages[0].content, "Note: Use async/await");
+        assert!(alice_messages[0].metadata.is_type(&MessageType::ContextInfo));
+        assert_eq!(alice_messages[1].content, "@Alice can you implement this?");
+
+        // Verify Bob was not called (not mentioned)
+        let bob_received = agent2.get_received_payloads();
+        assert_eq!(bob_received.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_reaction_strategy_partial_session() {
+        use crate::agent::dialogue::message::{MessageMetadata, MessageType};
+        use crate::agent::persona::Persona;
+
+        let persona = Persona {
+            name: "Agent1".to_string(),
+            role: "Assistant".to_string(),
+            background: "Test agent".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent = RecordingAgent::new("Agent1", "Understood");
+
+        let mut dialogue = Dialogue::broadcast();
+        dialogue
+            .add_participant(persona, agent.clone())
+            .with_reaction_strategy(ReactionStrategy::Custom(Arc::new(|payload, _| {
+                !payload.to_messages().iter().any(|msg| {
+                    msg.metadata.is_type(&MessageType::ContextInfo)
+                })
+            })));
+
+        // Turn 1: ContextInfo via partial_session
+        let context_payload = Payload::new().add_message_with_metadata(
+            Speaker::System,
+            "System ready",
+            MessageMetadata::new().with_type(MessageType::ContextInfo),
+        );
+
+        let mut session = dialogue.partial_session(context_payload);
+        let mut turn_count = 0;
+        while let Some(result) = session.next_turn().await {
+            result.unwrap();
+            turn_count += 1;
+        }
+        assert_eq!(turn_count, 0, "ContextInfo should not produce turns");
+
+        // Turn 2: User message via partial_session
+        let user_payload = Payload::from_messages(vec![PayloadMessage::new(
+            Speaker::user("User", "User"),
+            "Hello",
+        )]);
+
+        let mut session = dialogue.partial_session(user_payload);
+        let mut turn_count = 0;
+        while let Some(result) = session.next_turn().await {
+            let turn = result.unwrap();
+            assert_eq!(turn.speaker.name(), "Agent1");
+            assert_eq!(turn.content, "Understood");
+            turn_count += 1;
+        }
+        assert_eq!(turn_count, 1);
+
+        // Verify agent received both messages
+        let received = agent.get_received_payloads();
+        assert_eq!(received.len(), 1);
+        let messages = received[0].to_messages();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].content, "System ready");
+        assert!(messages[0].metadata.is_type(&MessageType::ContextInfo));
+        assert_eq!(messages[1].content, "Hello");
+    }
+
+    #[tokio::test]
+    async fn test_multiple_context_info_accumulation() {
+        use crate::agent::dialogue::message::{MessageMetadata, MessageType};
+        use crate::agent::persona::Persona;
+
+        let persona = Persona {
+            name: "Agent1".to_string(),
+            role: "Assistant".to_string(),
+            background: "Test agent".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent = RecordingAgent::new("Agent1", "Got it");
+
+        let mut dialogue = Dialogue::broadcast();
+        dialogue
+            .add_participant(persona, agent.clone())
+            .with_reaction_strategy(ReactionStrategy::Custom(Arc::new(|payload, _| {
+                !payload.to_messages().iter().any(|msg| {
+                    msg.metadata.is_type(&MessageType::ContextInfo)
+                })
+            })));
+
+        // Send multiple ContextInfo messages
+        for i in 1..=3 {
+            let context_payload = Payload::new().add_message_with_metadata(
+                Speaker::System,
+                format!("Context {}", i),
+                MessageMetadata::new().with_type(MessageType::ContextInfo),
+            );
+            let turns = dialogue.run(context_payload).await.unwrap();
+            assert_eq!(turns.len(), 0);
+        }
+
+        // Verify all ContextInfo messages are stored
+        let history = dialogue.history();
+        assert_eq!(history.len(), 3);
+
+        // Send User message
+        let user_payload = Payload::from_messages(vec![PayloadMessage::new(
+            Speaker::user("User", "User"),
+            "Process all context",
+        )]);
+
+        let turns = dialogue.run(user_payload).await.unwrap();
+        assert_eq!(turns.len(), 1);
+
+        // Verify agent received all accumulated ContextInfo + User message
+        let received = agent.get_received_payloads();
+        assert_eq!(received.len(), 1);
+        let messages = received[0].to_messages();
+        assert_eq!(
+            messages.len(),
+            4,
+            "Should receive 3 ContextInfo + 1 User message"
+        );
+
+        // Verify all ContextInfo messages are present with correct metadata
+        for i in 0..3 {
+            assert_eq!(messages[i].content, format!("Context {}", i + 1));
+            assert!(messages[i].metadata.is_type(&MessageType::ContextInfo));
+        }
+        assert_eq!(messages[3].content, "Process all context");
     }
 }
