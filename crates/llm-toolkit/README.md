@@ -1361,6 +1361,93 @@ Need deterministic ordering instead of completion order? Create the session with
 
 The existing `Dialogue::run` helper still collects everything for you (and, in sequential mode, keeps returning only the final turn) by internally driving a `partial_session` to completion.
 
+###### Multi-Turn Conversations
+
+Execute multiple turns by calling `run()` repeatedly. The dialogue automatically maintains conversation history, so agents have full context in each subsequent turn:
+
+```rust
+let mut dialogue = Dialogue::sequential()
+    .add_participant(persona1, agent1)
+    .add_participant(persona2, agent2);
+
+// Turn 1: Initial discussion
+let turn1 = dialogue.run("Let's discuss the architecture").await?;
+
+// Turn 2: Agents see turn1 in history
+let turn2 = dialogue.run("What are the trade-offs?").await?;
+
+// Turn 3: Agents see all previous turns
+let turn3 = dialogue.run("Make a final decision").await?;
+```
+
+Each `run()` call:
+- Executes one turn with all (or mentioned) participants
+- Automatically stores results in the message history
+- Provides full context to agents in subsequent turns
+
+**Continuing the Conversation:**
+
+Use system messages to guide multi-turn dialogues:
+
+```rust
+use llm_toolkit::agent::{Payload, PayloadMessage, Speaker};
+
+// Turn 1: Initial prompt
+dialogue.run("Brainstorm ideas for the new feature").await?;
+
+// Turn 2: Ask agents to continue
+let continue_prompt = Payload::from_messages(vec![
+    PayloadMessage::new(Speaker::System, "NEXT: Refine the top 3 ideas"),
+]);
+dialogue.run(continue_prompt).await?;
+
+// Turn 3: Request convergence
+let decide_prompt = Payload::from_messages(vec![
+    PayloadMessage::new(Speaker::System, "NEXT: Make a final decision"),
+]);
+dialogue.run(decide_prompt).await?;
+```
+
+**Convergence-Based Loop:**
+
+For iterative discussions, implement your own convergence logic:
+
+```rust
+let mut dialogue = Dialogue::broadcast()
+    .add_participant(persona1, agent1)
+    .add_participant(persona2, agent2);
+
+// Initial prompt
+dialogue.run("Discuss the API design").await?;
+
+// Continue until convergence or max turns
+for turn_num in 1..10 {
+    // Check for convergence keywords
+    let history = dialogue.history();
+    let last_content = history.last().map(|t| &t.content).unwrap_or("");
+
+    if last_content.contains("DECISION:") || last_content.contains("AGREED:") {
+        println!("Converged after {} turns", turn_num);
+        break;
+    }
+
+    // Continue the discussion
+    let next_prompt = Payload::from_messages(vec![
+        PayloadMessage::new(
+            Speaker::System,
+            format!("NEXT: Continue discussion (Turn {})", turn_num + 1)
+        ),
+    ]);
+    dialogue.run(next_prompt).await?;
+}
+```
+
+This approach gives you full control over:
+- Turn limits (cost control)
+- Convergence conditions (content-based, time-based, etc.)
+- Custom prompts for each turn
+- Logging and debugging at each step
+
 **Available Methods:**
 
 The `Dialogue` component provides several methods for managing conversations:
