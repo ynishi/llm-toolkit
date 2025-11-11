@@ -60,9 +60,7 @@ impl Agent for VectorStoreAgent {
         // Simple substring search (in production: use embeddings + similarity search)
         let mut results: Vec<_> = docs
             .iter()
-            .filter(|doc| {
-                doc.content.to_lowercase().contains(&query.to_lowercase())
-            })
+            .filter(|doc| doc.content.to_lowercase().contains(&query.to_lowercase()))
             .cloned()
             .collect();
 
@@ -162,15 +160,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     vector_store
         .seed(vec![
-            Document::new("Rust is a systems programming language focused on safety and performance.")
-                .with_source("rust_intro.md")
-                .with_score(0.95),
-            Document::new("Rust's ownership system ensures memory safety without garbage collection.")
-                .with_source("rust_memory.md")
-                .with_score(0.92),
-            Document::new("Rust supports async programming through futures and the async/await syntax.")
-                .with_source("rust_async.md")
-                .with_score(0.88),
+            Document::new(
+                "Rust is a systems programming language focused on safety and performance.",
+            )
+            .with_source("rust_intro.md")
+            .with_score(0.95),
+            Document::new(
+                "Rust's ownership system ensures memory safety without garbage collection.",
+            )
+            .with_source("rust_memory.md")
+            .with_score(0.92),
+            Document::new(
+                "Rust supports async programming through futures and the async/await syntax.",
+            )
+            .with_source("rust_async.md")
+            .with_score(0.88),
             Document::new("Python is a high-level interpreted language known for its simplicity.")
                 .with_source("python_intro.md")
                 .with_score(0.90),

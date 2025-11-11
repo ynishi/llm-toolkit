@@ -124,7 +124,7 @@ pub use intent::frame::IntentFrame;
 pub use intent::{IntentError, IntentExtractor, PromptBasedExtractor};
 pub use multimodal::ImageData;
 pub use prompt::{PromptPart, PromptSetError, ToPrompt, ToPromptFor, ToPromptSet};
-pub use retrieval::{Document, IngestibleDocument};
+pub use retrieval::Document;
 
 #[cfg(feature = "agent")]
 pub use agent::{Agent, AgentError};

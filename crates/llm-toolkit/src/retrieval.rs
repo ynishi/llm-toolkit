@@ -10,37 +10,68 @@
 //! Instead of defining `Retriever` and `Ingestor` traits, implement
 //! retrieval and ingestion as regular agents:
 //!
+//! ## Retrieval Pattern
+//!
+//! Retrievers return `Vec<Document>` and can be composed with `RetrievalAwareAgent`:
+//!
 //! ```ignore
 //! // Retriever as Agent
 //! impl Agent for MyVectorStore {
 //!     type Output = Vec<Document>;
 //!     async fn execute(&self, payload: Payload) -> Result<Vec<Document>, AgentError> {
 //!         let query = payload.to_text();
-//!         // Perform retrieval...
+//!         // Perform semantic search...
 //!         Ok(documents)
 //!     }
 //! }
 //!
-//! // Ingestor as Agent
-//! impl Agent for MyIngestor {
-//!     type Output = ();
-//!     async fn execute(&self, payload: Payload) -> Result<(), AgentError> {
-//!         // Extract documents from payload and ingest...
-//!         Ok(())
-//!     }
-//! }
-//! ```
-//!
-//! Then use `RetrievalAwareAgent` to compose them:
-//!
-//! ```ignore
+//! // Compose with RetrievalAwareAgent
 //! let retriever = MyVectorStore::new();
 //! let base_agent = MyLLMAgent::new();
 //! let rag_agent = RetrievalAwareAgent::new(retriever, base_agent);
 //! ```
-
+//!
+//! ## Ingestion Pattern
+//!
+//! Ingest agent accept `Attachment`s from payload and handle all implementation details
+//! (upload, store creation, metadata management) internally:
+//!
+//! ```ignore
+//! use llm_toolkit::attachment::Attachment;
+//!
+//! // Gemini Files API style
+//! struct GeminiIngestAgent {
+//!     client: GeminiClient,
+//!     store_name: String,  // Internal state
+//! }
+//!
+//! impl Agent for GeminiIngestAgent {
+//!     type Output = IngestResult;  // Can be any type
+//!
+//!     async fn execute(&self, payload: Payload) -> Result<IngestResult, AgentError> {
+//!         let attachments = payload.attachments();
+//!         let mut file_names = Vec::new();
+//!
+//!         for attachment in attachments {
+//!             // 1. Upload file
+//!             let file = self.client.files.upload(attachment).await?;
+//!
+//!             // 2. Import into store (internal detail)
+//!             self.client.stores.import_file(&self.store_name, &file.name).await?;
+//!
+//!             file_names.push(file.name);
+//!         }
+//!
+//!         Ok(IngestResult { file_names })
+//!     }
+//! }
+//!
+//! // Usage - just pass files
+//! let geminiIngestAgent = GeminiIngestAgent::new(client, "my-store");
+//! let payload = Payload::attachment(Attachment::local("document.pdf"));
+//! let result = geminiIngestAgent.execute(payload).await?;
+//! ```
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Represents a piece of retrieved content from a knowledge source.
 ///
@@ -91,59 +122,6 @@ impl Document {
     /// Sets the relevance score for this document.
     pub fn with_score(mut self, score: f32) -> Self {
         self.score = Some(score);
-        self
-    }
-}
-
-/// Represents content to be ingested into a knowledge base.
-///
-/// This is typically consumed by ingestor agents (agents with `Output = ()`).
-/// Ingestor agents should extract these from payloads and persist them
-/// to the underlying storage (vector database, search engine, etc.).
-///
-/// # Examples
-///
-/// ```rust
-/// use llm_toolkit::retrieval::IngestibleDocument;
-/// use std::collections::HashMap;
-///
-/// let doc = IngestibleDocument::new(
-///     "New content to store",
-///     "doc_123",
-/// ).with_metadata("author", "Alice");
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IngestibleDocument {
-    /// The textual content to be ingested
-    pub content: String,
-
-    /// A unique identifier for this content (used for updates/deduplication)
-    pub source_id: String,
-
-    /// Optional metadata to be stored alongside the content
-    #[serde(default)]
-    pub metadata: HashMap<String, String>,
-}
-
-impl IngestibleDocument {
-    /// Creates a new ingestible document.
-    pub fn new(content: impl Into<String>, source_id: impl Into<String>) -> Self {
-        Self {
-            content: content.into(),
-            source_id: source_id.into(),
-            metadata: HashMap::new(),
-        }
-    }
-
-    /// Adds a metadata key-value pair.
-    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.metadata.insert(key.into(), value.into());
-        self
-    }
-
-    /// Sets all metadata at once.
-    pub fn with_metadata_map(mut self, metadata: HashMap<String, String>) -> Self {
-        self.metadata = metadata;
         self
     }
 }

@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use llm_toolkit::agent::retrieval::RetrievalAwareAgent;
 use llm_toolkit::agent::{Agent, AgentError, Payload};
 use llm_toolkit::retrieval::Document;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -120,8 +120,14 @@ async fn test_retrieval_aware_agent_basic_flow() {
 
     let received_docs = inner_calls[0].documents();
     assert_eq!(received_docs.len(), 2);
-    assert_eq!(received_docs[0].content, "Rust is a systems programming language.");
-    assert_eq!(received_docs[1].content, "Rust has ownership and borrowing.");
+    assert_eq!(
+        received_docs[0].content,
+        "Rust is a systems programming language."
+    );
+    assert_eq!(
+        received_docs[1].content,
+        "Rust has ownership and borrowing."
+    );
 }
 
 #[tokio::test]
