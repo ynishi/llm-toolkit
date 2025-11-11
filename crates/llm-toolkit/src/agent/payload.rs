@@ -6,6 +6,7 @@
 use super::dialogue::message::MessageMetadata;
 use super::payload_message::PayloadMessage;
 use crate::attachment::Attachment;
+use crate::retrieval::Document;
 use std::fmt;
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ use std::sync::Arc;
 ///
 /// This enum allows agents to receive different types of input,
 /// including text, attachments, and potentially other media types in the future.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PayloadContent {
     /// Plain text content (treated as User input in dialogue context)
     Text(String),
@@ -35,10 +36,16 @@ pub enum PayloadContent {
     /// names, roles, and background information. This allows agents to understand
     /// the context of who they're interacting with.
     Participants(Vec<crate::agent::dialogue::ParticipantInfo>),
+
+    /// A retrieved document from a knowledge source (RAG)
+    ///
+    /// Documents are typically added by retriever agents and formatted
+    /// by PersonaAgent into a "Retrieved Context" section.
+    Document(Document),
 }
 
 /// Inner payload data, wrapped in Arc for efficient cloning.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct PayloadInner {
     contents: Vec<PayloadContent>,
 }
@@ -61,7 +68,7 @@ struct PayloadInner {
 /// let payload = Payload::text("What's in this image?")
 ///     .with_attachment(Attachment::local("/path/to/image.png"));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Payload {
     /// The contents of this payload, wrapped in Arc for efficient cloning
     inner: Arc<PayloadInner>,
@@ -117,6 +124,7 @@ impl Payload {
                 PayloadContent::Text(text) => acc + text.len(),
                 PayloadContent::Message { content, .. } => acc + content.len(),
                 PayloadContent::Attachment(_) => acc + 1, // Count each attachment as 1
+                PayloadContent::Document(doc) => acc + doc.content.len(),
                 PayloadContent::Participants(participants) => acc + participants.len(),
             }
         })
@@ -159,6 +167,61 @@ impl Payload {
     pub fn with_attachment(self, attachment: Attachment) -> Self {
         let mut new_contents = self.inner.contents.clone();
         new_contents.push(PayloadContent::Attachment(attachment));
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
+    }
+
+    /// Adds a retrieved document to this payload.
+    ///
+    /// Documents are typically added by retriever agents and will be
+    /// formatted by PersonaAgent into a "Retrieved Context" section.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::{Document, Payload};
+    ///
+    /// let doc = Document::new("Rust is a systems programming language.")
+    ///     .with_source("rust_intro.md")
+    ///     .with_score(0.92);
+    ///
+    /// let payload = Payload::text("What is Rust?")
+    ///     .with_document(doc);
+    /// ```
+    pub fn with_document(self, document: Document) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.push(PayloadContent::Document(document));
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
+    }
+
+    /// Adds multiple retrieved documents to this payload.
+    ///
+    /// This is a convenience method for adding multiple documents at once,
+    /// typically used by RetrievalAwareAgent after retrieval.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::{Document, Payload};
+    ///
+    /// let docs = vec![
+    ///     Document::new("Content 1").with_score(0.9),
+    ///     Document::new("Content 2").with_score(0.8),
+    /// ];
+    ///
+    /// let payload = Payload::text("Query")
+    ///     .with_documents(docs);
+    /// ```
+    pub fn with_documents(self, documents: impl IntoIterator<Item = Document>) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.extend(documents.into_iter().map(PayloadContent::Document));
         Self {
             inner: Arc::new(PayloadInner {
                 contents: new_contents,
@@ -495,6 +558,7 @@ impl Payload {
                 }),
                 PayloadContent::Text(_)
                 | PayloadContent::Attachment(_)
+                | PayloadContent::Document(_)
                 | PayloadContent::Participants(_) => None,
             })
             .collect()
@@ -546,6 +610,32 @@ impl Payload {
             .iter()
             .filter_map(|c| match c {
                 PayloadContent::Attachment(a) => Some(a),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Returns a vector of references to all documents in this payload.
+    ///
+    /// Documents are typically added by retriever agents for RAG use cases.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::{Document, Payload};
+    ///
+    /// let doc = Document::new("Content").with_score(0.9);
+    /// let payload = Payload::text("Query").with_document(doc);
+    ///
+    /// let documents = payload.documents();
+    /// assert_eq!(documents.len(), 1);
+    /// ```
+    pub fn documents(&self) -> Vec<&Document> {
+        self.inner
+            .contents
+            .iter()
+            .filter_map(|c| match c {
+                PayloadContent::Document(d) => Some(d),
                 _ => None,
             })
             .collect()

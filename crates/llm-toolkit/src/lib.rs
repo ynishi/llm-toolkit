@@ -106,6 +106,7 @@ pub mod extract;
 pub mod intent;
 pub mod multimodal;
 pub mod prompt;
+pub mod retrieval;
 
 #[cfg(feature = "agent")]
 pub mod observability;
@@ -123,12 +124,16 @@ pub use intent::frame::IntentFrame;
 pub use intent::{IntentError, IntentExtractor, PromptBasedExtractor};
 pub use multimodal::ImageData;
 pub use prompt::{PromptPart, PromptSetError, ToPrompt, ToPromptFor, ToPromptSet};
+pub use retrieval::{Document, IngestibleDocument};
 
 #[cfg(feature = "agent")]
 pub use agent::{Agent, AgentError};
 
 #[cfg(feature = "agent")]
 pub use agent::persona::{Persona, PersonaAgent};
+
+#[cfg(feature = "agent")]
+pub use agent::retrieval::RetrievalAwareAgent;
 
 #[cfg(feature = "agent")]
 pub use orchestrator::{

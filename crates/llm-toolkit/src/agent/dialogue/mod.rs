@@ -1604,8 +1604,10 @@ impl Dialogue {
                     );
                     text_parts.push(text.as_str());
                 }
-                PayloadContent::Attachment(_) | PayloadContent::Participants(_) => {
-                    // Attachments and Participants metadata don't create messages, just pass through
+                PayloadContent::Attachment(_)
+                | PayloadContent::Participants(_)
+                | PayloadContent::Document(_) => {
+                    // Attachments, Participants metadata, and Documents don't create messages, just pass through
                 }
             }
         }

@@ -230,6 +230,9 @@ pub mod persona;
 pub mod history;
 
 #[cfg(feature = "agent")]
+pub mod retrieval;
+
+#[cfg(feature = "agent")]
 pub mod payload_message;
 
 #[cfg(feature = "agent")]
