@@ -37,7 +37,9 @@ use std::fmt;
 /// let cap: Capability = ("db:query", "Query the database").into();
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash, ToPrompt)]
-#[prompt(template = r#"{% if description %}{{ name }}: {{ description }}{% else %}{{ name }}{% endif %}"#)]
+#[prompt(
+    template = r#"{% if description %}{{ name }}: {{ description }}{% else %}{{ name }}{% endif %}"#
+)]
 pub struct Capability {
     /// The capability identifier (e.g., "file:write", "api:weather", "db:query")
     ///

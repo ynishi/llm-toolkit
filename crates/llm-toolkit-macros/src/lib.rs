@@ -2031,13 +2031,14 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             .any(|(name, mode)| name == &field_name_str && mode.is_some());
 
                         if !has_mode_entry {
-                            // Check if field type is likely a struct that implements ToPrompt
-                            // (not a primitive type)
-                            let is_primitive = match &field.ty {
+                            // Determine how to serialize this field
+                            match &field.ty {
                                 syn::Type::Path(type_path) => {
                                     if let Some(segment) = type_path.path.segments.last() {
                                         let type_name = segment.ident.to_string();
-                                        matches!(
+
+                                        // Check if it's a primitive type
+                                        let is_primitive = matches!(
                                             type_name.as_str(),
                                             "String"
                                                 | "str"
@@ -2057,29 +2058,112 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                                 | "f64"
                                                 | "bool"
                                                 | "char"
-                                        )
-                                    } else {
-                                        false
+                                        );
+
+                                        if is_primitive {
+                                            // Primitives: serialize directly
+                                            context_fields.push(quote! {
+                                                context.insert(
+                                                    #field_name_str.to_string(),
+                                                    minijinja::Value::from_serialize(&self.#field_name)
+                                                );
+                                            });
+                                        } else if type_name == "Option" {
+                                            // Option<T>: check if T is Vec, handle specially
+                                            // Extract the generic argument if possible
+                                            let args = &segment.arguments;
+                                            let is_option_vec =
+                                                if let syn::PathArguments::AngleBracketed(
+                                                    angle_args,
+                                                ) = args
+                                                {
+                                                    if let Some(syn::GenericArgument::Type(
+                                                        syn::Type::Path(inner_path),
+                                                    )) = angle_args.args.first()
+                                                    {
+                                                        if let Some(inner_seg) =
+                                                            inner_path.path.segments.last()
+                                                        {
+                                                            inner_seg.ident == "Vec"
+                                                        } else {
+                                                            false
+                                                        }
+                                                    } else {
+                                                        false
+                                                    }
+                                                } else {
+                                                    false
+                                                };
+
+                                            if is_option_vec {
+                                                // Option<Vec<T>>: map elements to to_prompt()
+                                                context_fields.push(quote! {
+                                                    context.insert(
+                                                        #field_name_str.to_string(),
+                                                        match &self.#field_name {
+                                                            Some(vec) => {
+                                                                use #crate_path::prompt::ToPrompt;
+                                                                let prompt_items: Vec<String> = vec.iter()
+                                                                    .map(|item| item.to_prompt())
+                                                                    .collect();
+                                                                minijinja::Value::from_serialize(&Some(prompt_items))
+                                                            }
+                                                            None => minijinja::Value::from_serialize(&None::<Vec<String>>),
+                                                        }
+                                                    );
+                                                });
+                                            } else {
+                                                // Option<T> where T is not Vec: try to_prompt() on inner
+                                                context_fields.push(quote! {
+                                                    context.insert(
+                                                        #field_name_str.to_string(),
+                                                        match &self.#field_name {
+                                                            Some(inner) => {
+                                                                use #crate_path::prompt::ToPrompt;
+                                                                minijinja::Value::from(inner.to_prompt())
+                                                            }
+                                                            None => minijinja::Value::from_serialize(&None::<()>),
+                                                        }
+                                                    );
+                                                });
+                                            }
+                                        } else if type_name == "Vec" {
+                                            // Vec<T>: map each element calling to_prompt() if T implements ToPrompt
+                                            // Generate code that calls to_prompt() on each element
+                                            context_fields.push(quote! {
+                                                context.insert(
+                                                    #field_name_str.to_string(),
+                                                    {
+                                                        use #crate_path::prompt::ToPrompt;
+                                                        // Try to call to_prompt() on each element
+                                                        // This creates a Vec where each element is converted via to_prompt()
+                                                        let prompt_items: Vec<String> = self.#field_name.iter()
+                                                            .map(|item| item.to_prompt())
+                                                            .collect();
+                                                        minijinja::Value::from_serialize(&prompt_items)
+                                                    }
+                                                );
+                                            });
+                                        } else {
+                                            // Other types: call to_prompt()
+                                            context_fields.push(quote! {
+                                                context.insert(
+                                                    #field_name_str.to_string(),
+                                                    minijinja::Value::from(self.#field_name.to_prompt())
+                                                );
+                                            });
+                                        }
                                     }
                                 }
-                                _ => false,
-                            };
-
-                            if is_primitive {
-                                context_fields.push(quote! {
-                                    context.insert(
-                                        #field_name_str.to_string(),
-                                        minijinja::Value::from_serialize(&self.#field_name)
-                                    );
-                                });
-                            } else {
-                                // For non-primitive types, use to_prompt()
-                                context_fields.push(quote! {
-                                    context.insert(
-                                        #field_name_str.to_string(),
-                                        minijinja::Value::from(self.#field_name.to_prompt())
-                                    );
-                                });
+                                _ => {
+                                    // Unknown type: try to_prompt()
+                                    context_fields.push(quote! {
+                                        context.insert(
+                                            #field_name_str.to_string(),
+                                            minijinja::Value::from(self.#field_name.to_prompt())
+                                        );
+                                    });
+                                }
                             }
                         }
                     }
@@ -2161,12 +2245,13 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                         let field_name = field.ident.as_ref().unwrap();
                         let field_name_str = field_name.to_string();
 
-                        // Check if field type is primitive
-                        let is_primitive = match &field.ty {
+                        // Same logic as above for determining how to serialize
+                        match &field.ty {
                             syn::Type::Path(type_path) => {
                                 if let Some(segment) = type_path.path.segments.last() {
                                     let type_name = segment.ident.to_string();
-                                    matches!(
+
+                                    let is_primitive = matches!(
                                         type_name.as_str(),
                                         "String"
                                             | "str"
@@ -2186,29 +2271,100 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                             | "f64"
                                             | "bool"
                                             | "char"
-                                    )
-                                } else {
-                                    false
+                                    );
+
+                                    if is_primitive {
+                                        simple_context_fields.push(quote! {
+                                            context.insert(
+                                                #field_name_str.to_string(),
+                                                minijinja::Value::from_serialize(&self.#field_name)
+                                            );
+                                        });
+                                    } else if type_name == "Option" {
+                                        let args = &segment.arguments;
+                                        let is_option_vec =
+                                            if let syn::PathArguments::AngleBracketed(angle_args) =
+                                                args
+                                            {
+                                                if let Some(syn::GenericArgument::Type(
+                                                    syn::Type::Path(inner_path),
+                                                )) = angle_args.args.first()
+                                                {
+                                                    if let Some(inner_seg) =
+                                                        inner_path.path.segments.last()
+                                                    {
+                                                        inner_seg.ident == "Vec"
+                                                    } else {
+                                                        false
+                                                    }
+                                                } else {
+                                                    false
+                                                }
+                                            } else {
+                                                false
+                                            };
+
+                                        if is_option_vec {
+                                            simple_context_fields.push(quote! {
+                                                context.insert(
+                                                    #field_name_str.to_string(),
+                                                    match &self.#field_name {
+                                                        Some(vec) => {
+                                                            use #crate_path::prompt::ToPrompt;
+                                                            let prompt_items: Vec<String> = vec.iter()
+                                                                .map(|item| item.to_prompt())
+                                                                .collect();
+                                                            minijinja::Value::from_serialize(&Some(prompt_items))
+                                                        }
+                                                        None => minijinja::Value::from_serialize(&None::<Vec<String>>),
+                                                    }
+                                                );
+                                            });
+                                        } else {
+                                            simple_context_fields.push(quote! {
+                                                context.insert(
+                                                    #field_name_str.to_string(),
+                                                    match &self.#field_name {
+                                                        Some(inner) => {
+                                                            use #crate_path::prompt::ToPrompt;
+                                                            minijinja::Value::from(inner.to_prompt())
+                                                        }
+                                                        None => minijinja::Value::from_serialize(&None::<()>),
+                                                    }
+                                                );
+                                            });
+                                        }
+                                    } else if type_name == "Vec" {
+                                        simple_context_fields.push(quote! {
+                                            context.insert(
+                                                #field_name_str.to_string(),
+                                                {
+                                                    use #crate_path::prompt::ToPrompt;
+                                                    let prompt_items: Vec<String> = self.#field_name.iter()
+                                                        .map(|item| item.to_prompt())
+                                                        .collect();
+                                                    minijinja::Value::from_serialize(&prompt_items)
+                                                }
+                                            );
+                                        });
+                                    } else {
+                                        simple_context_fields.push(quote! {
+                                            context.insert(
+                                                #field_name_str.to_string(),
+                                                minijinja::Value::from(self.#field_name.to_prompt())
+                                            );
+                                        });
+                                    }
                                 }
                             }
-                            _ => false,
-                        };
-
-                        if is_primitive {
-                            simple_context_fields.push(quote! {
-                                context.insert(
-                                    #field_name_str.to_string(),
-                                    minijinja::Value::from_serialize(&self.#field_name)
-                                );
-                            });
-                        } else {
-                            // For non-primitive types, use to_prompt()
-                            simple_context_fields.push(quote! {
-                                context.insert(
-                                    #field_name_str.to_string(),
-                                    minijinja::Value::from(self.#field_name.to_prompt())
-                                );
-                            });
+                            _ => {
+                                simple_context_fields.push(quote! {
+                                    context.insert(
+                                        #field_name_str.to_string(),
+                                        minijinja::Value::from(self.#field_name.to_prompt())
+                                    );
+                                });
+                            }
                         }
                     }
 

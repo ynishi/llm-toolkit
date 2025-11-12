@@ -1125,4 +1125,78 @@ Please review the code
             "I suggest we focus on performance"
         );
     }
+
+    #[test]
+    fn persona_capabilities_formatting() {
+        use crate::ToPrompt;
+        use crate::agent::Capability;
+
+        let persona = Persona {
+            name: "DevBot".to_string(),
+            role: "Development Assistant".to_string(),
+            background: "Helps with software development tasks".to_string(),
+            communication_style: "Technical and precise".to_string(),
+            visual_identity: None,
+            capabilities: Some(vec![
+                Capability::new("file:read"),
+                Capability::new("file:write").with_description("Write content to a file"),
+                Capability::new("api:call").with_description("Make HTTP API calls"),
+            ]),
+        };
+
+        let prompt = persona.to_prompt();
+
+        // Verify capabilities section exists
+        assert!(
+            prompt.contains("## Capabilities"),
+            "Capabilities section should be present"
+        );
+
+        // Verify each capability is on its own line with proper formatting
+        assert!(
+            prompt.contains("- file:read"),
+            "First capability should be properly formatted"
+        );
+        assert!(
+            prompt.contains("- file:write: Write content to a file"),
+            "Second capability with description should be properly formatted"
+        );
+        assert!(
+            prompt.contains("- api:call: Make HTTP API calls"),
+            "Third capability with description should be properly formatted"
+        );
+
+        // Verify capabilities are NOT displayed one character per line
+        // (this would happen if template incorrectly iterates over string chars)
+        let lines: Vec<&str> = prompt.lines().collect();
+        let capability_section_start = lines
+            .iter()
+            .position(|line| line.contains("## Capabilities"))
+            .expect("Should have Capabilities section");
+
+        // Check that the lines after "## Capabilities" contain full capability strings
+        // Skip empty lines and get actual capability lines
+        let cap_lines: Vec<&str> = lines
+            .iter()
+            .skip(capability_section_start + 1)
+            .filter(|line| !line.trim().is_empty())
+            .take(3)
+            .copied()
+            .collect();
+
+        // Each capability line should be more than a few characters
+        assert_eq!(cap_lines.len(), 3, "Should have 3 capability lines");
+        for cap_line in &cap_lines {
+            assert!(
+                cap_line.len() > 5,
+                "Capability line should be a full line, not single characters. Got: '{}'",
+                cap_line
+            );
+            assert!(
+                cap_line.starts_with('-'),
+                "Capability line should start with '-'. Got: '{}'",
+                cap_line
+            );
+        }
+    }
 }
