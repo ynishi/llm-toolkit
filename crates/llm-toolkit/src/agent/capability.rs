@@ -3,7 +3,7 @@
 //! This module provides types for declaring and managing agent capabilities
 //! (tools/actions) in a structured, extensible way.
 
-use crate::prompt::ToPrompt;
+use llm_toolkit_macros::ToPrompt;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -36,7 +36,8 @@ use std::fmt;
 /// // From tuple (name, description)
 /// let cap: Capability = ("db:query", "Query the database").into();
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash, ToPrompt)]
+#[prompt(template = r#"{% if description %}{{ name }}: {{ description }}{% else %}{{ name }}{% endif %}"#)]
 pub struct Capability {
     /// The capability identifier (e.g., "file:write", "api:weather", "db:query")
     ///
@@ -95,23 +96,6 @@ impl fmt::Display for Capability {
         } else {
             write!(f, "{}", self.name)
         }
-    }
-}
-
-impl ToPrompt for Capability {
-    fn to_prompt(&self) -> String {
-        self.to_string()
-    }
-
-    fn prompt_schema() -> String {
-        r#"Capability (tool/action identifier):
-- Format: "category:action" (e.g., "file:read", "api:weather", "db:query")
-- Optional description: "capability_name: human-readable description"
-Examples:
-  - file:read
-  - file:write: Write content to a file
-  - api:weather: Get current weather data"#
-            .to_string()
     }
 }
 
@@ -226,9 +210,11 @@ mod tests {
         use crate::prompt::ToPrompt;
 
         let schema = Capability::prompt_schema();
+
+        // Template-based structs now auto-generate TypeScript-style JSON schema
         assert!(schema.contains("Capability"));
-        assert!(schema.contains("category:action"));
-        assert!(schema.contains("file:read"));
-        assert!(schema.contains("api:weather"));
+        assert!(schema.contains("name"));
+        assert!(schema.contains("description"));
+        assert!(schema.contains("type Capability"));
     }
 }

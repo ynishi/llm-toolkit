@@ -1956,6 +1956,16 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                     );
                 };
 
+                // Generate schema parts for prompt_schema() method
+                let struct_name_str = name.to_string();
+                let schema_parts = generate_schema_only_parts(
+                    &struct_name_str,
+                    &struct_docs,
+                    fields,
+                    &crate_path,
+                    type_marker_attr,
+                );
+
                 // Parse template to detect mode syntax
                 let placeholders = parse_template_placeholders_with_mode(&template);
                 // Only use custom mode processing if template actually contains :mode syntax
@@ -2124,7 +2134,20 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             }
 
                             fn prompt_schema() -> String {
-                                String::new() // Template-based structs don't have auto-generated schema
+                                use std::sync::OnceLock;
+                                static SCHEMA_CACHE: OnceLock<String> = OnceLock::new();
+
+                                SCHEMA_CACHE.get_or_init(|| {
+                                    let schema_parts = #schema_parts;
+                                    schema_parts
+                                        .into_iter()
+                                        .filter_map(|part| match part {
+                                            #crate_path::prompt::PromptPart::Text(text) => Some(text),
+                                            _ => None,
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                }).clone()
                             }
                         }
                     }
@@ -2239,7 +2262,20 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             }
 
                             fn prompt_schema() -> String {
-                                String::new() // Template-based structs don't have auto-generated schema
+                                use std::sync::OnceLock;
+                                static SCHEMA_CACHE: OnceLock<String> = OnceLock::new();
+
+                                SCHEMA_CACHE.get_or_init(|| {
+                                    let schema_parts = #schema_parts;
+                                    schema_parts
+                                        .into_iter()
+                                        .filter_map(|part| match part {
+                                            #crate_path::prompt::PromptPart::Text(text) => Some(text),
+                                            _ => None,
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                }).clone()
                             }
                         }
                     }
