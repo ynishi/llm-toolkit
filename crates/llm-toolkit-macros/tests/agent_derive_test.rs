@@ -25,3 +25,9 @@ fn agent_attribute_custom_inner_compile_pass() {
     let t = trybuild::TestCases::new();
     t.pass("tests/ui/agent_attribute_custom_inner.rs");
 }
+
+#[test]
+fn agent_attribute_with_init_compile_pass() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/ui/agent_attribute_with_init.rs");
+}

@@ -4170,7 +4170,7 @@ struct AgentAttrs {
     default_inner: Option<String>,
     max_retries: Option<u32>,
     profile: Option<String>,
-
+    init: Option<String>,
     persona: Option<syn::Expr>,
 }
 
@@ -4184,6 +4184,7 @@ impl Parse for AgentAttrs {
         let mut default_inner = None;
         let mut max_retries = None;
         let mut profile = None;
+        let mut init = None;
         let mut persona = None;
 
         let pairs = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
@@ -4263,6 +4264,15 @@ impl Parse for AgentAttrs {
                         profile = Some(lit_str.value());
                     }
                 }
+                Meta::NameValue(nv) if nv.path.is_ident("init") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = &nv.value
+                    {
+                        init = Some(lit_str.value());
+                    }
+                }
                 Meta::NameValue(nv) if nv.path.is_ident("persona") => {
                     if let syn::Expr::Lit(syn::ExprLit {
                         lit: syn::Lit::Str(lit_str),
@@ -4287,6 +4297,7 @@ impl Parse for AgentAttrs {
             default_inner,
             max_retries,
             profile,
+            init,
             persona,
         })
     }
@@ -4309,6 +4320,7 @@ fn parse_agent_attrs(attrs: &[syn::Attribute]) -> syn::Result<AgentAttrs> {
         default_inner: None,
         max_retries: None,
         profile: None,
+        init: None,
         persona: None,
     })
 }
@@ -4835,11 +4847,26 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
         (backend_constructors, default_impl)
     } else if agent_attrs.default_inner.is_some() {
         // Custom type - generate Default impl for the default type
-        let default_impl = quote! {
-            impl Default for #struct_name {
-                fn default() -> Self {
-                    Self {
-                        inner: <#default_agent_type as Default>::default(),
+        let default_impl = if let Some(init_fn) = &agent_attrs.init {
+            // Apply init function to transform the default inner agent
+            let init_fn_ident: syn::Ident = syn::parse_str(init_fn).unwrap();
+            quote! {
+                impl Default for #struct_name {
+                    fn default() -> Self {
+                        let inner = <#default_agent_type as Default>::default();
+                        let inner = #init_fn_ident(inner);
+                        Self { inner }
+                    }
+                }
+            }
+        } else {
+            // No init function - use default directly
+            quote! {
+                impl Default for #struct_name {
+                    fn default() -> Self {
+                        Self {
+                            inner: <#default_agent_type as Default>::default(),
+                        }
                     }
                 }
             }

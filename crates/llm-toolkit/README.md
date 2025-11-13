@@ -2663,6 +2663,40 @@ This pattern lets you:
 - ✅ Share configuration or customize per-agent
 - ✅ Easy testing with mock backends
 
+**Customizing Default Initialization with `init`:**
+
+When using `default_inner`, you can specify an `init` function to customize the default initialization:
+
+```rust
+// Define an init function that configures the agent
+fn init_with_workspace(agent: ClaudeCodeAgent) -> ClaudeCodeAgent {
+    agent
+        .with_cwd("/workspace/project")
+        .with_env("PATH", enhanced_path())
+}
+
+// Agent with custom default initialization
+#[llm_toolkit_macros::agent(
+    expertise = "Generate project documentation",
+    output = "Documentation",
+    default_inner = "ClaudeCodeAgent",
+    init = "init_with_workspace"  // Applied during Default::default()
+)]
+struct DocGeneratorAgent;
+
+// Usage:
+let agent = DocGeneratorAgent::default();  // init_with_workspace is applied automatically
+// Or with custom inner agent:
+let custom_agent = ClaudeCodeAgent::new().with_model("claude-opus-4-5");
+let agent = DocGeneratorAgent::new(custom_agent);  // init is NOT applied
+```
+
+The `init` function:
+- ✅ **Signature**: Must be `Fn(InnerAgent) -> InnerAgent`
+- ✅ **Applied automatically**: Only when using `::default()`
+- ✅ **Not applied**: When using `::new(custom_agent)`
+- ✅ **Use cases**: Environment-based config, workspace setup, default model selection
+
 **When to use which:**
 - **`#[derive(Agent)]`**: Quick scripts, prototyping, simple tools
 - **`#[agent(...)]` with `backend`**: Production with Claude/Gemini
