@@ -112,6 +112,36 @@ impl Payload {
         }
     }
 
+    /// Creates a payload from any type that implements ToPrompt.
+    ///
+    /// This is a convenience method that converts structured data (DTOs, structs, etc.)
+    /// directly into a Payload without needing to call `.to_prompt()` explicitly.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use serde::{Serialize, Deserialize};
+    ///
+    /// #[derive(Serialize, Deserialize, ToPrompt)]
+    /// struct AnalysisRequest {
+    ///     code: String,
+    ///     language: String,
+    /// }
+    ///
+    /// let request = AnalysisRequest {
+    ///     code: "fn main() {}".to_string(),
+    ///     language: "rust".to_string(),
+    /// };
+    ///
+    /// // Before: request.to_prompt().into()
+    /// // After:  Payload::from_prompt(request)
+    /// let payload = Payload::from_prompt(request);
+    /// ```
+    pub fn from_prompt<T: crate::prompt::ToPrompt>(value: T) -> Self {
+        Self::text(value.to_prompt())
+    }
+
     /// Returns a reference to the contents of this payload.
     pub fn contents(&self) -> &[PayloadContent] {
         &self.inner.contents
@@ -661,6 +691,7 @@ impl From<&str> for Payload {
     }
 }
 
+
 // Display implementation (automatically provides ToString)
 impl fmt::Display for Payload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1062,5 +1093,42 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].speaker, Speaker::System);
         assert_eq!(messages[0].content, "Message 1");
+    }
+
+    #[test]
+    fn test_payload_from_to_prompt() {
+        use llm_toolkit_macros::ToPrompt;
+        use serde::{Deserialize, Serialize};
+
+        // Define a simple DTO with ToPrompt
+        #[derive(Serialize, Deserialize, ToPrompt)]
+        struct TestDto {
+            name: String,
+            value: i32,
+        }
+
+        let dto = TestDto {
+            name: "test".to_string(),
+            value: 42,
+        };
+
+        // Before: had to write dto.to_prompt().into()
+        // Now: can use Payload::from_prompt(dto)
+        let payload = Payload::from_prompt(dto);
+
+        // Verify it contains the structured data in ToPrompt format
+        let text = payload.to_text();
+        assert!(text.contains("name: test"));
+        assert!(text.contains("value: 42"));
+    }
+
+    #[test]
+    fn test_payload_from_string_still_works() {
+        // Verify that String conversion still works (more specific impl takes precedence)
+        let payload: Payload = "test string".to_string().into();
+        assert_eq!(payload.to_text(), "test string");
+
+        let payload: Payload = "test &str".into();
+        assert_eq!(payload.to_text(), "test &str");
     }
 }
