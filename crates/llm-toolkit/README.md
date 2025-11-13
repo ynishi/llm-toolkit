@@ -2697,6 +2697,65 @@ The `init` function:
 - ✅ **Not applied**: When using `::new(custom_agent)`
 - ✅ **Use cases**: Environment-based config, workspace setup, default model selection
 
+**Proxy Builder Methods with `proxy_methods`:**
+
+When using `default_inner`, you can also proxy the inner agent's builder methods to the outer agent:
+
+```rust
+// Agent with proxied builder methods
+#[llm_toolkit_macros::agent(
+    expertise = "Code analysis agent",
+    output = "AnalysisResult",
+    default_inner = "ClaudeCodeAgent",
+    proxy_methods = ["with_cwd", "with_env", "with_model_str"]  // Proxy specific methods
+)]
+struct CodeAnalyzerAgent;
+
+// Usage - builder pattern on the outer agent!
+let agent = CodeAnalyzerAgent::default()
+    .with_cwd("/project/src")
+    .with_env("RUST_LOG", "debug")
+    .with_model_str("claude-opus-4");
+```
+
+Available methods to proxy:
+- ✅ `with_cwd` / `with_directory` / `with_attachment_dir` - Set working directory
+- ✅ `with_env` / `with_envs` - Set environment variables
+- ✅ `with_arg` / `with_args` - Set CLI arguments
+- ✅ `with_model_str` - Set model
+- ✅ `with_execution_profile` - Set execution profile
+- ✅ `with_keep_attachments` - Control attachment retention
+
+The `proxy_methods` feature:
+- ✅ **Array of method names**: Choose only the methods you need
+- ✅ **Type-safe**: Generated with correct signatures
+- ✅ **Builder pattern**: Chainable and consistent with inner agent API
+- ✅ **Combines with `init`**: Use both for maximum flexibility
+
+**Combining `init` and `proxy_methods`:**
+
+```rust
+// Init function for defaults
+fn init_analyzer(agent: ClaudeCodeAgent) -> ClaudeCodeAgent {
+    agent.with_execution_profile(ExecutionProfile::Balanced)
+}
+
+// Agent with both init and proxy_methods
+#[llm_toolkit_macros::agent(
+    expertise = "Advanced code analyzer",
+    output = "AnalysisResult",
+    default_inner = "ClaudeCodeAgent",
+    init = "init_analyzer",                              // Default config
+    proxy_methods = ["with_cwd", "with_env"]             // Runtime config
+)]
+struct AdvancedAnalyzerAgent;
+
+// Usage:
+let agent = AdvancedAnalyzerAgent::default()  // init_analyzer applied
+    .with_cwd("/custom/path")                 // Runtime override via proxy
+    .with_env("DEBUG", "1");                  // Runtime override via proxy
+```
+
 **When to use which:**
 - **`#[derive(Agent)]`**: Quick scripts, prototyping, simple tools
 - **`#[agent(...)]` with `backend`**: Production with Claude/Gemini

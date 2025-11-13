@@ -4171,6 +4171,7 @@ struct AgentAttrs {
     max_retries: Option<u32>,
     profile: Option<String>,
     init: Option<String>,
+    proxy_methods: Option<Vec<String>>,
     persona: Option<syn::Expr>,
 }
 
@@ -4185,6 +4186,7 @@ impl Parse for AgentAttrs {
         let mut max_retries = None;
         let mut profile = None;
         let mut init = None;
+        let mut proxy_methods = None;
         let mut persona = None;
 
         let pairs = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
@@ -4273,6 +4275,21 @@ impl Parse for AgentAttrs {
                         init = Some(lit_str.value());
                     }
                 }
+                Meta::NameValue(nv) if nv.path.is_ident("proxy_methods") => {
+                    if let syn::Expr::Array(array) = &nv.value {
+                        let mut methods = Vec::new();
+                        for elem in &array.elems {
+                            if let syn::Expr::Lit(syn::ExprLit {
+                                lit: syn::Lit::Str(lit_str),
+                                ..
+                            }) = elem
+                            {
+                                methods.push(lit_str.value());
+                            }
+                        }
+                        proxy_methods = Some(methods);
+                    }
+                }
                 Meta::NameValue(nv) if nv.path.is_ident("persona") => {
                     if let syn::Expr::Lit(syn::ExprLit {
                         lit: syn::Lit::Str(lit_str),
@@ -4298,6 +4315,7 @@ impl Parse for AgentAttrs {
             max_retries,
             profile,
             init,
+            proxy_methods,
             persona,
         })
     }
@@ -4321,6 +4339,7 @@ fn parse_agent_attrs(attrs: &[syn::Attribute]) -> syn::Result<AgentAttrs> {
         max_retries: None,
         profile: None,
         init: None,
+        proxy_methods: None,
         persona: None,
     })
 }
@@ -5009,11 +5028,103 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    // Generate proxy methods if requested (only for concrete default type)
+    let proxy_methods = if let Some(ref methods) = agent_attrs.proxy_methods {
+        // Proxy methods only work with concrete types, not generic parameters
+        // Generate impl block for the default type
+        let method_impls: Vec<proc_macro2::TokenStream> = methods
+            .iter()
+            .filter_map(|method_name| {
+                match method_name.as_str() {
+                    "with_cwd" | "with_directory" | "with_attachment_dir" => {
+                        let method_ident = syn::Ident::new(method_name, proc_macro2::Span::call_site());
+                        Some(quote! {
+                            pub fn #method_ident(self, path: impl Into<std::path::PathBuf>) -> Self {
+                                let inner = self.inner.#method_ident(path);
+                                Self::new(inner)
+                            }
+                        })
+                    }
+                    "with_env" => {
+                        Some(quote! {
+                            pub fn with_env(self, key: impl Into<String>, value: impl Into<String>) -> Self {
+                                let inner = self.inner.with_env(key, value);
+                                Self::new(inner)
+                            }
+                        })
+                    }
+                    "with_envs" => {
+                        Some(quote! {
+                            pub fn with_envs(self, envs: std::collections::HashMap<String, String>) -> Self {
+                                let inner = self.inner.with_envs(envs);
+                                Self::new(inner)
+                            }
+                        })
+                    }
+                    "with_arg" => {
+                        Some(quote! {
+                            pub fn with_arg(self, arg: impl Into<String>) -> Self {
+                                let inner = self.inner.with_arg(arg);
+                                Self::new(inner)
+                            }
+                        })
+                    }
+                    "with_args" => {
+                        Some(quote! {
+                            pub fn with_args(self, args: Vec<String>) -> Self {
+                                let inner = self.inner.with_args(args);
+                                Self::new(inner)
+                            }
+                        })
+                    }
+                    "with_model_str" => {
+                        Some(quote! {
+                            pub fn with_model_str(self, model: &str) -> Self {
+                                let inner = self.inner.with_model_str(model);
+                                Self::new(inner)
+                            }
+                        })
+                    }
+                    "with_execution_profile" => {
+                        Some(quote! {
+                            pub fn with_execution_profile(self, profile: #crate_path::agent::ExecutionProfile) -> Self {
+                                let inner = self.inner.with_execution_profile(profile);
+                                Self::new(inner)
+                            }
+                        })
+                    }
+                    "with_keep_attachments" => {
+                        Some(quote! {
+                            pub fn with_keep_attachments(self, keep: bool) -> Self {
+                                let inner = self.inner.with_keep_attachments(keep);
+                                Self::new(inner)
+                            }
+                        })
+                    }
+                    _ => None, // Unknown method, skip
+                }
+            })
+            .collect();
+
+        if !method_impls.is_empty() {
+            quote! {
+                impl #struct_name {
+                    #(#method_impls)*
+                }
+            }
+        } else {
+            quote! {}
+        }
+    } else {
+        quote! {}
+    };
+
     let expanded = quote! {
         #struct_def
         #constructors
         #backend_constructors
         #default_impl
+        #proxy_methods
         #agent_impl
     };
 
