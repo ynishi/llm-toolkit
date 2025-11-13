@@ -691,7 +691,6 @@ impl From<&str> for Payload {
     }
 }
 
-
 // Display implementation (automatically provides ToString)
 impl fmt::Display for Payload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

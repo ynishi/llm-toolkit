@@ -14,6 +14,9 @@ extern crate self as llm_toolkit;
 // Using extern crate to ensure it's accessible via absolute path
 pub extern crate tracing;
 
+// Re-export minijinja for use by ToPrompt derive macro
+pub extern crate minijinja;
+
 /// A derive macro to implement the `ToPrompt` trait for structs.
 ///
 /// This macro is available only when the `derive` feature is enabled.

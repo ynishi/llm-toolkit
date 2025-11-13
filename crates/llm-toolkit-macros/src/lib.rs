@@ -2014,7 +2014,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                             context_fields.push(quote! {
                                 context.insert(
                                     #unique_key.to_string(),
-                                    minijinja::Value::from(self.#field_ident.to_prompt_with_mode(#mode))
+                                    #crate_path::minijinja::Value::from(self.#field_ident.to_prompt_with_mode(#mode))
                                 );
                             });
                         }
@@ -2065,7 +2065,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                             context_fields.push(quote! {
                                                 context.insert(
                                                     #field_name_str.to_string(),
-                                                    minijinja::Value::from_serialize(&self.#field_name)
+                                                    #crate_path::minijinja::Value::from_serialize(&self.#field_name)
                                                 );
                                             });
                                         } else if type_name == "Option" {
@@ -2106,9 +2106,9 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                                                 let prompt_items: Vec<String> = vec.iter()
                                                                     .map(|item| item.to_prompt())
                                                                     .collect();
-                                                                minijinja::Value::from_serialize(&Some(prompt_items))
+                                                                #crate_path::minijinja::Value::from_serialize(&Some(prompt_items))
                                                             }
-                                                            None => minijinja::Value::from_serialize(&None::<Vec<String>>),
+                                                            None => #crate_path::minijinja::Value::from_serialize(&None::<Vec<String>>),
                                                         }
                                                     );
                                                 });
@@ -2120,9 +2120,9 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                                         match &self.#field_name {
                                                             Some(inner) => {
                                                                 use #crate_path::prompt::ToPrompt;
-                                                                minijinja::Value::from(inner.to_prompt())
+                                                                #crate_path::minijinja::Value::from(inner.to_prompt())
                                                             }
-                                                            None => minijinja::Value::from_serialize(&None::<()>),
+                                                            None => #crate_path::minijinja::Value::from_serialize(&None::<()>),
                                                         }
                                                     );
                                                 });
@@ -2140,7 +2140,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                                         let prompt_items: Vec<String> = self.#field_name.iter()
                                                             .map(|item| item.to_prompt())
                                                             .collect();
-                                                        minijinja::Value::from_serialize(&prompt_items)
+                                                        #crate_path::minijinja::Value::from_serialize(&prompt_items)
                                                     }
                                                 );
                                             });
@@ -2149,7 +2149,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                             context_fields.push(quote! {
                                                 context.insert(
                                                     #field_name_str.to_string(),
-                                                    minijinja::Value::from(self.#field_name.to_prompt())
+                                                    #crate_path::minijinja::Value::from(self.#field_name.to_prompt())
                                                 );
                                             });
                                         }
@@ -2160,7 +2160,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                     context_fields.push(quote! {
                                         context.insert(
                                             #field_name_str.to_string(),
-                                            minijinja::Value::from(self.#field_name.to_prompt())
+                                            #crate_path::minijinja::Value::from(self.#field_name.to_prompt())
                                         );
                                     });
                                 }
@@ -2178,7 +2178,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
                                 // Build custom context and render template
                                 let text = {
-                                    let mut env = minijinja::Environment::new();
+                                    let mut env = #crate_path::minijinja::Environment::new();
                                     env.add_template("prompt", #modified_template).unwrap_or_else(|e| {
                                         panic!("Failed to parse template: {}", e)
                                     });
@@ -2202,7 +2202,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
                             fn to_prompt(&self) -> String {
                                 // Same logic for to_prompt
-                                let mut env = minijinja::Environment::new();
+                                let mut env = #crate_path::minijinja::Environment::new();
                                 env.add_template("prompt", #modified_template).unwrap_or_else(|e| {
                                     panic!("Failed to parse template: {}", e)
                                 });
@@ -2277,7 +2277,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                         simple_context_fields.push(quote! {
                                             context.insert(
                                                 #field_name_str.to_string(),
-                                                minijinja::Value::from_serialize(&self.#field_name)
+                                                #crate_path::minijinja::Value::from_serialize(&self.#field_name)
                                             );
                                         });
                                     } else if type_name == "Option" {
@@ -2314,9 +2314,9 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                                             let prompt_items: Vec<String> = vec.iter()
                                                                 .map(|item| item.to_prompt())
                                                                 .collect();
-                                                            minijinja::Value::from_serialize(&Some(prompt_items))
+                                                            #crate_path::minijinja::Value::from_serialize(&Some(prompt_items))
                                                         }
-                                                        None => minijinja::Value::from_serialize(&None::<Vec<String>>),
+                                                        None => #crate_path::minijinja::Value::from_serialize(&None::<Vec<String>>),
                                                     }
                                                 );
                                             });
@@ -2327,9 +2327,9 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                                     match &self.#field_name {
                                                         Some(inner) => {
                                                             use #crate_path::prompt::ToPrompt;
-                                                            minijinja::Value::from(inner.to_prompt())
+                                                            #crate_path::minijinja::Value::from(inner.to_prompt())
                                                         }
-                                                        None => minijinja::Value::from_serialize(&None::<()>),
+                                                        None => #crate_path::minijinja::Value::from_serialize(&None::<()>),
                                                     }
                                                 );
                                             });
@@ -2343,7 +2343,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                                     let prompt_items: Vec<String> = self.#field_name.iter()
                                                         .map(|item| item.to_prompt())
                                                         .collect();
-                                                    minijinja::Value::from_serialize(&prompt_items)
+                                                    #crate_path::minijinja::Value::from_serialize(&prompt_items)
                                                 }
                                             );
                                         });
@@ -2351,7 +2351,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                         simple_context_fields.push(quote! {
                                             context.insert(
                                                 #field_name_str.to_string(),
-                                                minijinja::Value::from(self.#field_name.to_prompt())
+                                                #crate_path::minijinja::Value::from(self.#field_name.to_prompt())
                                             );
                                         });
                                     }
@@ -2361,7 +2361,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                 simple_context_fields.push(quote! {
                                     context.insert(
                                         #field_name_str.to_string(),
-                                        minijinja::Value::from(self.#field_name.to_prompt())
+                                        #crate_path::minijinja::Value::from(self.#field_name.to_prompt())
                                     );
                                 });
                             }
@@ -2378,7 +2378,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
                                 // Build custom context and render template
                                 let text = {
-                                    let mut env = minijinja::Environment::new();
+                                    let mut env = #crate_path::minijinja::Environment::new();
                                     env.add_template("prompt", #template).unwrap_or_else(|e| {
                                         panic!("Failed to parse template: {}", e)
                                     });
@@ -2402,7 +2402,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
 
                             fn to_prompt(&self) -> String {
                                 // Same logic for to_prompt
-                                let mut env = minijinja::Environment::new();
+                                let mut env = #crate_path::minijinja::Environment::new();
                                 env.add_template("prompt", #template).unwrap_or_else(|e| {
                                     panic!("Failed to parse template: {}", e)
                                 });
@@ -3306,7 +3306,7 @@ pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let var_str = var.clone();
             let ident = syn::Ident::new(var, proc_macro2::Span::call_site());
             quote! {
-                __template_context.insert(#var_str.to_string(), minijinja::Value::from(#ident));
+                __template_context.insert(#var_str.to_string(), #crate_path::minijinja::Value::from(#ident));
             }
         })
         .collect();
@@ -3345,7 +3345,7 @@ pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
         // Generate the prompt-building function
         pub fn #function_name(#(#function_params),*) -> String {
-            let mut env = minijinja::Environment::new();
+            let mut env = #crate_path::minijinja::Environment::new();
             env.add_template("prompt", #converted_template)
                 .expect("Failed to parse intent prompt template");
 
@@ -3354,7 +3354,7 @@ pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let mut __template_context = std::collections::HashMap::new();
 
             // Add intents_doc
-            __template_context.insert("intents_doc".to_string(), minijinja::Value::from(#intents_doc_str));
+            __template_context.insert("intents_doc".to_string(), #crate_path::minijinja::Value::from(#intents_doc_str));
 
             // Add user-provided variables
             #(#context_insertions)*
@@ -3624,7 +3624,7 @@ fn generate_multi_tag_output(
             let var_str = var.clone();
             let ident = syn::Ident::new(var, proc_macro2::Span::call_site());
             quote! {
-                __template_context.insert(#var_str.to_string(), minijinja::Value::from(#ident));
+                __template_context.insert(#var_str.to_string(), #crate_path::minijinja::Value::from(#ident));
             }
         })
         .collect();
@@ -3717,7 +3717,7 @@ fn generate_multi_tag_output(
 
         // Generate the prompt-building function
         pub fn #function_name(#(#function_params),*) -> String {
-            let mut env = minijinja::Environment::new();
+            let mut env = #crate_path::minijinja::Environment::new();
             env.add_template("prompt", #prompt_template)
                 .expect("Failed to parse intent prompt template");
 
@@ -3726,7 +3726,7 @@ fn generate_multi_tag_output(
             let mut __template_context = std::collections::HashMap::new();
 
             // Add actions_doc
-            __template_context.insert("actions_doc".to_string(), minijinja::Value::from(#actions_doc));
+            __template_context.insert("actions_doc".to_string(), #crate_path::minijinja::Value::from(#actions_doc));
 
             // Add user-provided variables
             #(#context_insertions)*
@@ -4067,7 +4067,7 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
                 context_fields.push(quote! {
                     context.insert(
                         #unique_key.to_string(),
-                        minijinja::Value::from(self.to_prompt_with_mode(#specific_mode))
+                        #crate_path::minijinja::Value::from(self.to_prompt_with_mode(#specific_mode))
                     );
                 });
             } else {
@@ -4078,7 +4078,7 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
                     context_fields.push(quote! {
                         context.insert(
                             "self".to_string(),
-                            minijinja::Value::from(self.to_prompt_with_mode(mode))
+                            #crate_path::minijinja::Value::from(self.to_prompt_with_mode(mode))
                         );
                     });
                 } else {
@@ -4086,7 +4086,7 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
                     context_fields.push(quote! {
                         context.insert(
                             "self".to_string(),
-                            minijinja::Value::from(self.to_prompt())
+                            #crate_path::minijinja::Value::from(self.to_prompt())
                         );
                     });
                 }
@@ -4109,7 +4109,7 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
                 context_fields.push(quote! {
                     context.insert(
                         #placeholder_name.to_string(),
-                        minijinja::Value::from_serialize(&self.#field_ident)
+                        #crate_path::minijinja::Value::from_serialize(&self.#field_ident)
                     );
                 });
             }
@@ -4124,7 +4124,7 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
         {
             fn to_prompt_for_with_mode(&self, target: &#target_type, mode: &str) -> String {
                 // Create minijinja environment and add template
-                let mut env = minijinja::Environment::new();
+                let mut env = #crate_path::minijinja::Environment::new();
                 env.add_template("prompt", #converted_template).unwrap_or_else(|e| {
                     panic!("Failed to parse template: {}", e)
                 });
@@ -4136,12 +4136,12 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
                 // Add self to the context for field access in templates
                 context.insert(
                     "self".to_string(),
-                    minijinja::Value::from_serialize(self)
+                    #crate_path::minijinja::Value::from_serialize(self)
                 );
                 // Add target to the context
                 context.insert(
                     "target".to_string(),
-                    minijinja::Value::from_serialize(target)
+                    #crate_path::minijinja::Value::from_serialize(target)
                 );
                 #(#context_fields)*
 
