@@ -525,6 +525,47 @@ impl Dialogue {
         self
     }
 
+    /// Adds a pre-configured agent to the dialogue as a participant.
+    ///
+    /// Use this when you need to configure the agent before adding it to the dialogue
+    /// (e.g., PersonaAgent with custom ContextConfig). Unlike `add_participant`,
+    /// this method accepts an already-configured agent instead of a base agent.
+    ///
+    /// # Arguments
+    ///
+    /// * `persona` - The persona information for this participant
+    /// * `agent` - A pre-configured agent (e.g., PersonaAgent with settings)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use llm_toolkit::agent::persona::{PersonaAgent, ContextConfig};
+    ///
+    /// let config = ContextConfig {
+    ///     participants_after_context: true,
+    ///     include_trailing_prompt: true,
+    ///     ..Default::default()
+    /// };
+    ///
+    /// let persona_agent = PersonaAgent::new(base_agent, persona.clone())
+    ///     .with_context_config(config);
+    ///
+    /// dialogue.add_agent(persona, persona_agent);
+    /// ```
+    pub fn add_agent<T>(&mut self, persona: Persona, agent: T) -> &mut Self
+    where
+        T: Agent<Output = String> + 'static,
+    {
+        let chat_agent = Chat::new(agent).with_history(true).build();
+
+        self.participants.push(Participant {
+            persona,
+            agent: Arc::new(chat_agent),
+        });
+
+        self
+    }
+
     /// Returns the names of all current participants in the dialogue.
     ///
     /// This is useful for:
@@ -5672,5 +5713,48 @@ mod tests {
             assert!(message.metadata.is_type(&MessageType::ContextInfo));
         }
         assert_eq!(messages[3].content, "Process all context");
+    }
+
+    #[tokio::test]
+    async fn test_add_agent_with_context_config() {
+        use crate::agent::persona::{ContextConfig, PersonaAgent};
+
+        let mock_agent = MockAgent::new("Alice", vec!["Response from Alice".to_string()]);
+
+        let persona = Persona {
+            name: "Alice".to_string(),
+            role: "Engineer".to_string(),
+            background: "Senior developer".to_string(),
+            communication_style: "Technical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        // Configure PersonaAgent before adding to dialogue
+        let config = ContextConfig {
+            long_conversation_threshold: 1000,
+            recent_messages_count: 10,
+            participants_after_context: true,
+            include_trailing_prompt: true,
+        };
+
+        let persona_agent =
+            PersonaAgent::new(mock_agent, persona.clone()).with_context_config(config);
+
+        // Use add_agent instead of add_participant
+        let mut dialogue = Dialogue::sequential();
+        dialogue.add_agent(persona, persona_agent);
+
+        // Verify participant was added
+        assert_eq!(dialogue.participant_count(), 1);
+        assert_eq!(dialogue.participant_names(), vec!["Alice"]);
+
+        // Execute dialogue
+        let payload = Payload::text("Test message");
+        let turns = dialogue.run(payload).await.unwrap();
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].speaker.name(), "Alice");
+        assert_eq!(turns[0].content, "Response from Alice");
     }
 }

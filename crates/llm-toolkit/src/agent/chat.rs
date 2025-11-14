@@ -166,6 +166,47 @@ impl<A: Agent> Chat<A> {
     }
 }
 
+/// PersonaAgent-specific builder methods for Chat.
+///
+/// These methods are only available when the agent has been wrapped with a Persona
+/// via `with_persona()`.
+impl<A: Agent> Chat<PersonaAgent<A>>
+where
+    A::Output: Send,
+{
+    /// Configures the context placement strategy for the PersonaAgent.
+    ///
+    /// This allows you to customize how context, participants, and trailing prompts
+    /// are positioned in the generated prompts to prevent confusion in long conversations.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The ContextConfig with strategy options
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use llm_toolkit::agent::chat::Chat;
+    /// use llm_toolkit::agent::persona::ContextConfig;
+    ///
+    /// let config = ContextConfig {
+    ///     long_conversation_threshold: 5000,
+    ///     recent_messages_count: 10,
+    ///     participants_after_context: true,
+    ///     include_trailing_prompt: true,
+    /// };
+    ///
+    /// let chat = Chat::new(agent)
+    ///     .with_persona(persona)
+    ///     .with_context_config(config)
+    ///     .build();
+    /// ```
+    pub fn with_context_config(mut self, config: crate::agent::persona::ContextConfig) -> Self {
+        self.agent = self.agent.with_context_config(config);
+        self
+    }
+}
+
 /// Implementation of the `Agent` trait for boxed agents.
 ///
 /// This allows the boxed result from `build()` to be used directly as an agent.
@@ -389,5 +430,38 @@ mod tests {
 
         // With persona, should use persona's role
         assert_eq!(chat.expertise(), "Expert Coder");
+    }
+
+    #[tokio::test]
+    async fn test_chat_builder_with_context_config() {
+        use crate::agent::persona::ContextConfig;
+
+        let test_agent = TestAgent::new("response");
+        let persona = Persona {
+            name: "Alice".to_string(),
+            role: "Assistant".to_string(),
+            background: "Helpful assistant".to_string(),
+            communication_style: "Friendly".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let config = ContextConfig {
+            long_conversation_threshold: 100,
+            recent_messages_count: 5,
+            participants_after_context: true,
+            include_trailing_prompt: true,
+        };
+
+        // Build chat with custom ContextConfig
+        let chat = Chat::new(test_agent)
+            .with_persona(persona)
+            .with_context_config(config)
+            .build();
+
+        // Execute to verify it works
+        let result = chat.execute(Payload::text("Test message")).await.unwrap();
+
+        assert_eq!(result, "response");
     }
 }

@@ -1340,6 +1340,51 @@ let names = dialogue.participant_names();
 // names: vec!["Alice", "Bob", "Charlie"]
 ```
 
+###### Adding Pre-Configured Agents with Custom Settings
+
+When you need to configure PersonaAgent settings (like ContextConfig) before adding to a Dialogue, use `add_agent()`:
+
+```rust
+use llm_toolkit::agent::persona::{PersonaAgent, ContextConfig};
+use llm_toolkit::agent::dialogue::Dialogue;
+
+// Configure ContextConfig for better long conversation handling
+let config = ContextConfig {
+    long_conversation_threshold: 5000,
+    recent_messages_count: 10,
+    participants_after_context: true,  // Place Participants after Context
+    include_trailing_prompt: true,     // Add "YOU (name):" at the end
+};
+
+// Create PersonaAgent with custom config
+let alice_persona = Persona {
+    name: "Alice".to_string(),
+    role: "Engineer".to_string(),
+    background: "Senior developer".to_string(),
+    communication_style: "Technical".to_string(),
+    visual_identity: None,
+    capabilities: None,
+};
+
+let persona_agent = PersonaAgent::new(base_agent, alice_persona.clone())
+    .with_context_config(config);
+
+// Add pre-configured agent to dialogue
+let mut dialogue = Dialogue::sequential();
+dialogue.add_agent(alice_persona, persona_agent);
+```
+
+Alternatively, you can use the Chat builder with `with_context_config()`:
+
+```rust
+let chat_agent = Chat::new(base_agent)
+    .with_persona(persona)
+    .with_context_config(config)
+    .build();
+
+dialogue.add_participant(persona, chat_agent);
+```
+
 ###### Streaming Results with `partial_session`
 
 Interactive shells and UI frontends can consume responses incrementally:
