@@ -42,6 +42,13 @@ pub enum PayloadContent {
     /// Documents are typically added by retriever agents and formatted
     /// by PersonaAgent into a "Retrieved Context" section.
     Document(Document),
+
+    /// Context information (e.g., DialogueContext, environment info)
+    ///
+    /// This is used for information that should remain visible even in long
+    /// conversations without being buried in history. PersonaAgent handles
+    /// strategic placement of this context based on conversation length.
+    Context(String),
 }
 
 /// Inner payload data, wrapped in Arc for efficient cloning.
@@ -156,6 +163,7 @@ impl Payload {
                 PayloadContent::Attachment(_) => acc + 1, // Count each attachment as 1
                 PayloadContent::Document(doc) => acc + doc.content.len(),
                 PayloadContent::Participants(participants) => acc + participants.len(),
+                PayloadContent::Context(ctx) => acc + ctx.len(),
             }
         })
     }
@@ -532,7 +540,7 @@ impl Payload {
     /// Returns all text contents concatenated with newlines.
     ///
     /// This is useful for agents that only support text input.
-    /// Note: This only returns Text variants, not Message variants.
+    /// Note: This only returns Text variants, not Message or Context variants.
     /// For Message-aware processing, use `to_messages()` instead.
     pub fn to_text(&self) -> String {
         self.inner
@@ -589,7 +597,8 @@ impl Payload {
                 PayloadContent::Text(_)
                 | PayloadContent::Attachment(_)
                 | PayloadContent::Document(_)
-                | PayloadContent::Participants(_) => None,
+                | PayloadContent::Participants(_)
+                | PayloadContent::Context(_) => None,
             })
             .collect()
     }
@@ -666,6 +675,55 @@ impl Payload {
             .iter()
             .filter_map(|c| match c {
                 PayloadContent::Document(d) => Some(d),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Adds context information to this payload.
+    ///
+    /// Context is used for information that should remain visible even in long
+    /// conversations without being buried in history (e.g., DialogueContext, environment info).
+    ///
+    /// PersonaAgent will place this context strategically based on conversation length.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// let payload = Payload::text("User question")
+    ///     .with_context("Environment: Production\nFocus: Security");
+    /// ```
+    pub fn with_context(self, context: impl Into<String>) -> Self {
+        let mut new_contents = self.inner.contents.clone();
+        new_contents.push(PayloadContent::Context(context.into()));
+        Self {
+            inner: Arc::new(PayloadInner {
+                contents: new_contents,
+            }),
+        }
+    }
+
+    /// Returns all context strings from this payload.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// let payload = Payload::text("Task")
+    ///     .with_context("Environment: Test");
+    ///
+    /// let contexts = payload.contexts();
+    /// assert_eq!(contexts.len(), 1);
+    /// ```
+    pub fn contexts(&self) -> Vec<&str> {
+        self.inner
+            .contents
+            .iter()
+            .filter_map(|c| match c {
+                PayloadContent::Context(ctx) => Some(ctx.as_str()),
                 _ => None,
             })
             .collect()
@@ -1129,5 +1187,101 @@ mod tests {
 
         let payload: Payload = "test &str".into();
         assert_eq!(payload.to_text(), "test &str");
+    }
+
+    // === Tests for Context support ===
+
+    #[test]
+    fn test_payload_with_context() {
+        let payload =
+            Payload::text("User question").with_context("Environment: Production\nFocus: Security");
+
+        assert_eq!(payload.contents().len(), 2);
+
+        // First should be Text
+        assert!(matches!(
+            &payload.contents()[0],
+            PayloadContent::Text(s) if s == "User question"
+        ));
+
+        // Second should be Context
+        assert!(matches!(
+            &payload.contents()[1],
+            PayloadContent::Context(s) if s == "Environment: Production\nFocus: Security"
+        ));
+    }
+
+    #[test]
+    fn test_payload_contexts() {
+        let payload = Payload::text("Question")
+            .with_context("Context 1")
+            .with_context("Context 2");
+
+        let contexts = payload.contexts();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0], "Context 1");
+        assert_eq!(contexts[1], "Context 2");
+    }
+
+    #[test]
+    fn test_payload_contexts_empty() {
+        let payload = Payload::text("Just text");
+        let contexts = payload.contexts();
+        assert_eq!(contexts.len(), 0);
+    }
+
+    #[test]
+    fn test_payload_context_with_messages() {
+        let payload = Payload::from_messages(vec![
+            PayloadMessage::system("System instruction"),
+            PayloadMessage::user("Alice", "PM", "User question"),
+        ])
+        .with_context("Important context");
+
+        // Should have 2 messages + 1 context
+        assert_eq!(payload.contents().len(), 3);
+
+        let contexts = payload.contexts();
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0], "Important context");
+    }
+
+    #[test]
+    fn test_payload_context_not_in_to_text() {
+        let payload = Payload::text("Text content").with_context("Context content");
+
+        // Context should not appear in to_text() output
+        assert_eq!(payload.to_text(), "Text content");
+    }
+
+    #[test]
+    fn test_payload_context_not_in_to_messages() {
+        let payload = Payload::text("Text").with_context("Context");
+
+        // Context should not appear in to_messages() output
+        let messages = payload.to_messages();
+        assert_eq!(messages.len(), 0); // Text also doesn't appear in to_messages
+    }
+
+    #[test]
+    fn test_payload_merge_with_context() {
+        let payload1 = Payload::text("First").with_context("Context 1");
+        let payload2 = Payload::text("Second").with_context("Context 2");
+
+        let merged = payload1.merge(payload2);
+
+        assert_eq!(merged.contents().len(), 4);
+        let contexts = merged.contexts();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0], "Context 1");
+        assert_eq!(contexts[1], "Context 2");
+    }
+
+    #[test]
+    fn test_payload_total_content_count_includes_context() {
+        let payload = Payload::text("Hello").with_context("World");
+
+        // "Hello" (5) + "World" (5) = 10
+        assert_eq!(payload.total_content_count(), 10);
     }
 }

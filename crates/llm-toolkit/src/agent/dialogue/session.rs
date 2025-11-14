@@ -161,9 +161,9 @@ impl<'a> DialogueSession<'a> {
                         idx,
                     );
 
-                    // Apply dialogue context if exists
+                    // Attach context if exists
                     if let Some(ref context) = self.dialogue.context {
-                        response_payload = response_payload.prepend_system(context.to_prompt());
+                        response_payload = response_payload.with_context(context.to_prompt());
                     }
 
                     let response_result = {

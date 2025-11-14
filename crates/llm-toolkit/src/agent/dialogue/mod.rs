@@ -980,9 +980,9 @@ impl Dialogue {
             let messages = turn_input.to_messages();
             let mut input_payload = Payload::from_messages(messages);
 
-            // Prepend context if exists
+            // Attach context if exists
             if let Some(ref context) = self.context {
-                input_payload = input_payload.prepend_system(context.to_prompt());
+                input_payload = input_payload.with_context(context.to_prompt());
             }
 
             // Apply metadata attachments
@@ -1298,9 +1298,12 @@ impl Dialogue {
             // Create payload with Messages (for structured dialogue history)
             let messages = turn_input.to_messages();
             let mut input_payload = Payload::from_messages(messages);
+
+            // Attach context if exists
             if let Some(ref context) = self.context {
-                input_payload = input_payload.prepend_system(context.to_prompt());
+                input_payload = input_payload.with_context(context.to_prompt());
             }
+
             input_payload =
                 Self::apply_metadata_attachments(input_payload, &messages_with_metadata);
 
@@ -1501,9 +1504,9 @@ impl Dialogue {
             let messages = turn_input.to_messages();
             let mut input_payload = Payload::from_messages(messages);
 
-            // Prepend context if exists
+            // Attach context if exists
             if let Some(ref context) = self.context {
-                input_payload = input_payload.prepend_system(context.to_prompt());
+                input_payload = input_payload.with_context(context.to_prompt());
             }
 
             // Apply metadata attachments
@@ -1606,8 +1609,9 @@ impl Dialogue {
                 }
                 PayloadContent::Attachment(_)
                 | PayloadContent::Participants(_)
-                | PayloadContent::Document(_) => {
-                    // Attachments, Participants metadata, and Documents don't create messages, just pass through
+                | PayloadContent::Document(_)
+                | PayloadContent::Context(_) => {
+                    // Attachments, Participants metadata, Documents, and Context don't create messages, just pass through
                 }
             }
         }

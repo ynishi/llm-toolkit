@@ -133,7 +133,7 @@ pub use retrieval::Document;
 pub use agent::{Agent, AgentError};
 
 #[cfg(feature = "agent")]
-pub use agent::persona::{Persona, PersonaAgent};
+pub use agent::persona::{ContextConfig, Persona, PersonaAgent};
 
 #[cfg(feature = "agent")]
 pub use agent::retrieval::RetrievalAwareAgent;
