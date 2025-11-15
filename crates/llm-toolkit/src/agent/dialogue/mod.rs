@@ -192,34 +192,111 @@ fn format_dialogue_history_as_text(history: &[DialogueTurn]) -> String {
 ///
 /// # Examples
 ///
+/// Extracts @mentions from text using the specified matching strategy.
+///
+/// # Arguments
+/// * `text` - The text to search for mentions
+/// * `participant_names` - List of valid participant names
+/// * `strategy` - The matching strategy to use
+///
+/// # Returns
+/// A deduplicated vector of participant names that were mentioned in the text.
+///
+/// # Examples
 /// ```rust,ignore
-/// let text = "@Alice @Bob what do you think? @Alice?";
+/// let text = "@Alice @Bob what do you think?";
 /// let participants = vec!["Alice", "Bob", "Charlie"];
-/// let mentions = extract_mentions(text, &participants);
+/// let mentions = extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::ExactWord);
 /// assert_eq!(mentions, vec!["Alice", "Bob"]);
 /// ```
-fn extract_mentions<'a>(text: &str, participant_names: &'a [&'a str]) -> Vec<&'a str> {
+fn extract_mentions_with_strategy<'a>(
+    text: &str,
+    participant_names: &'a [&'a str],
+    strategy: MentionMatchStrategy,
+) -> Vec<&'a str> {
     use std::collections::HashSet;
-
-    // Compile regex each time (simpler approach without external dependencies)
-    // Performance impact is minimal for typical dialogue use cases
-    let mention_regex = Regex::new(r"@(\w+)").expect("Invalid regex pattern");
 
     let mut mentioned = HashSet::new();
 
-    // Extract all @mentions from text
-    for cap in mention_regex.captures_iter(text) {
-        if let Some(mention) = cap.get(1) {
-            let mention_str = mention.as_str();
-            // Exact match against participant names
-            if let Some(&matched_name) = participant_names.iter().find(|&&name| name == mention_str)
-            {
-                mentioned.insert(matched_name);
+    match strategy {
+        MentionMatchStrategy::ExactWord => {
+            // Match @word pattern (no spaces)
+            // Matches until space or common ASCII delimiters
+            // Multibyte delimiters typically have space before them, so space-based splitting works
+            let mention_regex =
+                Regex::new(r#"@([^\s@,.!?;:()\[\]{}<>"'`/\\|]+)"#).expect("Invalid regex pattern");
+            for cap in mention_regex.captures_iter(text) {
+                if let Some(mention) = cap.get(1) {
+                    let mention_str = mention.as_str();
+                    // Exact match against participant names
+                    if let Some(&matched_name) =
+                        participant_names.iter().find(|&&name| name == mention_str)
+                    {
+                        mentioned.insert(matched_name);
+                    }
+                }
+            }
+        }
+        MentionMatchStrategy::Name => {
+            // Match full names including spaces
+            // Requires explicit delimiter (space or punctuation) after the name
+            for &name in participant_names {
+                // Match name followed by whitespace, common punctuation, or end of string
+                // Note: Japanese honorifics like "さん" without space won't match
+                // User should write "@あやか なかむら さん" with spaces
+                let pattern = format!("@{}(?:\\s|[,.!?;:]|$)", regex::escape(name));
+                if let Ok(name_regex) = Regex::new(&pattern)
+                    && name_regex.is_match(text)
+                {
+                    mentioned.insert(name);
+                }
+            }
+
+            // Remove names that are prefixes of other matched names
+            // e.g., if both "Ayaka" and "Ayaka Nakamura" matched, keep only "Ayaka Nakamura"
+            let mentioned_copy: Vec<&str> = mentioned.iter().copied().collect();
+            mentioned.retain(|&name| {
+                !mentioned_copy
+                    .iter()
+                    .any(|&other| other != name && other.starts_with(name))
+            });
+        }
+        MentionMatchStrategy::Partial => {
+            // Match by prefix, selecting longest matching candidate
+            // Matches until space or common ASCII delimiters
+            let mention_regex =
+                Regex::new(r#"@([^\s@,.!?;:()\[\]{}<>"'`/\\|]+)"#).expect("Invalid regex pattern");
+
+            for cap in mention_regex.captures_iter(text) {
+                if let Some(mention) = cap.get(1) {
+                    let mention_str = mention.as_str();
+
+                    // Find all participants that start with this prefix
+                    let mut matches: Vec<&str> = participant_names
+                        .iter()
+                        .filter(|&&name| name.starts_with(mention_str))
+                        .copied()
+                        .collect();
+
+                    // Sort by length (descending) and take the longest match
+                    matches.sort_by_key(|b| std::cmp::Reverse(b.len()));
+                    if let Some(&longest_match) = matches.first() {
+                        mentioned.insert(longest_match);
+                    }
+                }
             }
         }
     }
 
     mentioned.into_iter().collect()
+}
+
+/// Legacy function for backward compatibility (test-only).
+/// Uses ExactWord strategy by default.
+#[cfg(test)]
+#[deprecated(since = "0.53.0", note = "Use extract_mentions_with_strategy instead")]
+fn extract_mentions<'a>(text: &str, participant_names: &'a [&'a str]) -> Vec<&'a str> {
+    extract_mentions_with_strategy(text, participant_names, MentionMatchStrategy::ExactWord)
 }
 
 /// Blueprint for creating a Dialogue.
@@ -301,6 +378,37 @@ pub struct DialogueTurn {
     pub content: String,
 }
 
+/// Strategy for matching @mentions in dialogue messages.
+///
+/// Different strategies handle various naming conventions and mention patterns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MentionMatchStrategy {
+    /// Match `@word` pattern (no spaces).
+    ///
+    /// Matches any non-whitespace characters after `@`, supporting multibyte characters.
+    /// Examples: `@Alice`, `@Bob123`, `@太郎`, `@あやか`
+    ExactWord,
+
+    /// Match full names including spaces with `@` prefix.
+    ///
+    /// Supports mentions like `@Ayaka Nakamura` for participant "Ayaka Nakamura".
+    /// The mention must be an exact match of the participant's full name.
+    Name,
+
+    /// Match by prefix, selecting the longest matching candidate.
+    ///
+    /// Examples: `@Ayaka` matches "Ayaka Nakamura" but not "Alice".
+    /// If multiple participants have the same prefix, the longest name is selected.
+    Partial,
+}
+
+impl Default for MentionMatchStrategy {
+    fn default() -> Self {
+        Self::ExactWord
+    }
+}
+
 /// Represents the execution model for dialogue strategies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -313,8 +421,11 @@ pub enum ExecutionModel {
     ///
     /// Supports multiple mentions like "@Alice @Bob what do you think?"
     /// If no mentions are found in the message, behaves like Broadcast mode.
-    /// Future: Can be extended to `Mentioned { mode: MentionMode }` for strict mode.
-    Mentioned,
+    Mentioned {
+        /// Strategy for matching mentions in messages.
+        #[serde(default)]
+        strategy: MentionMatchStrategy,
+    },
 }
 
 /// Determines when agents should react to messages in a dialogue.
@@ -840,7 +951,9 @@ impl Dialogue {
         match self.execution_model {
             ExecutionModel::Broadcast => self.run_broadcast(current_turn).await,
             ExecutionModel::Sequential => self.run_sequential(current_turn).await,
-            ExecutionModel::Mentioned => self.run_mentioned(current_turn).await,
+            ExecutionModel::Mentioned { strategy } => {
+                self.run_mentioned(current_turn, strategy).await
+            }
         }
     }
 
@@ -1089,6 +1202,7 @@ impl Dialogue {
     async fn run_mentioned(
         &mut self,
         current_turn: usize,
+        strategy: MentionMatchStrategy,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
         debug!(
             target = "llm_toolkit::dialogue",
@@ -1100,7 +1214,7 @@ impl Dialogue {
         );
 
         // Spawn tasks for mentioned participants (or all if no mentions)
-        let mut pending = self.spawn_mentioned_tasks(current_turn);
+        let mut pending = self.spawn_mentioned_tasks(current_turn, strategy);
 
         // Collect responses and create message entities
         let mut dialogue_turns = Vec::new();
@@ -1226,9 +1340,9 @@ impl Dialogue {
                     current_turn,
                 ))
             }
-            ExecutionModel::Mentioned => {
+            ExecutionModel::Mentioned { strategy } => {
                 // For Mentioned mode, spawn tasks for mentioned participants only
-                let pending = self.spawn_mentioned_tasks(current_turn);
+                let pending = self.spawn_mentioned_tasks(current_turn, strategy);
 
                 SessionState::Broadcast(BroadcastState::new(
                     pending,
@@ -1380,6 +1494,7 @@ impl Dialogue {
     pub(super) fn spawn_mentioned_tasks(
         &mut self,
         current_turn: usize,
+        strategy: MentionMatchStrategy,
     ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
         // Get unsent incoming messages (for mention extraction and agent input)
         let unsent_messages_incoming: Vec<PayloadMessage> = self
@@ -1440,8 +1555,9 @@ impl Dialogue {
         // Get all participant names
         let participant_names = self.participant_names();
 
-        // Extract mentions from the text
-        let mentioned_names = extract_mentions(&mentions_text, &participant_names);
+        // Extract mentions from the text using the specified strategy
+        let mentioned_names =
+            extract_mentions_with_strategy(&mentions_text, &participant_names, strategy);
 
         trace!(
             target = "llm_toolkit::dialogue",
@@ -4668,6 +4784,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_extract_mentions() {
         // Test basic mention extraction
         let text = "@Alice what do you think?";
@@ -4708,6 +4825,160 @@ mod tests {
         assert_eq!(mentions.len(), 1);
         assert!(mentions.contains(&"Ali"));
         assert!(!mentions.contains(&"Alice"));
+    }
+
+    #[test]
+    fn test_extract_mentions_with_strategy_exact_word() {
+        // ExactWord strategy - matches non-whitespace after @
+        let participants = vec!["Alice", "Bob", "Ayaka Nakamura"];
+        let text = "@Alice @Bob what do you think?";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::ExactWord);
+        assert_eq!(mentions.len(), 2);
+        assert!(mentions.contains(&"Alice"));
+        assert!(mentions.contains(&"Bob"));
+
+        // Should NOT match space-containing names (space breaks the match)
+        let text = "@Ayaka @Nakamura please review";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::ExactWord);
+        assert_eq!(
+            mentions.len(),
+            0,
+            "ExactWord should not match partial words of space-containing names"
+        );
+
+        // Multibyte support - single word names
+        let participants_jp = vec!["太郎", "花子", "Alice"];
+        let text = "@太郎 @花子 please discuss";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants_jp, MentionMatchStrategy::ExactWord);
+        assert_eq!(mentions.len(), 2);
+        assert!(mentions.contains(&"太郎"));
+        assert!(mentions.contains(&"花子"));
+    }
+
+    #[test]
+    fn test_extract_mentions_with_strategy_name() {
+        // Name strategy - matches full names including spaces
+        let participants = vec!["Alice", "Bob", "Ayaka Nakamura", "John Smith"];
+
+        // Full name mention with spaces
+        let text = "@Ayaka Nakamura please review this";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::Name);
+        assert_eq!(mentions.len(), 1);
+        assert!(mentions.contains(&"Ayaka Nakamura"));
+
+        // Multiple full name mentions
+        let text = "@Ayaka Nakamura and @John Smith, please discuss";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::Name);
+        assert_eq!(mentions.len(), 2);
+        assert!(mentions.contains(&"Ayaka Nakamura"));
+        assert!(mentions.contains(&"John Smith"));
+
+        // Single-word names still work
+        let text = "@Alice @Bob what do you think?";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::Name);
+        assert_eq!(mentions.len(), 2);
+        assert!(mentions.contains(&"Alice"));
+        assert!(mentions.contains(&"Bob"));
+
+        // Partial match should NOT work with Name strategy
+        let text = "@Ayaka please review";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::Name);
+        assert_eq!(
+            mentions.len(),
+            0,
+            "Name strategy requires exact full name match"
+        );
+
+        // Boundary check: "Ayaka" should not match when "@Ayaka Nakamura" is mentioned
+        let participants_with_overlap = vec!["Ayaka", "Ayaka Nakamura", "Bob"];
+        let text = "@Ayaka Nakamura please review";
+        let mentions = extract_mentions_with_strategy(
+            text,
+            &participants_with_overlap,
+            MentionMatchStrategy::Name,
+        );
+        assert_eq!(mentions.len(), 1, "Should only match full name");
+        assert!(
+            mentions.contains(&"Ayaka Nakamura"),
+            "Should match 'Ayaka Nakamura', not 'Ayaka'"
+        );
+        assert!(
+            !mentions.contains(&"Ayaka"),
+            "'Ayaka' should not match in '@Ayaka Nakamura'"
+        );
+
+        // Exact single name should still match
+        let text = "@Ayaka what do you think?";
+        let mentions = extract_mentions_with_strategy(
+            text,
+            &participants_with_overlap,
+            MentionMatchStrategy::Name,
+        );
+        assert_eq!(mentions.len(), 1);
+        assert!(mentions.contains(&"Ayaka"));
+    }
+
+    #[test]
+    fn test_extract_mentions_with_strategy_partial() {
+        // Partial strategy - matches by prefix, selecting longest candidate
+        let participants = vec!["Alice", "Ayaka Nakamura", "Ayaka Tanaka", "Bob"];
+
+        // Prefix match - should match "Ayaka Nakamura" (longest match)
+        let text = "@Ayaka please review";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::Partial);
+        assert_eq!(mentions.len(), 1);
+        // Should match one of the "Ayaka" names - length determines which
+        assert!(mentions.iter().any(|&name| name.starts_with("Ayaka")));
+
+        // Exact single-word match
+        let text = "@Alice what do you think?";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::Partial);
+        assert_eq!(mentions.len(), 1);
+        assert!(mentions.contains(&"Alice"));
+
+        // Multiple partial mentions
+        let text = "@Ayaka and @Bob, please discuss";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::Partial);
+        assert_eq!(mentions.len(), 2);
+        assert!(mentions.iter().any(|&name| name.starts_with("Ayaka")));
+        assert!(mentions.contains(&"Bob"));
+
+        // No match
+        let text = "@Charlie what do you think?";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::Partial);
+        assert_eq!(mentions.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_mentions_japanese_names() {
+        // Test with Japanese names (hiragana/katakana)
+        let participants = vec!["あやか なかむら", "太郎 山田", "Alice"];
+
+        // Name strategy with Japanese names
+        let text = "@あやか なかむら さん、お願いします";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::Name);
+        assert_eq!(mentions.len(), 1);
+        assert!(mentions.contains(&"あやか なかむら"));
+
+        // Mix of Japanese and English
+        let text = "@Alice and @太郎 山田, please review";
+        let mentions =
+            extract_mentions_with_strategy(text, &participants, MentionMatchStrategy::Name);
+        assert_eq!(mentions.len(), 2);
+        assert!(mentions.contains(&"Alice"));
+        assert!(mentions.contains(&"太郎 山田"));
     }
 
     #[tokio::test]

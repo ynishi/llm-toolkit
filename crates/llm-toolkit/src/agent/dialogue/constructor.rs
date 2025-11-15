@@ -3,8 +3,8 @@ use crate::{
     agent::{
         dialogue::{
             Dialogue, DialogueBlueprint, DialogueContext, DialogueMessage, DialogueTurn,
-            ExecutionModel, MessageId, MessageStore, ReactionStrategy, Speaker, TalkStyle,
-            format_dialogue_history_as_text,
+            ExecutionModel, MentionMatchStrategy, MessageId, MessageStore, ReactionStrategy,
+            Speaker, TalkStyle, format_dialogue_history_as_text,
             message::{self, SentAgents},
         },
         persona::{PersonaTeam, PersonaTeamGenerationRequest},
@@ -84,7 +84,38 @@ impl Dialogue {
     /// let turns = dialogue.run("What does everyone think?").await?;
     /// ```
     pub fn mentioned() -> Self {
-        Self::new(ExecutionModel::Mentioned)
+        Self::new(ExecutionModel::Mentioned {
+            strategy: MentionMatchStrategy::default(),
+        })
+    }
+
+    /// Creates a dialogue with Mentioned execution strategy and custom matching strategy.
+    ///
+    /// # Arguments
+    ///
+    /// * `strategy` - The mention matching strategy to use
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::{Dialogue, MentionMatchStrategy};
+    ///
+    /// // Use full name matching for participants with spaces
+    /// let mut dialogue = Dialogue::mentioned_with_strategy(MentionMatchStrategy::Name)
+    ///     .add_participant(persona1, agent1); // "Ayaka Nakamura"
+    ///
+    /// // "@Ayaka Nakamura please review" - matches "Ayaka Nakamura"
+    /// let turns = dialogue.run("@Ayaka Nakamura please review this").await?;
+    ///
+    /// // Use partial matching for prefix-based mentions
+    /// let mut dialogue = Dialogue::mentioned_with_strategy(MentionMatchStrategy::Partial)
+    ///     .add_participant(persona2, agent2); // "Ayaka Nakamura"
+    ///
+    /// // "@Ayaka" matches "Ayaka Nakamura" (longest prefix match)
+    /// let turns = dialogue.run("@Ayaka what do you think?").await?;
+    /// ```
+    pub fn mentioned_with_strategy(strategy: MentionMatchStrategy) -> Self {
+        Self::new(ExecutionModel::Mentioned { strategy })
     }
 
     /// Sets initial conversation history for session resumption.

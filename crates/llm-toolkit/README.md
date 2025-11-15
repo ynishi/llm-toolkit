@@ -1257,7 +1257,14 @@ For use cases that require simulating conversations *between* multiple AI agents
 -   **Execution Strategy**: Determines how agents interact. Three strategies are provided:
     -   **`Sequential`**: A pipeline where agents execute in a chain (`A -> B -> C`), with the output of one becoming the input for the next. Ideal for data processing workflows.
     -   **`Broadcast`**: A 1-to-N pattern where all agents respond to the same prompt. Ideal for brainstorming or getting multiple perspectives.
-    -   **`Mentioned`**: Only `@mentioned` participants respond (e.g., `@Alice @Bob what do you think?`). Falls back to Broadcast if no mentions are found. Perfect for selective participation in group conversations.
+    -   **`Mentioned`**: Only `@mentioned` participants respond (e.g., `@Alice @Bob what do you think?`). Falls back to Broadcast if no mentions are found. Perfect for selective participation in group conversations. Supports multiple **mention matching strategies**:
+        - **`ExactWord`** (default): Matches `@word` patterns without spaces (e.g., `@Alice`, `@Bob123`, `@太郎`)
+        - **`Name`**: Matches full names including spaces (e.g., `@Ayaka Nakamura` matches participant "Ayaka Nakamura"). Requires explicit delimiter (space, comma, period, etc.) after the name.
+        - **`Partial`**: Matches by prefix, selecting the longest candidate (e.g., `@Ayaka` matches "Ayaka Nakamura")
+
+        **Delimiter Support**:
+        - **ExactWord/Partial**: Mentions are recognized until whitespace or common delimiters (`,` `.` `!` `?` `;` `:` `()` `[]` `{}` `<>` `"` `'` `` ` `` `/` `\` `|`). Example: `@Alice, what do you think?` or `@Bob!`
+        - **Name**: Requires space or basic punctuation (`,` `.` `!` `?` `;` `:`) after the full name. For Japanese honorifics, use spaces: `@あやか なかむら さん` (not `@あやか なかむらさん`)
 
 **Usage Example:**
 
@@ -1338,6 +1345,35 @@ let turn3 = dialogue.run("Any final thoughts?").await?;
 // Get participant names for UI auto-completion
 let names = dialogue.participant_names();
 // names: vec!["Alice", "Bob", "Charlie"]
+```
+
+**Mention Matching Strategies:**
+
+For participants with space-containing names like "Ayaka Nakamura", use alternative matching strategies:
+
+```rust
+use llm_toolkit::agent::dialogue::{Dialogue, MentionMatchStrategy};
+
+# const AYAKA_PERSONA: Persona = Persona {
+#     name: "Ayaka Nakamura",
+#     role: "Designer",
+#     background: "...",
+#     communication_style: "..."
+# };
+let ayaka = Chat::new(MockLLMAgent { agent_type: "Ayaka".to_string() })
+    .with_persona(AYAKA_PERSONA).with_history(false).build();
+
+// Strategy 1: Name matching (exact full name with spaces)
+let mut dialogue = Dialogue::mentioned_with_strategy(MentionMatchStrategy::Name);
+dialogue.add_participant(ayaka);
+let turn = dialogue.run("@Ayaka Nakamura please review this design").await?;
+// Matches "Ayaka Nakamura" exactly
+
+// Strategy 2: Partial matching (prefix-based, longest match)
+let mut dialogue = Dialogue::mentioned_with_strategy(MentionMatchStrategy::Partial);
+dialogue.add_participant(ayaka);
+let turn = dialogue.run("@Ayaka what do you think?").await?;
+// Matches "Ayaka Nakamura" by prefix "Ayaka"
 ```
 
 ###### Adding Pre-Configured Agents with Custom Settings
