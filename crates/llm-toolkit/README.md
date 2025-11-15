@@ -3042,6 +3042,8 @@ orchestrator.add_agent(Box::new(WriterAgent));
 - ✅ **Loop Control Flow**: Iterative refinement with `LoopBlock` (while/until convergence patterns)
 - ✅ **Early Termination**: Conditional workflow exit with `TerminateInstruction`
 - ✅ **Control Flow Safety**: Single-level loops only (nested loops rejected), global iteration limits
+- ✅ **Execution Journal**: Complete execution history with step-by-step outcomes, timestamps, and error details
+- ✅ **Strategy Lifecycle Management**: Unified trait for strategy injection, retrieval, and generation across orchestrator types
 
 #### Monitoring Orchestrator Execution with Tracing
 
@@ -3330,6 +3332,256 @@ orchestrator.set_config(config);
 - **6-step workflow with 1s delay**: Adds ~5 seconds total (6 steps - 1 last step)
 - **Trade-off**: Slightly slower execution vs. no rate limit errors
 - **Best practice**: Use only when targeting rate-limited APIs
+
+#### Execution Journal
+
+The orchestrator automatically captures complete execution history in an `ExecutionJournal`, providing detailed insights into workflow execution for debugging, auditing, and analysis.
+
+**Status**: ✅ **Complete and tested** (12 dedicated tests passing)
+
+**Features:**
+- ✅ Automatic journal creation for every workflow run
+- ✅ Step-by-step execution records with timestamps
+- ✅ Complete strategy snapshot (goal, steps, dependencies)
+- ✅ Success/failure status tracking per step
+- ✅ Output capture for completed steps
+- ✅ Error messages for failed steps
+- ✅ Support for all step states (Pending, Running, Completed, Failed, Skipped, PausedForApproval)
+- ✅ Available in both `Orchestrator` and `ParallelOrchestrator`
+
+**Basic Usage:**
+
+```rust
+use llm_toolkit::orchestrator::{Orchestrator, ExecutionJournal};
+
+let mut orchestrator = Orchestrator::new(blueprint);
+let result = orchestrator.execute("Analyze customer data").await?;
+
+// Access journal from result
+if let Some(journal) = result.journal {
+    println!("Workflow: {}", journal.strategy.goal);
+    println!("Executed {} steps", journal.steps.len());
+
+    for step in &journal.steps {
+        println!("Step {}: {:?} at {}ms",
+            step.step_id,
+            step.status,
+            step.recorded_at_ms
+        );
+
+        if let Some(error) = &step.error {
+            println!("  Error: {}", error);
+        }
+    }
+}
+
+// Or access from orchestrator instance
+if let Some(journal) = orchestrator.execution_journal() {
+    // Process journal...
+}
+```
+
+**ParallelOrchestrator Usage:**
+
+```rust
+use llm_toolkit::orchestrator::ParallelOrchestrator;
+
+let mut orchestrator = ParallelOrchestrator::new(blueprint);
+let result = orchestrator
+    .execute("Process in parallel", token, None, None)
+    .await?;
+
+// Journal available in both success and failure cases
+let journal = result.journal.expect("Journal should always be present");
+
+// Analyze parallel execution
+for step in &journal.steps {
+    match step.status {
+        StepStatus::Completed => {
+            println!("✓ {} completed successfully", step.title);
+        }
+        StepStatus::Failed => {
+            println!("✗ {} failed: {}", step.title,
+                step.error.as_ref().unwrap());
+        }
+        StepStatus::Skipped => {
+            println!("⊘ {} skipped (dependency failed)", step.title);
+        }
+        _ => {}
+    }
+}
+```
+
+**Journal Data Structure:**
+
+```rust
+pub struct ExecutionJournal {
+    /// Strategy snapshot used for the run
+    pub strategy: StrategyMap,
+    /// Recorded step outcomes in execution order
+    pub steps: Vec<StepRecord>,
+}
+
+pub struct StepRecord {
+    pub step_id: String,
+    pub title: String,
+    pub agent: String,
+    pub status: StepStatus,
+    pub output_key: Option<String>,
+    pub output: Option<JsonValue>,
+    pub error: Option<String>,
+    pub recorded_at_ms: u64,
+}
+
+pub enum StepStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Skipped,
+    PausedForApproval,
+}
+```
+
+**Use Cases:**
+- **Debugging**: Trace exact execution flow and identify failure points
+- **Auditing**: Keep permanent records of workflow executions
+- **Analytics**: Analyze step performance and success rates
+- **Reporting**: Generate execution reports for stakeholders
+- **Testing**: Verify expected execution patterns in tests
+
+#### Strategy Lifecycle Management
+
+The `StrategyLifecycle` trait provides a unified interface for managing execution strategies across both `Orchestrator` and `ParallelOrchestrator`, enabling advanced use cases like pre-generated strategies, strategy caching, and testing.
+
+**Status**: ✅ **Complete and tested** (6 dedicated tests passing)
+
+**Features:**
+- ✅ Unified trait for strategy management
+- ✅ Strategy injection (bypass LLM generation)
+- ✅ Strategy retrieval (inspect current strategy)
+- ✅ Strategy-only generation (preview without execution)
+- ✅ Implemented by both orchestrator types
+- ✅ Trait object support for polymorphism
+
+**Basic Usage:**
+
+```rust
+use llm_toolkit::orchestrator::{
+    Orchestrator,
+    StrategyLifecycle,
+    StrategyMap,
+    StrategyStep
+};
+
+let mut orchestrator = Orchestrator::new(blueprint);
+
+// Method 1: Let orchestrator generate strategy automatically
+let result = orchestrator.execute("Analyze data").await?;
+
+// Method 2: Inject pre-generated strategy
+let mut custom_strategy = StrategyMap::new("Custom Analysis".to_string());
+custom_strategy.add_step(StrategyStep::new(
+    "step_1".to_string(),
+    "Load data".to_string(),
+    "DataLoader".to_string(),
+    "Load from {{ source }}".to_string(),
+    "Data loaded".to_string(),
+));
+orchestrator.set_strategy_map(custom_strategy);
+
+// Retrieve current strategy
+if let Some(strategy) = orchestrator.strategy_map() {
+    println!("Current strategy: {}", strategy.goal);
+    println!("Steps: {}", strategy.steps.len());
+}
+
+// Method 3: Preview strategy without execution
+let strategy = orchestrator
+    .generate_strategy_only("Analyze data")
+    .await?;
+
+println!("Generated strategy has {} steps", strategy.steps.len());
+// Decision: execute now or modify first
+```
+
+**ParallelOrchestrator Usage:**
+
+```rust
+use llm_toolkit::orchestrator::{ParallelOrchestrator, StrategyLifecycle};
+
+let mut orchestrator = ParallelOrchestrator::new(blueprint);
+
+// Generate strategy without execution
+let strategy = orchestrator
+    .generate_strategy_only("Process files in parallel")
+    .await?;
+
+// Inspect and optionally modify strategy
+println!("Will execute {} steps in parallel", strategy.steps.len());
+
+// Execute with the generated (or modified) strategy
+let result = orchestrator
+    .execute("Process files", token, None, None)
+    .await?;
+```
+
+**Advanced: Strategy Caching**
+
+```rust
+use std::collections::HashMap;
+use llm_toolkit::orchestrator::{StrategyLifecycle, StrategyMap};
+
+// Strategy cache for common tasks
+let mut strategy_cache: HashMap<String, StrategyMap> = HashMap::new();
+
+async fn execute_with_cache(
+    orchestrator: &mut impl StrategyLifecycle,
+    task: &str,
+) -> Result<()> {
+    // Check cache
+    if let Some(cached_strategy) = strategy_cache.get(task) {
+        orchestrator.set_strategy_map(cached_strategy.clone());
+    } else {
+        // Generate and cache
+        let strategy = orchestrator.generate_strategy_only(task).await?;
+        strategy_cache.insert(task.to_string(), strategy.clone());
+        orchestrator.set_strategy_map(strategy);
+    }
+
+    // Execute with cached/generated strategy
+    // ... execution logic
+    Ok(())
+}
+```
+
+**Trait Definition:**
+
+```rust
+#[async_trait]
+pub trait StrategyLifecycle {
+    /// Injects a pre-built strategy map, bypassing automatic generation
+    fn set_strategy_map(&mut self, strategy: StrategyMap);
+
+    /// Returns the currently active strategy map, if any
+    fn strategy_map(&self) -> Option<&StrategyMap>;
+
+    /// Generates a strategy map for the given task without executing it
+    async fn generate_strategy_only(
+        &mut self,
+        task: &str,
+    ) -> Result<StrategyMap, OrchestratorError>;
+}
+```
+
+**Use Cases:**
+- **Testing**: Inject controlled strategies for deterministic tests
+- **Caching**: Reuse strategies for common tasks to reduce LLM costs
+- **Strategy Templates**: Build libraries of proven strategies
+- **Preview & Modify**: Generate strategy, review/modify, then execute
+- **Multi-Orchestrator Workflows**: Share strategies across orchestrator instances
+- **Strategy Versioning**: Store and version successful strategies
+- **Debugging**: Inspect strategy before execution
 
 #### Fast Path Intent Generation (Performance Optimization)
 

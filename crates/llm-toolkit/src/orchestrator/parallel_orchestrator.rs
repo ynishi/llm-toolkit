@@ -6,9 +6,12 @@
 use crate::agent::DynamicAgent;
 use crate::orchestrator::prompts::ParallelRedesignDecisionRequest;
 use crate::orchestrator::{
-    OrchestratorError, StrategyInstruction, StrategyMap, StrategyStep, TerminateInstruction,
+    ExecutionJournal, OrchestratorError, StepRecord, StepStatus, StrategyInstruction,
+    StrategyLifecycle, StrategyMap, StrategyStep, TerminateInstruction,
 };
 use crate::prompt::ToPrompt;
+#[cfg(feature = "agent")]
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -45,11 +48,17 @@ pub struct ParallelOrchestrationResult {
     pub paused: bool,
     /// Reason for pause (human-readable message from agent)
     pub pause_reason: Option<String>,
+    /// Captured execution journal for this run
+    pub journal: Option<ExecutionJournal>,
 }
 
 impl ParallelOrchestrationResult {
     /// Creates a successful result
-    pub fn success(steps_executed: usize, context: HashMap<String, JsonValue>) -> Self {
+    pub fn success(
+        steps_executed: usize,
+        context: HashMap<String, JsonValue>,
+        journal: Option<ExecutionJournal>,
+    ) -> Self {
         Self {
             success: true,
             steps_executed,
@@ -60,6 +69,7 @@ impl ParallelOrchestrationResult {
             termination_reason: None,
             paused: false,
             pause_reason: None,
+            journal,
         }
     }
 
@@ -69,6 +79,7 @@ impl ParallelOrchestrationResult {
         steps_skipped: usize,
         context: HashMap<String, JsonValue>,
         error: String,
+        journal: Option<ExecutionJournal>,
     ) -> Self {
         Self {
             success: false,
@@ -80,6 +91,7 @@ impl ParallelOrchestrationResult {
             termination_reason: None,
             paused: false,
             pause_reason: None,
+            journal,
         }
     }
 
@@ -89,6 +101,7 @@ impl ParallelOrchestrationResult {
         steps_skipped: usize,
         context: HashMap<String, JsonValue>,
         termination_reason: Option<String>,
+        journal: Option<ExecutionJournal>,
     ) -> Self {
         Self {
             success: true,
@@ -100,6 +113,7 @@ impl ParallelOrchestrationResult {
             termination_reason,
             paused: false,
             pause_reason: None,
+            journal,
         }
     }
 
@@ -109,6 +123,7 @@ impl ParallelOrchestrationResult {
         steps_skipped: usize,
         context: HashMap<String, JsonValue>,
         pause_reason: String,
+        journal: Option<ExecutionJournal>,
     ) -> Self {
         Self {
             success: true,
@@ -120,6 +135,7 @@ impl ParallelOrchestrationResult {
             termination_reason: None,
             paused: true,
             pause_reason: Some(pause_reason),
+            journal,
         }
     }
 }
@@ -190,6 +206,9 @@ pub struct ParallelOrchestrator {
     /// Configuration
     #[allow(dead_code)] // TODO: Will be used for concurrency limiting and timeouts in Phase 5
     config: ParallelOrchestratorConfig,
+
+    /// Captured execution journal for the latest run.
+    execution_journal: Option<ExecutionJournal>,
 }
 
 impl ParallelOrchestrator {
@@ -226,6 +245,7 @@ impl ParallelOrchestrator {
             internal_agent: Box::new(RetryAgent::new(ClaudeCodeAgent::new(), 3)),
             strategy: None,
             config: ParallelOrchestratorConfig::default(),
+            execution_journal: None,
         }
     }
 
@@ -271,6 +291,7 @@ impl ParallelOrchestrator {
             internal_agent,
             strategy: None,
             config: ParallelOrchestratorConfig::default(),
+            execution_journal: None,
         }
     }
 
@@ -298,14 +319,25 @@ impl ParallelOrchestrator {
 
     /// Sets the strategy directly (for testing purposes).
     ///
-    /// This method is intended for tests that need to bypass strategy generation
-    /// and provide a pre-constructed StrategyMap.
-    ///
-    /// **Note**: This is primarily for testing. In production, strategies should be
-    /// generated via the `execute` method which calls `generate_strategy` internally.
+    /// Injects a pre-built strategy map, bypassing automatic generation.
+    pub fn set_strategy_map(&mut self, strategy: StrategyMap) {
+        self.strategy = Some(strategy);
+    }
+
+    /// Backwards-compatible helper for older tests.
     #[doc(hidden)]
     pub fn set_strategy(&mut self, strategy: StrategyMap) {
-        self.strategy = Some(strategy);
+        self.set_strategy_map(strategy);
+    }
+
+    /// Returns the currently active strategy map, if any.
+    pub fn strategy_map(&self) -> Option<&StrategyMap> {
+        self.strategy.as_ref()
+    }
+
+    /// Returns the execution journal from the latest run, if available.
+    pub fn execution_journal(&self) -> Option<&ExecutionJournal> {
+        self.execution_journal.as_ref()
     }
 
     /// Sets the configuration directly (for testing purposes).
@@ -317,6 +349,17 @@ impl ParallelOrchestrator {
     #[doc(hidden)]
     pub fn set_config(&mut self, config: ParallelOrchestratorConfig) {
         self.config = config;
+    }
+
+    /// Generates a strategy map for the given task without executing it.
+    #[cfg(feature = "agent")]
+    pub async fn generate_strategy_only(
+        &mut self,
+        task: &str,
+    ) -> Result<StrategyMap, OrchestratorError> {
+        let strategy = self.generate_strategy(task).await?;
+        self.strategy = Some(strategy.clone());
+        Ok(strategy)
     }
 
     /// Generates an execution strategy from the blueprint for the given task.
@@ -423,6 +466,8 @@ impl ParallelOrchestrator {
             let strategy = self.generate_strategy(task).await?;
             self.strategy = Some(strategy);
         }
+
+        self.execution_journal = None;
 
         // Wrap the execution in a loop to handle RedesignAndRestart errors
         loop {
@@ -557,11 +602,18 @@ impl ParallelOrchestrator {
                                 debug!("State saved to {:?} before pause", save_path);
                             }
 
+                            let journal = Some(Self::build_parallel_journal(
+                                &strategy,
+                                &global_exec_state,
+                                &final_context,
+                            ));
+                            self.execution_journal = journal.clone();
                             return Ok(ParallelOrchestrationResult::paused(
                                 steps_executed_total,
                                 steps_skipped_total,
                                 final_context,
                                 message.clone(),
+                                journal,
                             ));
                         }
                     }
@@ -621,11 +673,18 @@ impl ParallelOrchestrator {
                                     "Step {} failed with timeout/cancellation, bypassing redesign",
                                     failed_step_id
                                 );
+                                let journal = Some(Self::build_parallel_journal(
+                                    &strategy,
+                                    &global_exec_state,
+                                    &final_context,
+                                ));
+                                self.execution_journal = journal.clone();
                                 return Ok(ParallelOrchestrationResult::failure(
                                     steps_executed_total,
                                     steps_skipped_total,
                                     final_context,
                                     error_msg,
+                                    journal,
                                 ));
                             } else {
                                 // For all other error types, attempt redesign
@@ -664,11 +723,18 @@ impl ParallelOrchestrator {
                             }
                         }
 
+                        let journal = Some(Self::build_parallel_journal(
+                            &strategy,
+                            &global_exec_state,
+                            &final_context,
+                        ));
+                        self.execution_journal = journal.clone();
                         return Ok(ParallelOrchestrationResult::failure(
                             steps_executed_total,
                             steps_skipped_total,
                             final_context,
                             error_msg,
+                            journal,
                         ));
                     }
                 }
@@ -690,20 +756,34 @@ impl ParallelOrchestrator {
 
                         let final_context = shared_context.lock().await.clone();
 
+                        let journal = Some(Self::build_parallel_journal(
+                            &strategy,
+                            &global_exec_state,
+                            &final_context,
+                        ));
+                        self.execution_journal = journal.clone();
                         return Ok(ParallelOrchestrationResult::terminated(
                             steps_executed_total,
                             steps_skipped_total,
                             final_context,
                             termination_reason,
+                            journal,
                         ));
                     }
                 }
             }
 
             let final_context = shared_context.lock().await.clone();
+            let journal = Some(Self::build_parallel_journal(
+                &strategy,
+                &global_exec_state,
+                &final_context,
+            ));
+            self.execution_journal = journal.clone();
             Ok(ParallelOrchestrationResult::success(
                 steps_executed_total,
                 final_context,
+                journal,
             ))
             }
             .instrument(info_span!(
@@ -1273,6 +1353,59 @@ impl ParallelOrchestrator {
         segments
     }
 
+    fn build_parallel_journal(
+        strategy: &StrategyMap,
+        exec_state: &ExecutionStateManager,
+        context: &HashMap<String, JsonValue>,
+    ) -> ExecutionJournal {
+        let mut journal = ExecutionJournal::new(strategy.clone());
+        for step in &strategy.steps {
+            let step_state = exec_state.get_state(&step.step_id);
+            let (status, output, error) = Self::map_step_state(step_state, step, context);
+            journal.record_step(StepRecord::from_step(step, status, output, error));
+        }
+        journal
+    }
+
+    fn map_step_state(
+        state: Option<&StepState>,
+        step: &StrategyStep,
+        context: &HashMap<String, JsonValue>,
+    ) -> (StepStatus, Option<JsonValue>, Option<String>) {
+        match state {
+            None => (StepStatus::Pending, None, None),
+            Some(StepState::Pending) | Some(StepState::Ready) => (StepStatus::Pending, None, None),
+            Some(StepState::Running) => (StepStatus::Running, None, None),
+            Some(StepState::Completed) => (
+                StepStatus::Completed,
+                Self::lookup_step_output(step, context),
+                None,
+            ),
+            Some(StepState::Failed(err)) => (StepStatus::Failed, None, Some(err.to_string())),
+            Some(StepState::Skipped) => (StepStatus::Skipped, None, None),
+            Some(StepState::PausedForApproval { message, payload }) => (
+                StepStatus::PausedForApproval,
+                Some(payload.clone()),
+                Some(message.clone()),
+            ),
+        }
+    }
+
+    fn lookup_step_output(
+        step: &StrategyStep,
+        context: &HashMap<String, JsonValue>,
+    ) -> Option<JsonValue> {
+        if let Some(key) = &step.output_key
+            && let Some(value) = context.get(key)
+        {
+            return Some(value.clone());
+        }
+
+        context
+            .get(&format!("step_{}_output", step.step_id))
+            .cloned()
+    }
+
     fn count_steps_in_segments(segments: &[ExecutionSegment], start_index: usize) -> usize {
         segments
             .iter()
@@ -1383,6 +1516,25 @@ impl ParallelOrchestrator {
                 }
             }
         }
+    }
+}
+
+#[cfg(feature = "agent")]
+#[async_trait]
+impl StrategyLifecycle for ParallelOrchestrator {
+    fn set_strategy_map(&mut self, strategy: StrategyMap) {
+        ParallelOrchestrator::set_strategy_map(self, strategy);
+    }
+
+    fn strategy_map(&self) -> Option<&StrategyMap> {
+        ParallelOrchestrator::strategy_map(self)
+    }
+
+    async fn generate_strategy_only(
+        &mut self,
+        task: &str,
+    ) -> Result<StrategyMap, OrchestratorError> {
+        ParallelOrchestrator::generate_strategy_only(self, task).await
     }
 }
 

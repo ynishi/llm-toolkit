@@ -56,6 +56,9 @@
 pub mod blueprint;
 pub mod config;
 pub mod error;
+pub mod journal;
+#[cfg(feature = "agent")]
+pub mod lifecycle;
 pub mod parallel;
 mod parallel_orchestrator;
 pub mod strategy;
@@ -64,22 +67,26 @@ pub mod strategy;
 #[cfg(all(feature = "derive", feature = "agent"))]
 pub mod prompts;
 
+use crate::agent::{Agent, AgentAdapter, AgentOutput, DynamicAgent};
+#[cfg(feature = "agent")]
+use async_trait::async_trait;
 pub use blueprint::BlueprintWorkflow;
 pub use config::OrchestratorConfig;
 pub use error::OrchestratorError;
+pub use journal::{ExecutionJournal, StepRecord, StepStatus, current_timestamp_ms};
+#[cfg(feature = "agent")]
+pub use lifecycle::StrategyLifecycle;
 pub use parallel_orchestrator::{
     OrchestrationState, ParallelOrchestrationResult, ParallelOrchestrator,
 };
-pub use strategy::{
-    AggregationMode, LoopAggregation, LoopBlock, LoopType, RedesignStrategy, StrategyInstruction,
-    StrategyMap, StrategyStep, TerminateInstruction,
-};
-
-use crate::agent::{Agent, AgentAdapter, AgentOutput, DynamicAgent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::time::Duration;
+pub use strategy::{
+    AggregationMode, LoopAggregation, LoopBlock, LoopType, RedesignStrategy, StrategyInstruction,
+    StrategyMap, StrategyStep, TerminateInstruction,
+};
 use tracing::{debug, error, info, info_span, instrument, warn};
 
 /// TypeMarker trait for identifying output types in orchestrator context.
@@ -133,6 +140,7 @@ pub struct OrchestrationResult {
     pub loops_executed: usize,
     pub terminations_triggered: usize,
     pub error_message: Option<String>,
+    pub journal: Option<ExecutionJournal>,
 }
 
 /// Result of executing a sequence of instructions (internal).
@@ -178,6 +186,9 @@ pub struct Orchestrator {
     /// Runtime context storing intermediate results as JSON values.
     context: HashMap<String, JsonValue>,
 
+    /// Captured execution journal from the latest run.
+    execution_journal: Option<ExecutionJournal>,
+
     /// The original task description (stored for regeneration).
     current_task: Option<String>,
 
@@ -203,6 +214,7 @@ impl Orchestrator {
             internal_agent: Box::new(RetryAgent::new(ClaudeCodeAgent::new(), 3)),
             strategy_map: None,
             context: HashMap::new(),
+            execution_journal: None,
             current_task: None,
             config: OrchestratorConfig::default(),
         };
@@ -257,6 +269,7 @@ impl Orchestrator {
             internal_agent,
             strategy_map: None,
             context: HashMap::new(),
+            execution_journal: None,
             current_task: None,
             config: OrchestratorConfig::default(),
         };
@@ -275,6 +288,7 @@ impl Orchestrator {
             agents: HashMap::new(),
             strategy_map: None,
             context: HashMap::new(),
+            execution_journal: None,
             current_task: None,
             config: OrchestratorConfig::default(),
         }
@@ -359,6 +373,11 @@ impl Orchestrator {
     /// ```
     pub fn strategy_map(&self) -> Option<&StrategyMap> {
         self.strategy_map.as_ref()
+    }
+
+    /// Returns the execution journal from the most recent run, if available.
+    pub fn execution_journal(&self) -> Option<&ExecutionJournal> {
+        self.execution_journal.as_ref()
     }
 
     /// Sets the maximum number of remediations allowed per step.
@@ -756,6 +775,7 @@ impl Orchestrator {
                     loops_executed: 0,
                     terminations_triggered: 0,
                     error_message: Some(e.to_string()),
+                    journal: None,
                 };
             }
         } else {
@@ -783,6 +803,7 @@ impl Orchestrator {
                     loops_executed,
                     terminations_triggered,
                     error_message: None,
+                    journal: self.execution_journal.clone(),
                 }
             }
             Err(e) => {
@@ -795,6 +816,7 @@ impl Orchestrator {
                     loops_executed: 0,
                     terminations_triggered: 0,
                     error_message: Some(e.to_string()),
+                    journal: self.execution_journal.clone(),
                 }
             }
         }
@@ -892,12 +914,20 @@ impl Orchestrator {
     /// }
     /// ```
     #[cfg(feature = "agent")]
-    pub async fn generate_strategy_only(
+    async fn generate_strategy_snapshot(
         &mut self,
         task: &str,
     ) -> Result<StrategyMap, OrchestratorError> {
         self.generate_strategy(task).await?;
         Ok(self.strategy_map.clone().unwrap())
+    }
+
+    #[cfg(feature = "agent")]
+    pub async fn generate_strategy_only(
+        &mut self,
+        task: &str,
+    ) -> Result<StrategyMap, OrchestratorError> {
+        self.generate_strategy_snapshot(task).await
     }
 
     /// Generates an execution strategy (stub for non-derive feature).
@@ -1179,6 +1209,10 @@ impl Orchestrator {
             strategy.migrate_legacy_steps();
         }
 
+        if let Some(ref strategy) = self.strategy_map {
+            self.execution_journal = Some(ExecutionJournal::new(strategy.clone()));
+        }
+
         // Check if we should use the new instruction-based execution path
         let use_new_path = self
             .strategy_map
@@ -1246,6 +1280,12 @@ impl Orchestrator {
                     let output = match agent_output {
                         AgentOutput::Success(json_value) => json_value,
                         AgentOutput::RequiresApproval { .. } => {
+                            self.record_step_outcome(
+                                &step,
+                                StepStatus::PausedForApproval,
+                                None,
+                                Some("Approval requested".to_string()),
+                            );
                             return Err(OrchestratorError::ExecutionFailed(
                                 "Agent requires approval but orchestrator does not support HIL"
                                     .to_string(),
@@ -1285,6 +1325,13 @@ impl Orchestrator {
                     self.context
                         .insert("previous_output".to_string(), output.clone());
 
+                    self.record_step_outcome(
+                        &step,
+                        StepStatus::Completed,
+                        Some(output.clone()),
+                        None,
+                    );
+
                     final_result = output;
                     steps_executed += 1;
                     step_index += 1;
@@ -1301,6 +1348,7 @@ impl Orchestrator {
                     }
                 }
                 Err(e) => {
+                    self.record_step_outcome(&step, StepStatus::Failed, None, Some(e.to_string()));
                     warn!(error = ?e, "Step {} failed", step_index + 1);
 
                     // Increment step remediation count
@@ -1386,6 +1434,18 @@ impl Orchestrator {
             loops_executed,
             terminations_triggered,
         ))
+    }
+
+    fn record_step_outcome(
+        &mut self,
+        step: &StrategyStep,
+        status: StepStatus,
+        output: Option<JsonValue>,
+        error: Option<String>,
+    ) {
+        if let Some(journal) = self.execution_journal.as_mut() {
+            journal.record_step(StepRecord::from_step(step, status, output, error));
+        }
     }
 
     /// Executes the strategy using the new instruction-based path (for Loop/Terminate support).
@@ -1570,12 +1630,29 @@ impl Orchestrator {
 
                     // Note: Error handling for agent execution will be integrated later
                     // For now, we convert the error directly
-                    let agent_output = agent.execute_dynamic(intent.into()).await?;
+                    let agent_output = match agent.execute_dynamic(intent.into()).await {
+                        Ok(result) => result,
+                        Err(err) => {
+                            self.record_step_outcome(
+                                step,
+                                StepStatus::Failed,
+                                None,
+                                Some(err.to_string()),
+                            );
+                            return Err(err.into());
+                        }
+                    };
 
                     // Unwrap AgentOutput to get the JsonValue
                     let output = match agent_output {
                         AgentOutput::Success(json_value) => json_value,
                         AgentOutput::RequiresApproval { .. } => {
+                            self.record_step_outcome(
+                                step,
+                                StepStatus::PausedForApproval,
+                                None,
+                                Some("Approval requested".to_string()),
+                            );
                             return Err(OrchestratorError::ExecutionFailed(
                                 "Agent requires approval but orchestrator does not support HIL"
                                     .to_string(),
@@ -1593,6 +1670,13 @@ impl Orchestrator {
 
                     self.context
                         .insert("previous_output".to_string(), output.clone());
+
+                    self.record_step_outcome(
+                        step,
+                        StepStatus::Completed,
+                        Some(output.clone()),
+                        None,
+                    );
 
                     *steps_executed += 1;
                     final_result = output;
@@ -2007,6 +2091,25 @@ impl Orchestrator {
         self.strategy_map = None;
         self.context.clear();
         self.current_task = None;
+    }
+}
+
+#[cfg(feature = "agent")]
+#[async_trait]
+impl StrategyLifecycle for Orchestrator {
+    fn set_strategy_map(&mut self, strategy: StrategyMap) {
+        Orchestrator::set_strategy_map(self, strategy);
+    }
+
+    fn strategy_map(&self) -> Option<&StrategyMap> {
+        Orchestrator::strategy_map(self)
+    }
+
+    async fn generate_strategy_only(
+        &mut self,
+        task: &str,
+    ) -> Result<StrategyMap, OrchestratorError> {
+        self.generate_strategy_snapshot(task).await
     }
 }
 
