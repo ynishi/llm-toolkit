@@ -4,7 +4,7 @@ use crate::{
         dialogue::{
             Dialogue, DialogueBlueprint, DialogueContext, DialogueMessage, DialogueTurn,
             ExecutionModel, MentionMatchStrategy, MessageId, MessageStore, ReactionStrategy,
-            Speaker, TalkStyle, format_dialogue_history_as_text,
+            SequentialOrder, Speaker, TalkStyle, format_dialogue_history_as_text,
             message::{self, SentAgents},
         },
         persona::{PersonaTeam, PersonaTeamGenerationRequest},
@@ -20,6 +20,7 @@ impl Dialogue {
             participants: Vec::new(),
             message_store: MessageStore::new(),
             execution_model,
+            sequential_order: SequentialOrder::AsAdded,
             context: None,
             reaction_strategy: ReactionStrategy::default(),
         }
@@ -58,6 +59,13 @@ impl Dialogue {
     /// ```
     pub fn sequential() -> Self {
         Self::new(ExecutionModel::Sequential)
+    }
+
+    /// Creates a sequential dialogue with a custom ordering strategy.
+    pub fn sequential_with_order(order: SequentialOrder) -> Self {
+        let mut dialogue = Self::new(ExecutionModel::Sequential);
+        dialogue.sequential_order = order;
+        dialogue
     }
 
     /// Creates a new dialogue with mentioned execution.
@@ -453,6 +461,17 @@ impl Dialogue {
             .unwrap_or_default()
             .with_talk_style(style);
         self.context = Some(context);
+        self
+    }
+
+    /// Sets the sequential execution order.
+    ///
+    /// This only affects dialogues whose execution model is `Sequential`. When set
+    /// to `SequentialOrder::Explicit`, the provided persona names will be executed
+    /// first, and any remaining participants will run afterward in their original
+    /// order.
+    pub fn with_sequential_order(&mut self, order: SequentialOrder) -> &mut Self {
+        self.sequential_order = order;
         self
     }
 

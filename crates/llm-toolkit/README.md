@@ -1270,7 +1270,7 @@ For use cases that require simulating conversations *between* multiple AI agents
 
 ```rust
 use llm_toolkit::agent::chat::Chat;
-use llm_toolkit::agent::dialogue::Dialogue;
+use llm_toolkit::agent::dialogue::{Dialogue, SequentialOrder};
 use llm_toolkit::agent::persona::Persona;
 use llm_toolkit::agent::{Agent, AgentError, Payload};
 use async_trait::async_trait;
@@ -1301,6 +1301,13 @@ let mut dialogue = Dialogue::sequential();
 dialogue.add_participant(summarizer).add_participant(translator);
 let final_result = dialogue.run("A long article text...").await?;
 // final_result: Ok(vec!["[Translator] processed: '[Summarizer] processed: 'A long article text...'"])
+
+// Need a different execution chain? Pin the order by persona name.
+dialogue.with_sequential_order(SequentialOrder::Explicit(vec![
+    "Translator".to_string(), // run Translator first
+    "Summarizer".to_string(), // then Summarizer
+    // any other participants (e.g., reviewers) run afterward in their original order
+]));
 
 // --- Pattern 2: Broadcast ---
 let critic = Chat::new(MockLLMAgent { agent_type: "Critic".to_string() })

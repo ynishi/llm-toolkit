@@ -343,7 +343,7 @@ impl ReActConfig {
 /// - `registry`: Registry containing available selectable actions
 /// - `initial_task`: The initial task description
 /// - `selector`: Function to extract action ID from LLM response.
-///               Returns `Ok(None)` when task is complete, `Ok(Some(id))` when action selected.
+///   Returns `Ok(None)` when task is complete, `Ok(Some(id))` when action selected.
 /// - `config`: Configuration for the ReAct loop
 ///
 /// # Returns

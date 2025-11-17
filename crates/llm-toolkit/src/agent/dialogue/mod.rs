@@ -102,9 +102,9 @@ use crate::agent::persona::Persona;
 use crate::agent::{Agent, AgentError, Payload, PayloadMessage};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 use tokio::task::JoinSet;
-use tracing::{debug, trace};
+use tracing::{debug, error, trace};
 
 // Re-export key types
 pub use context::{DialogueContext, TalkStyle};
@@ -507,6 +507,17 @@ pub enum BroadcastOrder {
     ParticipantOrder,
 }
 
+/// Controls the execution order for sequential dialogues.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SequentialOrder {
+    /// Execute participants in the order they were added (default behavior).
+    AsAdded,
+    /// Execute participants by persona name. Any participants not listed are appended
+    /// afterward in their original order.
+    Explicit(Vec<String>),
+}
+
 /// A dialogue manager for multi-agent conversations.
 ///
 /// The dialogue maintains a list of participants and a conversation history,
@@ -546,6 +557,9 @@ pub struct Dialogue {
     pub(super) message_store: MessageStore,
 
     pub(super) execution_model: ExecutionModel,
+
+    /// Controls how participants run when execution model is sequential.
+    pub(super) sequential_order: SequentialOrder,
 
     /// Optional dialogue context that shapes conversation tone and behavior
     pub(super) context: Option<DialogueContext>,
@@ -624,6 +638,42 @@ impl Dialogue {
                 .with_capabilities(capabilities.unwrap_or_default())
             })
             .collect()
+    }
+
+    /// Returns the indices for sequential execution respecting the configured order.
+    fn resolve_sequential_indices(&self) -> Result<Vec<usize>, AgentError> {
+        match &self.sequential_order {
+            SequentialOrder::AsAdded => Ok((0..self.participants.len()).collect()),
+            SequentialOrder::Explicit(order) => {
+                let mut indices = Vec::with_capacity(self.participants.len());
+                let mut seen = HashSet::new();
+
+                for name in order {
+                    let idx = self
+                        .participants
+                        .iter()
+                        .position(|p| p.name() == name)
+                        .ok_or_else(|| {
+                            AgentError::ExecutionFailed(format!(
+                                "Sequential order references unknown participant '{}'",
+                                name
+                            ))
+                        })?;
+
+                    if seen.insert(idx) {
+                        indices.push(idx);
+                    }
+                }
+
+                for (idx, _) in self.participants.iter().enumerate() {
+                    if seen.insert(idx) {
+                        indices.push(idx);
+                    }
+                }
+
+                Ok(indices)
+            }
+        }
     }
 
     pub fn add_participant<T>(&mut self, persona: Persona, llm_agent: T) -> &mut Self
@@ -1045,15 +1095,20 @@ impl Dialogue {
             );
         }
 
+        let sequence_indices = self.resolve_sequential_indices()?;
         // Execute participants sequentially
         let mut final_turn = None;
 
-        for (idx, participant) in self.participants.iter().enumerate() {
+        for (sequence_idx, participant_idx) in sequence_indices.iter().enumerate() {
+            let participant_idx = *participant_idx;
+            let participant = &self.participants[participant_idx];
             let agent = &participant.agent;
             let agent_name = participant.name().to_string();
 
             // Determine input messages based on position in sequence
-            let (current_messages, messages_with_metadata, message_ids_to_mark) = if idx == 0 {
+            let (current_messages, messages_with_metadata, message_ids_to_mark) = if sequence_idx
+                == 0
+            {
                 // First agent: combine previous turn's agent messages + unsent incoming messages
                 let mut messages = Vec::new();
                 let mut metadata_messages = Vec::new();
@@ -1071,7 +1126,8 @@ impl Dialogue {
                     trace!(
                         target = "llm_toolkit::dialogue",
                         turn = current_turn,
-                        agent_idx = idx,
+                        agent_idx = participant_idx,
+                        sequence_idx,
                         agent_name = %agent_name,
                         prev_turn_message_count = prev_turn_messages.len(),
                         "Sequential mode: First agent receiving {} previous turn agent messages",
@@ -1109,7 +1165,8 @@ impl Dialogue {
                 trace!(
                     target = "llm_toolkit::dialogue",
                     turn = current_turn,
-                    agent_idx = idx,
+                        agent_idx = participant_idx,
+                        sequence_idx,
                     agent_name = %agent_name,
                     prev_message_count = prev_agent_messages.len(),
                     incoming_message_count = unsent_messages_incoming.len(),
@@ -1163,7 +1220,8 @@ impl Dialogue {
                 trace!(
                     target = "llm_toolkit::dialogue",
                     turn = current_turn,
-                    agent_idx = idx,
+                    agent_idx = participant_idx,
+                    sequence_idx,
                     agent_name = %agent_name,
                     marked_sent_count = message_ids_to_mark.len(),
                     "Marked {} messages as sent after agent {} execution",
@@ -1365,13 +1423,27 @@ impl Dialogue {
                     Vec::new()
                 };
 
-                SessionState::Sequential {
-                    next_index: 0,
-                    current_turn,
-                    payload,
-                    prev_agent_outputs,
-                    current_turn_outputs: Vec::new(),
-                    participants_info,
+                match self.resolve_sequential_indices() {
+                    Ok(sequence) => SessionState::Sequential {
+                        next_index: 0,
+                        current_turn,
+                        sequence,
+                        payload,
+                        prev_agent_outputs,
+                        current_turn_outputs: Vec::new(),
+                        participants_info,
+                    },
+                    Err(err) => {
+                        error!(
+                            target = "llm_toolkit::dialogue",
+                            turn = current_turn,
+                            execution_model = "sequential",
+                            participant_count = self.participants.len(),
+                            error = %err,
+                            "Failed to resolve sequential order for partial session"
+                        );
+                        SessionState::Failed(Some(err))
+                    }
                 }
             }
         };
@@ -4699,6 +4771,145 @@ mod tests {
                 .all(|text| text.contains("Brainstorming Session")),
             "Each participant should receive brainstorming context. Payloads: {:?}",
             *payloads
+        );
+    }
+
+    /// Ensure explicit sequential ordering is honored.
+    #[tokio::test]
+    async fn test_sequential_explicit_order_respected() {
+        use crate::agent::persona::Persona;
+        use tokio::sync::Mutex;
+
+        #[derive(Clone)]
+        struct RecordingAgent {
+            name: String,
+            log: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl Agent for RecordingAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Order recording agent"
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                let _ = payload;
+                self.log.lock().await.push(self.name.clone());
+                Ok(format!("[{}] done", self.name))
+            }
+        }
+
+        let personas = [
+            Persona {
+                name: "AgentA".to_string(),
+                role: "First".to_string(),
+                background: "First".to_string(),
+                communication_style: "Direct".to_string(),
+                visual_identity: None,
+                capabilities: None,
+            },
+            Persona {
+                name: "AgentB".to_string(),
+                role: "Second".to_string(),
+                background: "Second".to_string(),
+                communication_style: "Direct".to_string(),
+                visual_identity: None,
+                capabilities: None,
+            },
+            Persona {
+                name: "AgentC".to_string(),
+                role: "Third".to_string(),
+                background: "Third".to_string(),
+                communication_style: "Direct".to_string(),
+                visual_identity: None,
+                capabilities: None,
+            },
+        ];
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut dialogue = Dialogue::sequential_with_order(SequentialOrder::Explicit(vec![
+            "AgentB".to_string(),
+            "AgentA".to_string(),
+        ]));
+
+        for persona in personas {
+            let persona_name = persona.name.clone();
+            dialogue.add_participant(
+                persona,
+                RecordingAgent {
+                    name: persona_name,
+                    log: Arc::clone(&log),
+                },
+            );
+        }
+
+        dialogue.run("Start".to_string()).await.unwrap();
+
+        let order = log.lock().await.clone();
+        assert_eq!(
+            order,
+            vec![
+                "AgentB".to_string(),
+                "AgentA".to_string(),
+                "AgentC".to_string()
+            ],
+            "Explicit order should run AgentB, then AgentA, then remaining AgentC"
+        );
+    }
+
+    /// Ensure invalid sequential order names propagate as errors in streaming sessions.
+    #[tokio::test]
+    async fn test_partial_session_sequential_order_error_propagates() {
+        use crate::agent::persona::Persona;
+
+        #[derive(Clone)]
+        struct PassthroughAgent;
+
+        #[async_trait]
+        impl Agent for PassthroughAgent {
+            type Output = String;
+
+            fn expertise(&self) -> &str {
+                "Passthrough"
+            }
+
+            async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+                Ok(payload.to_text())
+            }
+        }
+
+        let persona = Persona {
+            name: "AgentA".to_string(),
+            role: "Only".to_string(),
+            background: "Only".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let mut dialogue =
+            Dialogue::sequential_with_order(SequentialOrder::Explicit(vec!["Ghost".to_string()]));
+        dialogue.add_participant(persona, PassthroughAgent);
+
+        let mut session = dialogue.partial_session("Hello world");
+        match session.next_turn().await {
+            Some(Err(AgentError::ExecutionFailed(message))) => {
+                assert!(
+                    message.contains("Ghost"),
+                    "Error message should mention missing participant. Got {message}"
+                );
+            }
+            other => panic!(
+                "Expected ExecutionFailed error from invalid sequential order, got {:?}",
+                other
+            ),
+        }
+
+        assert!(
+            session.next_turn().await.is_none(),
+            "Session should complete after propagating the error"
         );
     }
 

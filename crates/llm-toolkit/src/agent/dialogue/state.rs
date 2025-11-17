@@ -194,10 +194,12 @@ pub(super) enum SessionState {
     Sequential {
         next_index: usize,
         current_turn: usize,
+        sequence: Vec<usize>,
         payload: Payload,
         prev_agent_outputs: Vec<PayloadMessage>,
         current_turn_outputs: Vec<PayloadMessage>,
         participants_info: Vec<ParticipantInfo>,
     },
+    Failed(Option<AgentError>),
     Completed,
 }

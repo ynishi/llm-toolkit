@@ -103,3 +103,7 @@ required-features = ["agent"]
 [[example]]
 name = "orchestrator_type_marker_production"
 required-features = ["agent"]
+
+[[example]]
+name = "expandable_basic"
+required-features = ["agent"]

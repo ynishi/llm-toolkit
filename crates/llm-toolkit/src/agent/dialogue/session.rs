@@ -138,27 +138,30 @@ impl<'a> DialogueSession<'a> {
                 SessionState::Sequential {
                     next_index,
                     current_turn,
+                    sequence,
                     payload,
                     prev_agent_outputs,
                     current_turn_outputs,
                     participants_info,
                 } => {
-                    if *next_index >= self.dialogue.participants.len() {
+                    if sequence.is_empty() || *next_index >= sequence.len() {
                         self.state = SessionState::Completed;
                         return None;
                     }
 
-                    let idx = *next_index;
+                    let sequence_position = *next_index;
+                    let participant_idx = sequence[sequence_position];
                     let turn = *current_turn;
                     *next_index += 1;
-                    let step_number = idx + 1;
+                    let step_number = sequence_position + 1;
+                    let step_total = sequence.len();
 
                     let mut response_payload = build_sequential_payload(
                         payload,
                         prev_agent_outputs.as_slice(),
                         current_turn_outputs.as_slice(),
                         participants_info.as_slice(),
-                        idx,
+                        sequence_position,
                     );
 
                     // Attach context if exists
@@ -167,13 +170,13 @@ impl<'a> DialogueSession<'a> {
                     }
 
                     let response_result = {
-                        let participant = &self.dialogue.participants[idx];
+                        let participant = &self.dialogue.participants[participant_idx];
                         participant.agent.execute(response_payload).await
                     };
 
                     return match response_result {
                         Ok(content) => {
-                            let participant = &self.dialogue.participants[idx];
+                            let participant = &self.dialogue.participants[participant_idx];
                             let participant_name = participant.name().to_string();
                             let speaker = Speaker::agent(
                                 participant_name.clone(),
@@ -196,9 +199,9 @@ impl<'a> DialogueSession<'a> {
                                 target = "llm_toolkit::dialogue",
                                 mode = ?self.model,
                                 participant = %participant_name,
-                                step_index = idx,
+                                step_index = participant_idx,
                                 step_number,
-                                total_steps = participant_total,
+                                total_steps = step_total,
                                 event = "dialogue_turn_completed"
                             );
                             Some(Ok(turn))
@@ -207,15 +210,23 @@ impl<'a> DialogueSession<'a> {
                             error!(
                                 target = "llm_toolkit::dialogue",
                                 mode = ?self.model,
-                                participant_index = idx,
+                                participant_index = participant_idx,
                                 step_number,
-                                total_steps = participant_total,
+                                total_steps = step_total,
                                 error = %err,
                                 event = "dialogue_turn_failed"
                             );
                             Some(Err(err))
                         }
                     };
+                }
+                SessionState::Failed(error) => {
+                    if let Some(err) = error.take() {
+                        self.state = SessionState::Completed;
+                        return Some(Err(err));
+                    }
+                    self.state = SessionState::Completed;
+                    return None;
                 }
                 SessionState::Completed => return None,
             }
