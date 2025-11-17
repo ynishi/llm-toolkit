@@ -125,6 +125,7 @@ pub use extract::{FlexibleExtractor, MarkdownCodeBlockExtractor};
 #[cfg(feature = "agent")]
 pub use intent::expandable::{
     Expandable, ReActConfig, ReActError, ReActResult, RegistryError, Selectable, SelectionRegistry,
+    react_loop, simple_tag_selector,
 };
 pub use intent::frame::IntentFrame;
 #[allow(deprecated)]

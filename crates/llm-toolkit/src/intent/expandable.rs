@@ -322,66 +322,159 @@ impl ReActConfig {
     }
 }
 
-// TODO: Implement complete ReAct loop helper function
-//
-// A complete implementation would look something like:
-//
-// ```rust,ignore
-// pub async fn react_loop<T, A>(
-//     agent: &A,
-//     registry: &SelectionRegistry<T>,
-//     initial_task: impl Into<Payload>,
-//     config: ReActConfig,
-// ) -> Result<String, ReActError>
-// where
-//     T: Selectable + Clone,
-//     A: Agent<Output = String>,
-// {
-//     let mut context = initial_task.into().to_text();
-//
-//     for iteration in 0..config.max_iterations {
-//         // 1. Present available actions to LLM
-//         let prompt = format!(
-//             "{}\n\n{}\n\nCurrent task: {}\n\nChoose an action or respond with '{}'",
-//             registry.to_prompt_section(),
-//             context,
-//             "your analysis here",
-//             config.completion_marker
-//         );
-//
-//         // 2. Get LLM response
-//         let response = agent.execute(prompt.into()).await?;
-//
-//         // 3. Check for completion
-//         if response.contains(&config.completion_marker) {
-//             return Ok(response);
-//         }
-//
-//         // 4. Extract selected action ID (would need IntentExtractor integration)
-//         // let selected_id = extract_selection(&response)?;
-//
-//         // 5. Get the selected item and expand it
-//         // if let Some(item) = registry.get(&selected_id) {
-//         //     let expanded = item.expand();
-//         //     let result = agent.execute(expanded).await?;
-//         //
-//         //     if config.accumulate_results {
-//         //         context = format!("{}\n\n[Action: {}]\nResult: {}", context, selected_id, result);
-//         //     }
-//         // }
-//     }
-//
-//     Err(ReActError::MaxIterationsReached(config.max_iterations))
-// }
-// ```
-//
-// For now, users can implement their own ReAct loops using:
-// 1. SelectionRegistry::to_prompt_section() - to present options to LLM
-// 2. IntentExtractor - to extract selected actions
-// 3. Expandable::expand() - to generate follow-up prompts
-// 4. Agent::execute() - to run the expanded prompts
-//
-// See examples/expandable_with_intent.rs for a manual ReAct-style implementation.
+/// Execute a ReAct-style loop with action selection and expansion.
+///
+/// This function implements the ReAct (Reasoning + Acting) pattern:
+/// 1. Present available actions to the LLM
+/// 2. LLM selects an action or indicates completion
+/// 3. Expand the selected action into a prompt
+/// 4. Execute the expanded prompt
+/// 5. Accumulate results and repeat
+///
+/// # Type Parameters
+///
+/// - `T`: Type implementing Selectable (usually an enum with actions)
+/// - `A`: Agent that executes prompts and returns String responses
+/// - `F`: Function that extracts the selected action ID from LLM response
+///
+/// # Arguments
+///
+/// - `agent`: The agent that will execute prompts
+/// - `registry`: Registry containing available selectable actions
+/// - `initial_task`: The initial task description
+/// - `selector`: Function to extract action ID from LLM response.
+///               Returns `Ok(None)` when task is complete, `Ok(Some(id))` when action selected.
+/// - `config`: Configuration for the ReAct loop
+///
+/// # Returns
+///
+/// Returns the final response when the task is complete, or an error if
+/// max iterations reached or other failure occurs.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use llm_toolkit::intent::expandable::{react_loop, ReActConfig};
+///
+/// // Define a selector function that extracts action IDs
+/// let selector = |response: &str| {
+///     if response.contains("DONE") {
+///         Ok(None)  // Task complete
+///     } else if let Some(id) = extract_tag(response, "action") {
+///         Ok(Some(id))  // Action selected
+///     } else {
+///         Err(ReActError::ExtractionFailed("No action found".into()))
+///     }
+/// };
+///
+/// let result = react_loop(
+///     &agent,
+///     &registry,
+///     "Solve this problem",
+///     selector,
+///     ReActConfig::default(),
+/// ).await?;
+/// ```
+pub async fn react_loop<T, A, F>(
+    agent: &A,
+    registry: &SelectionRegistry<T>,
+    initial_task: impl Into<Payload>,
+    selector: F,
+    config: ReActConfig,
+) -> Result<String, ReActError>
+where
+    T: Selectable + Clone,
+    A: crate::agent::Agent<Output = String>,
+    F: Fn(&str) -> Result<Option<String>, ReActError>,
+{
+    let mut context = initial_task.into().to_text();
+
+    for _iteration in 0..config.max_iterations {
+        // 1. Build prompt with available actions
+        let mut prompt = String::new();
+
+        if config.include_selection_prompt {
+            prompt.push_str(&registry.to_prompt_section());
+            prompt.push_str("\n\n");
+        }
+
+        prompt.push_str(&format!(
+            "Current context:\n{}\n\nSelect an action or respond with '{}' if the task is complete.",
+            context, config.completion_marker
+        ));
+
+        // 2. Get LLM response
+        let response = agent.execute(Payload::from(prompt)).await?;
+
+        // 3. Extract selected action ID (or check for completion)
+        match selector(&response)? {
+            None => {
+                // Task complete
+                return Ok(response);
+            }
+            Some(action_id) => {
+                // 4. Get the selected item and expand it
+                let item = registry
+                    .get(&action_id)
+                    .ok_or_else(|| ReActError::SelectionNotFound(action_id.clone()))?;
+
+                let expanded = item.expand();
+
+                // 5. Execute the expanded action
+                let result = agent.execute(expanded).await?;
+
+                // 6. Update context
+                if config.accumulate_results {
+                    context = format!("{}\n\n[Action: {}]\nResult: {}", context, action_id, result);
+                } else {
+                    context = result;
+                }
+            }
+        }
+    }
+
+    Err(ReActError::MaxIterationsReached(config.max_iterations))
+}
+
+/// Helper function to create a simple selector based on a tag extractor.
+///
+/// This creates a selector function that:
+/// - Returns `Ok(None)` if the completion marker is found
+/// - Returns `Ok(Some(id))` if an action tag is found
+/// - Returns an error if neither is found
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use llm_toolkit::intent::expandable::simple_tag_selector;
+///
+/// let selector = simple_tag_selector("action", "DONE");
+/// ```
+pub fn simple_tag_selector(
+    tag: &'static str,
+    completion_marker: &'static str,
+) -> impl Fn(&str) -> Result<Option<String>, ReActError> {
+    move |response: &str| {
+        // Check for completion first
+        if response.contains(completion_marker) {
+            return Ok(None);
+        }
+
+        // Try to extract action tag
+        use crate::extract::FlexibleExtractor;
+        use crate::extract::core::ContentExtractor;
+
+        let extractor = FlexibleExtractor::new();
+        if let Some(action_id) = extractor.extract_tagged(response, tag) {
+            Ok(Some(action_id))
+        } else {
+            Err(ReActError::ExtractionFailed(format!(
+                "No <{}> tag or '{}' found in response",
+                tag, completion_marker
+            )))
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
