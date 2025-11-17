@@ -9,7 +9,6 @@
 //! Run with: cargo run --example react_loop_execution --features agent,derive
 
 use llm_toolkit::agent::{Agent, AgentError, Payload};
-use llm_toolkit::define_intent;
 use llm_toolkit::intent::expandable::{
     ReActConfig, SelectionRegistry, react_loop, simple_tag_selector,
 };
