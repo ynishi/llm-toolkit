@@ -1,5 +1,7 @@
 //! Traits and implementations for extracting structured intents from LLM responses.
 
+#[cfg(feature = "agent")]
+pub mod expandable;
 pub mod frame;
 
 use self::frame::IntentFrame;

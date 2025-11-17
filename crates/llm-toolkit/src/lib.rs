@@ -122,6 +122,10 @@ pub mod orchestrator;
 
 pub use attachment::{Attachment, AttachmentSchema, ToAttachments};
 pub use extract::{FlexibleExtractor, MarkdownCodeBlockExtractor};
+#[cfg(feature = "agent")]
+pub use intent::expandable::{
+    Expandable, ReActConfig, ReActError, ReActResult, RegistryError, Selectable, SelectionRegistry,
+};
 pub use intent::frame::IntentFrame;
 #[allow(deprecated)]
 pub use intent::{IntentError, IntentExtractor, PromptBasedExtractor};

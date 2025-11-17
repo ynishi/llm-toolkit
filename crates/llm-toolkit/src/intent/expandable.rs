@@ -1,0 +1,437 @@
+//! Expandable and Selectable traits for dynamic prompt expansion.
+//!
+//! This module provides traits and utilities for building ReAct-style agents
+//! that can select actions from a set of options and expand them into prompts.
+
+use crate::agent::Payload;
+use std::fmt;
+
+/// Trait for types that can expand into prompts dynamically.
+///
+/// This enables ReAct-style agent loops where actions selected by the LLM
+/// can be expanded into new prompts for further execution.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use llm_toolkit::intent::Expandable;
+/// use llm_toolkit::agent::Payload;
+///
+/// enum Action {
+///     Search { query: String },
+///     Calculate { expression: String },
+/// }
+///
+/// impl Expandable for Action {
+///     fn expand(&self) -> Payload {
+///         match self {
+///             Action::Search { query } => {
+///                 Payload::from(format!("Search the web for: {}", query))
+///             }
+///             Action::Calculate { expression } => {
+///                 Payload::from(format!("Calculate: {}", expression))
+///             }
+///         }
+///     }
+/// }
+/// ```
+pub trait Expandable {
+    /// Expand this item into a Payload for LLM execution.
+    ///
+    /// The returned Payload can contain text, images, or any other content
+    /// that the agent needs to process.
+    fn expand(&self) -> Payload;
+}
+
+/// Trait for selectable items that can be chosen by an LLM.
+///
+/// Types implementing this trait can be registered in a `SelectionRegistry`
+/// and presented to the LLM as available options. When selected, they can
+/// be expanded into prompts using the `Expandable` trait.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use llm_toolkit::intent::{Selectable, Expandable};
+/// use llm_toolkit::agent::Payload;
+///
+/// enum Tool {
+///     WebSearch,
+///     Calculator,
+/// }
+///
+/// impl Selectable for Tool {
+///     fn selection_id(&self) -> &str {
+///         match self {
+///             Tool::WebSearch => "web_search",
+///             Tool::Calculator => "calculator",
+///         }
+///     }
+///
+///     fn description(&self) -> &str {
+///         match self {
+///             Tool::WebSearch => "Search the web for information",
+///             Tool::Calculator => "Perform mathematical calculations",
+///         }
+///     }
+/// }
+///
+/// impl Expandable for Tool {
+///     fn expand(&self) -> Payload {
+///         match self {
+///             Tool::WebSearch => Payload::from("Searching the web..."),
+///             Tool::Calculator => Payload::from("Calculating..."),
+///         }
+///     }
+/// }
+/// ```
+pub trait Selectable: Expandable {
+    /// Get the unique identifier for this selectable item.
+    ///
+    /// This ID is used by the LLM to select the item and by the registry
+    /// to look up the item when selected.
+    fn selection_id(&self) -> &str;
+
+    /// Get a human-readable description of what this item does.
+    ///
+    /// This description is presented to the LLM to help it understand
+    /// when to select this item.
+    fn description(&self) -> &str;
+}
+
+/// Registry for managing selectable items.
+///
+/// The registry maintains a collection of items that implement `Selectable`
+/// and provides utilities for presenting them to LLMs and looking them up
+/// by their selection ID.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use llm_toolkit::intent::{SelectionRegistry, Selectable, Expandable};
+///
+/// let mut registry = SelectionRegistry::new();
+/// registry.register(Tool::WebSearch);
+/// registry.register(Tool::Calculator);
+///
+/// // Generate prompt section for LLM
+/// let prompt_section = registry.to_prompt_section();
+///
+/// // Look up selected item
+/// if let Some(tool) = registry.get("web_search") {
+///     let expanded = tool.expand();
+///     // ... use expanded payload
+/// }
+/// ```
+pub struct SelectionRegistry<T: Selectable> {
+    items: Vec<T>,
+}
+
+impl<T: Selectable> SelectionRegistry<T> {
+    /// Create a new empty registry.
+    pub fn new() -> Self {
+        Self { items: Vec::new() }
+    }
+
+    /// Register a new selectable item.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an item with the same selection_id is already registered.
+    pub fn register(&mut self, item: T) -> &mut Self {
+        let id = item.selection_id();
+        if self.items.iter().any(|i| i.selection_id() == id) {
+            panic!("Item with id '{}' is already registered", id);
+        }
+        self.items.push(item);
+        self
+    }
+
+    /// Try to register a new selectable item.
+    ///
+    /// Returns `Err` if an item with the same selection_id is already registered.
+    pub fn try_register(&mut self, item: T) -> Result<&mut Self, RegistryError> {
+        let id = item.selection_id().to_string();
+        if self.items.iter().any(|i| i.selection_id() == id) {
+            return Err(RegistryError::DuplicateId { id });
+        }
+        self.items.push(item);
+        Ok(self)
+    }
+
+    /// Get a reference to an item by its selection ID.
+    pub fn get(&self, id: &str) -> Option<&T> {
+        self.items.iter().find(|item| item.selection_id() == id)
+    }
+
+    /// Get all registered items.
+    pub fn items(&self) -> &[T] {
+        &self.items
+    }
+
+    /// Generate a prompt section listing all selectable items.
+    ///
+    /// This section can be included in prompts to inform the LLM about
+    /// available options.
+    ///
+    /// # Format
+    ///
+    /// The output is formatted as a Markdown list:
+    /// ```text
+    /// ## Available Actions
+    ///
+    /// - `action_id`: Description of the action
+    /// - `another_action`: Description of another action
+    /// ```
+    pub fn to_prompt_section(&self) -> String {
+        self.to_prompt_section_with_title("Available Actions")
+    }
+
+    /// Generate a prompt section with a custom title.
+    pub fn to_prompt_section_with_title(&self, title: &str) -> String {
+        let mut output = format!("## {}\n\n", title);
+        for item in &self.items {
+            output.push_str(&format!(
+                "- `{}`: {}\n",
+                item.selection_id(),
+                item.description()
+            ));
+        }
+        output
+    }
+
+    /// Check if the registry is empty.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Get the number of registered items.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+}
+
+impl<T: Selectable> Default for SelectionRegistry<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Selectable> fmt::Debug for SelectionRegistry<T>
+where
+    T: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SelectionRegistry")
+            .field("items", &self.items)
+            .finish()
+    }
+}
+
+/// Errors that can occur when working with SelectionRegistry.
+#[derive(Debug, thiserror::Error)]
+pub enum RegistryError {
+    #[error("Item with id '{id}' is already registered")]
+    DuplicateId { id: String },
+
+    #[error("Item with id '{id}' not found in registry")]
+    NotFound { id: String },
+}
+
+/// Errors that can occur during ReAct loop execution.
+#[derive(Debug, thiserror::Error)]
+pub enum ReActError {
+    #[error("Agent error: {0}")]
+    Agent(#[from] crate::agent::AgentError),
+
+    #[error("Selection not found: {0}")]
+    SelectionNotFound(String),
+
+    #[error("Max iterations ({0}) reached without completion")]
+    MaxIterationsReached(usize),
+
+    #[error("Failed to extract selection from response: {0}")]
+    ExtractionFailed(String),
+}
+
+/// Result of a ReAct loop iteration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReActResult {
+    /// The task is complete with the final response
+    Complete(String),
+
+    /// Continue to the next iteration with updated context
+    Continue { context: String },
+}
+
+/// Configuration for ReAct loop execution.
+#[derive(Debug, Clone)]
+pub struct ReActConfig {
+    /// Maximum number of iterations before giving up
+    pub max_iterations: usize,
+
+    /// Whether to include the selection prompt in the context
+    pub include_selection_prompt: bool,
+
+    /// Custom completion marker (defaults to "DONE")
+    pub completion_marker: String,
+
+    /// Whether to accumulate all results in context
+    pub accumulate_results: bool,
+}
+
+impl Default for ReActConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: 10,
+            include_selection_prompt: true,
+            completion_marker: "DONE".to_string(),
+            accumulate_results: true,
+        }
+    }
+}
+
+impl ReActConfig {
+    /// Create a new configuration with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the maximum number of iterations
+    pub fn with_max_iterations(mut self, max: usize) -> Self {
+        self.max_iterations = max;
+        self
+    }
+
+    /// Set whether to include the selection prompt in context
+    pub fn with_include_selection_prompt(mut self, include: bool) -> Self {
+        self.include_selection_prompt = include;
+        self
+    }
+
+    /// Set a custom completion marker
+    pub fn with_completion_marker(mut self, marker: impl Into<String>) -> Self {
+        self.completion_marker = marker.into();
+        self
+    }
+
+    /// Set whether to accumulate all results
+    pub fn with_accumulate_results(mut self, accumulate: bool) -> Self {
+        self.accumulate_results = accumulate;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum TestAction {
+        Greet { name: String },
+        Calculate { expr: String },
+    }
+
+    impl Expandable for TestAction {
+        fn expand(&self) -> Payload {
+            match self {
+                TestAction::Greet { name } => Payload::from(format!("Say hello to {}", name)),
+                TestAction::Calculate { expr } => Payload::from(format!("Calculate: {}", expr)),
+            }
+        }
+    }
+
+    impl Selectable for TestAction {
+        fn selection_id(&self) -> &str {
+            match self {
+                TestAction::Greet { .. } => "greet",
+                TestAction::Calculate { .. } => "calculate",
+            }
+        }
+
+        fn description(&self) -> &str {
+            match self {
+                TestAction::Greet { .. } => "Greet a person by name",
+                TestAction::Calculate { .. } => "Perform a calculation",
+            }
+        }
+    }
+
+    #[test]
+    fn test_expandable() {
+        let action = TestAction::Greet {
+            name: "Alice".to_string(),
+        };
+        let payload = action.expand();
+        assert_eq!(payload.to_text(), "Say hello to Alice");
+    }
+
+    #[test]
+    fn test_selectable() {
+        let action = TestAction::Greet {
+            name: "Bob".to_string(),
+        };
+        assert_eq!(action.selection_id(), "greet");
+        assert_eq!(action.description(), "Greet a person by name");
+    }
+
+    #[test]
+    fn test_registry_basic() {
+        let mut registry = SelectionRegistry::new();
+        registry.register(TestAction::Greet {
+            name: "Charlie".to_string(),
+        });
+        registry.register(TestAction::Calculate {
+            expr: "2+2".to_string(),
+        });
+
+        assert_eq!(registry.len(), 2);
+        assert!(!registry.is_empty());
+
+        let greet = registry.get("greet").unwrap();
+        assert_eq!(greet.selection_id(), "greet");
+    }
+
+    #[test]
+    fn test_registry_to_prompt_section() {
+        let mut registry = SelectionRegistry::new();
+        registry.register(TestAction::Greet {
+            name: "Dave".to_string(),
+        });
+        registry.register(TestAction::Calculate {
+            expr: "5*5".to_string(),
+        });
+
+        let section = registry.to_prompt_section();
+        assert!(section.contains("## Available Actions"));
+        assert!(section.contains("- `greet`: Greet a person by name"));
+        assert!(section.contains("- `calculate`: Perform a calculation"));
+    }
+
+    #[test]
+    #[should_panic(expected = "already registered")]
+    fn test_registry_duplicate_panic() {
+        let mut registry = SelectionRegistry::new();
+        registry.register(TestAction::Greet {
+            name: "Eve".to_string(),
+        });
+        registry.register(TestAction::Greet {
+            name: "Frank".to_string(),
+        });
+    }
+
+    #[test]
+    fn test_registry_try_register_duplicate() {
+        let mut registry = SelectionRegistry::new();
+        registry
+            .try_register(TestAction::Greet {
+                name: "Grace".to_string(),
+            })
+            .unwrap();
+
+        let result = registry.try_register(TestAction::Greet {
+            name: "Heidi".to_string(),
+        });
+        assert!(matches!(result, Err(RegistryError::DuplicateId { .. })));
+    }
+}
