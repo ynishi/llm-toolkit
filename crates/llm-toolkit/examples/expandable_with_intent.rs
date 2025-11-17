@@ -7,10 +7,10 @@
 //!
 //! Run with: cargo run --example expandable_with_intent --features agent,derive
 
+use llm_toolkit::IntentExtractor;
 use llm_toolkit::agent::Payload;
 use llm_toolkit::define_intent;
 use llm_toolkit::intent::expandable::{Expandable, Selectable, SelectionRegistry};
-use llm_toolkit::IntentExtractor;
 
 // Define a set of actions using define_intent!
 #[define_intent]
@@ -129,7 +129,8 @@ fn main() {
     println!("{}\n", prompt);
 
     // Simulate LLM response
-    let llm_response = "Based on the request, I'll use the calculator tool. <tool>Calculator</tool>";
+    let llm_response =
+        "Based on the request, I'll use the calculator tool. <tool>Calculator</tool>";
     println!("LLM Response:");
     println!("{}\n", llm_response);
 
@@ -150,9 +151,7 @@ fn main() {
             // In a real scenario, you would send the expanded prompt to the LLM
             // and get the actual result. Here we simulate it.
             let simulated_execution = match tool {
-                Tool::Calculator => {
-                    "The user wants to calculate 150 + 275. The result is: 425"
-                }
+                Tool::Calculator => "The user wants to calculate 150 + 275. The result is: 425",
                 _ => "Tool execution result would appear here",
             };
 

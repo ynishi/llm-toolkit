@@ -8,8 +8,8 @@
 //!
 //! Run with: cargo run --example expandable_basic --features agent
 
-use llm_toolkit::intent::expandable::{Expandable, Selectable, SelectionRegistry};
 use llm_toolkit::agent::Payload;
+use llm_toolkit::intent::expandable::{Expandable, Selectable, SelectionRegistry};
 
 /// Example actions that an agent can perform
 #[derive(Debug, Clone)]
@@ -23,30 +23,22 @@ enum ToolAction {
 impl Expandable for ToolAction {
     fn expand(&self) -> Payload {
         match self {
-            ToolAction::FileRead { path } => {
-                Payload::from(format!(
-                    "Read the contents of the file at path: {}\nReturn the file contents.",
-                    path
-                ))
-            }
-            ToolAction::FileWrite { path, content } => {
-                Payload::from(format!(
-                    "Write the following content to file at path: {}\n\nContent:\n{}\n\nConfirm when done.",
-                    path, content
-                ))
-            }
-            ToolAction::Calculate { expression } => {
-                Payload::from(format!(
-                    "Calculate the result of: {}\nReturn only the numeric result.",
-                    expression
-                ))
-            }
-            ToolAction::WebSearch { query } => {
-                Payload::from(format!(
-                    "Search the web for: {}\nReturn a summary of the top 3 results.",
-                    query
-                ))
-            }
+            ToolAction::FileRead { path } => Payload::from(format!(
+                "Read the contents of the file at path: {}\nReturn the file contents.",
+                path
+            )),
+            ToolAction::FileWrite { path, content } => Payload::from(format!(
+                "Write the following content to file at path: {}\n\nContent:\n{}\n\nConfirm when done.",
+                path, content
+            )),
+            ToolAction::Calculate { expression } => Payload::from(format!(
+                "Calculate the result of: {}\nReturn only the numeric result.",
+                expression
+            )),
+            ToolAction::WebSearch { query } => Payload::from(format!(
+                "Search the web for: {}\nReturn a summary of the top 3 results.",
+                query
+            )),
         }
     }
 }
