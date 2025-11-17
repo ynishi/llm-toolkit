@@ -322,6 +322,67 @@ impl ReActConfig {
     }
 }
 
+// TODO: Implement complete ReAct loop helper function
+//
+// A complete implementation would look something like:
+//
+// ```rust,ignore
+// pub async fn react_loop<T, A>(
+//     agent: &A,
+//     registry: &SelectionRegistry<T>,
+//     initial_task: impl Into<Payload>,
+//     config: ReActConfig,
+// ) -> Result<String, ReActError>
+// where
+//     T: Selectable + Clone,
+//     A: Agent<Output = String>,
+// {
+//     let mut context = initial_task.into().to_text();
+//
+//     for iteration in 0..config.max_iterations {
+//         // 1. Present available actions to LLM
+//         let prompt = format!(
+//             "{}\n\n{}\n\nCurrent task: {}\n\nChoose an action or respond with '{}'",
+//             registry.to_prompt_section(),
+//             context,
+//             "your analysis here",
+//             config.completion_marker
+//         );
+//
+//         // 2. Get LLM response
+//         let response = agent.execute(prompt.into()).await?;
+//
+//         // 3. Check for completion
+//         if response.contains(&config.completion_marker) {
+//             return Ok(response);
+//         }
+//
+//         // 4. Extract selected action ID (would need IntentExtractor integration)
+//         // let selected_id = extract_selection(&response)?;
+//
+//         // 5. Get the selected item and expand it
+//         // if let Some(item) = registry.get(&selected_id) {
+//         //     let expanded = item.expand();
+//         //     let result = agent.execute(expanded).await?;
+//         //
+//         //     if config.accumulate_results {
+//         //         context = format!("{}\n\n[Action: {}]\nResult: {}", context, selected_id, result);
+//         //     }
+//         // }
+//     }
+//
+//     Err(ReActError::MaxIterationsReached(config.max_iterations))
+// }
+// ```
+//
+// For now, users can implement their own ReAct loops using:
+// 1. SelectionRegistry::to_prompt_section() - to present options to LLM
+// 2. IntentExtractor - to extract selected actions
+// 3. Expandable::expand() - to generate follow-up prompts
+// 4. Agent::execute() - to run the expanded prompts
+//
+// See examples/expandable_with_intent.rs for a manual ReAct-style implementation.
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3320,21 +3320,38 @@ pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
         proc_macro2::Span::call_site(),
     );
 
-    // Filter out the #[intent(...)] attribute from the enum attributes
+    // Generate Expandable/Selectable implementations
+    let expandable_impl =
+        generate_expandable_selectable_impls(enum_name, &enum_data.variants, &crate_path);
+
+    // Filter out the #[intent(...)] and #[expand(...)] attributes from the enum attributes
     let filtered_attrs: Vec<_> = input
         .attrs
         .iter()
-        .filter(|attr| !attr.path().is_ident("intent"))
+        .filter(|attr| !attr.path().is_ident("intent") && !attr.path().is_ident("expand"))
         .collect();
 
-    // Rebuild the enum with filtered attributes
+    // Rebuild the enum with filtered attributes (remove #[expand] from variants too)
     let vis = &input.vis;
     let generics = &input.generics;
-    let variants = &enum_data.variants;
+
+    let filtered_variants: Vec<_> = enum_data
+        .variants
+        .iter()
+        .map(|variant| {
+            // Create a new variant with filtered attributes
+            let mut new_variant = variant.clone();
+            new_variant
+                .attrs
+                .retain(|attr| !attr.path().is_ident("expand"));
+            new_variant
+        })
+        .collect();
+
     let enum_output = quote! {
         #(#filtered_attrs)*
         #vis enum #enum_name #generics {
-            #variants
+            #(#filtered_variants),*
         }
     };
 
@@ -3376,6 +3393,9 @@ pub fn define_intent(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 #crate_path::intent::extract_intent_from_response(response, Self::EXTRACTOR_TAG)
             }
         }
+
+        // Generate Expandable and Selectable implementations if #[expand] attributes are present
+        #expandable_impl
     };
 
     TokenStream::from(expanded)
@@ -3396,6 +3416,38 @@ fn to_snake_case(s: &str) -> String {
         } else {
             result.push(ch);
             prev_upper = false;
+        }
+    }
+
+    result
+}
+
+/// Parse #[expand(...)] attributes for enum variants
+#[derive(Debug, Default)]
+struct ExpandAttrs {
+    template: Option<String>,
+}
+
+fn parse_expand_attrs(attrs: &[syn::Attribute]) -> ExpandAttrs {
+    let mut result = ExpandAttrs::default();
+
+    for attr in attrs {
+        if attr.path().is_ident("expand")
+            && let Ok(meta_list) = attr.meta.require_list()
+            && let Ok(metas) =
+                meta_list.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+        {
+            for meta in metas {
+                if let Meta::NameValue(nv) = meta
+                    && nv.path.is_ident("template")
+                    && let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = nv.value
+                {
+                    result.template = Some(lit_str.value());
+                }
+            }
         }
     }
 
@@ -3432,6 +3484,189 @@ fn parse_action_attrs(attrs: &[syn::Attribute]) -> ActionAttrs {
     }
 
     result
+}
+
+/// Generate Expandable and Selectable trait implementations for a define_intent enum
+fn generate_expandable_selectable_impls(
+    enum_name: &syn::Ident,
+    variants: &syn::punctuated::Punctuated<syn::Variant, syn::Token![,]>,
+    crate_path: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    // Check if any variant has #[expand] attribute
+    let has_expand = variants
+        .iter()
+        .any(|v| parse_expand_attrs(&v.attrs).template.is_some());
+
+    if !has_expand {
+        return quote! {};
+    }
+
+    // Generate Expandable impl
+    let expand_arms: Vec<proc_macro2::TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            let variant_name = &variant.ident;
+            let expand_attrs = parse_expand_attrs(&variant.attrs);
+
+            // Build match pattern based on fields
+            let pattern = match &variant.fields {
+                syn::Fields::Unit => quote! { #enum_name::#variant_name },
+                syn::Fields::Named(fields) => {
+                    let field_names: Vec<_> = fields.named.iter().map(|f| &f.ident).collect();
+                    quote! { #enum_name::#variant_name { #(#field_names),* } }
+                }
+                syn::Fields::Unnamed(fields) => {
+                    let field_count = fields.unnamed.len();
+                    let field_vars: Vec<_> = (0..field_count)
+                        .map(|i| {
+                            syn::Ident::new(&format!("field_{}", i), proc_macro2::Span::call_site())
+                        })
+                        .collect();
+                    quote! { #enum_name::#variant_name(#(#field_vars),*) }
+                }
+            };
+
+            if let Some(template_str) = expand_attrs.template {
+                // Parse template to find placeholders
+                let placeholders = parse_template_placeholders_with_mode(&template_str);
+
+                // Generate template rendering code
+                let field_insertions: Vec<proc_macro2::TokenStream> =
+                    match &variant.fields {
+                        syn::Fields::Named(fields) => {
+                            fields.named.iter().filter_map(|field| {
+                            let field_name = field.ident.as_ref()?;
+                            let field_name_str = field_name.to_string();
+
+                            // Check if this field is used in the template
+                            if placeholders.iter().any(|(name, _)| name == &field_name_str) {
+                                Some(quote! {
+                                    __expand_context.insert(
+                                        #field_name_str.to_string(),
+                                        #crate_path::minijinja::Value::from(#field_name.clone())
+                                    );
+                                })
+                            } else {
+                                None
+                            }
+                        }).collect()
+                        }
+                        syn::Fields::Unnamed(fields) => (0..fields.unnamed.len())
+                            .filter_map(|i| {
+                                let field_var = syn::Ident::new(
+                                    &format!("field_{}", i),
+                                    proc_macro2::Span::call_site(),
+                                );
+                                let field_name_str = format!("field_{}", i);
+
+                                if placeholders.iter().any(|(name, _)| name == &field_name_str) {
+                                    Some(quote! {
+                                        __expand_context.insert(
+                                            #field_name_str.to_string(),
+                                            #crate_path::minijinja::Value::from(#field_var.clone())
+                                        );
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                        syn::Fields::Unit => vec![],
+                    };
+
+                quote! {
+                    #pattern => {
+                        let mut __expand_env = #crate_path::minijinja::Environment::new();
+                        __expand_env.add_template("expand", #template_str)
+                            .expect("Failed to parse expand template");
+                        let __expand_tmpl = __expand_env.get_template("expand").unwrap();
+                        let mut __expand_context = std::collections::HashMap::new();
+                        #(#field_insertions)*
+                        let __expanded_str = __expand_tmpl.render(&__expand_context)
+                            .unwrap_or_else(|e| format!("Failed to render expand template: {}", e));
+                        #crate_path::agent::Payload::from(__expanded_str)
+                    }
+                }
+            } else {
+                // No #[expand] attribute, use default
+                let variant_name_str = variant_name.to_string();
+                quote! {
+                    #pattern => {
+                        #crate_path::agent::Payload::from(#variant_name_str)
+                    }
+                }
+            }
+        })
+        .collect();
+
+    // Generate Selectable impl
+    let selection_id_arms: Vec<proc_macro2::TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            let variant_name = &variant.ident;
+            let variant_name_str = variant_name.to_string();
+            let snake_case_id = to_snake_case(&variant_name_str);
+
+            let pattern = match &variant.fields {
+                syn::Fields::Unit => quote! { #enum_name::#variant_name },
+                syn::Fields::Named(_) => quote! { #enum_name::#variant_name { .. } },
+                syn::Fields::Unnamed(_) => quote! { #enum_name::#variant_name(..) },
+            };
+
+            quote! {
+                #pattern => #snake_case_id
+            }
+        })
+        .collect();
+
+    let description_arms: Vec<proc_macro2::TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            let variant_name = &variant.ident;
+            let variant_docs = extract_doc_comments(&variant.attrs);
+            let description = if !variant_docs.is_empty() {
+                variant_docs
+            } else {
+                variant_name.to_string()
+            };
+
+            let pattern = match &variant.fields {
+                syn::Fields::Unit => quote! { #enum_name::#variant_name },
+                syn::Fields::Named(_) => quote! { #enum_name::#variant_name { .. } },
+                syn::Fields::Unnamed(_) => quote! { #enum_name::#variant_name(..) },
+            };
+
+            quote! {
+                #pattern => #description
+            }
+        })
+        .collect();
+
+    quote! {
+        #[cfg(feature = "agent")]
+        impl #crate_path::intent::expandable::Expandable for #enum_name {
+            fn expand(&self) -> #crate_path::agent::Payload {
+                match self {
+                    #(#expand_arms,)*
+                }
+            }
+        }
+
+        #[cfg(feature = "agent")]
+        impl #crate_path::intent::expandable::Selectable for #enum_name {
+            fn selection_id(&self) -> &str {
+                match self {
+                    #(#selection_id_arms,)*
+                }
+            }
+
+            fn description(&self) -> &str {
+                match self {
+                    #(#description_arms,)*
+                }
+            }
+        }
+    }
 }
 
 /// Parse #[action(...)] attributes for struct fields in variants
