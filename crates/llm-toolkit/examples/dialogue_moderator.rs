@@ -14,12 +14,10 @@
 //! - Complex decision-making scenarios
 //! - Delegating control to an intelligent coordinator
 
-use llm_toolkit::agent::dialogue::{
-    BroadcastOrder, Dialogue, ExecutionModel, SequentialOrder,
-};
+use async_trait::async_trait;
+use llm_toolkit::agent::dialogue::{BroadcastOrder, Dialogue, ExecutionModel, SequentialOrder};
 use llm_toolkit::agent::persona::Persona;
 use llm_toolkit::agent::{Agent, AgentError, Payload};
-use async_trait::async_trait;
 
 /// A simple moderator that decides execution strategy based on keywords.
 ///
@@ -52,12 +50,12 @@ impl Agent for KeywordModerator {
         if text.contains("brainstorm") || text.contains("all ideas") {
             // For brainstorming, everyone speaks in parallel
             println!("[Moderator]: Detected brainstorming → Broadcast mode");
-            Ok(ExecutionModel::OrderedBroadcast(
-                BroadcastOrder::Completion,
-            ))
+            Ok(ExecutionModel::OrderedBroadcast(BroadcastOrder::Completion))
         } else if text.contains("analyze") || text.contains("step by step") {
             // For analysis, sequential processing with Analyst first
-            println!("[Moderator]: Detected analysis task → Sequential mode (Analyst → Engineer → Designer)");
+            println!(
+                "[Moderator]: Detected analysis task → Sequential mode (Analyst → Engineer → Designer)"
+            );
             Ok(ExecutionModel::OrderedSequential(
                 SequentialOrder::Explicit(vec![
                     "Analyst".to_string(),
@@ -67,7 +65,9 @@ impl Agent for KeywordModerator {
             ))
         } else if text.contains("design") {
             // For design tasks, Designer goes first
-            println!("[Moderator]: Detected design task → Sequential mode (Designer → Engineer → Analyst)");
+            println!(
+                "[Moderator]: Detected design task → Sequential mode (Designer → Engineer → Analyst)"
+            );
             Ok(ExecutionModel::OrderedSequential(
                 SequentialOrder::Explicit(vec![
                     "Designer".to_string(),
@@ -78,9 +78,7 @@ impl Agent for KeywordModerator {
         } else {
             // Default: broadcast
             println!("[Moderator]: Default → Broadcast mode");
-            Ok(ExecutionModel::OrderedBroadcast(
-                BroadcastOrder::Completion,
-            ))
+            Ok(ExecutionModel::OrderedBroadcast(BroadcastOrder::Completion))
         }
     }
 }
@@ -180,7 +178,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dialogue.add_participant(engineer, engineer_agent);
     dialogue.add_participant(designer, designer_agent);
 
-    println!("Created dialogue with {} participants", dialogue.participant_count());
+    println!(
+        "Created dialogue with {} participants",
+        dialogue.participant_count()
+    );
     println!("Execution model: Moderator (dynamic strategy selection)\n");
 
     // ========================================================================

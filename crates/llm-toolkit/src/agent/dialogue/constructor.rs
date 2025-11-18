@@ -4,8 +4,7 @@ use crate::{
         dialogue::{
             BroadcastOrder, Dialogue, DialogueBlueprint, DialogueContext, DialogueMessage,
             DialogueTurn, ExecutionModel, MentionMatchStrategy, MessageId, MessageStore,
-            ReactionStrategy, SequentialOrder, Speaker, TalkStyle,
-            format_dialogue_history_as_text,
+            ReactionStrategy, SequentialOrder, Speaker, TalkStyle, format_dialogue_history_as_text,
             message::{self, SentAgents},
         },
         persona::{PersonaTeam, PersonaTeamGenerationRequest},

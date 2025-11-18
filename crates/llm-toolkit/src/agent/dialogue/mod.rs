@@ -96,11 +96,11 @@ pub mod state;
 pub mod store;
 pub mod turn_input;
 
-use async_trait::async_trait;
 use crate::ToPrompt;
 use crate::agent::chat::Chat;
 use crate::agent::persona::Persona;
 use crate::agent::{Agent, AgentError, Payload, PayloadMessage};
+use async_trait::async_trait;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
@@ -677,7 +677,10 @@ impl Dialogue {
     ///
     /// This method extracts the SequentialOrder from the ExecutionModel and
     /// resolves it to participant indices.
-    fn resolve_sequential_indices(&self, order: &SequentialOrder) -> Result<Vec<usize>, AgentError> {
+    fn resolve_sequential_indices(
+        &self,
+        order: &SequentialOrder,
+    ) -> Result<Vec<usize>, AgentError> {
         match order {
             SequentialOrder::AsAdded => Ok((0..self.participants.len()).collect()),
             SequentialOrder::Explicit(order) => {
@@ -1102,7 +1105,8 @@ impl Dialogue {
             ExecutionModel::Moderator => {
                 // Prevent infinite recursion
                 Err(AgentError::ExecutionFailed(
-                    "Moderator cannot return Moderator execution model (infinite recursion)".to_string(),
+                    "Moderator cannot return Moderator execution model (infinite recursion)"
+                        .to_string(),
                 ))
             }
         }
@@ -1126,17 +1130,19 @@ impl Dialogue {
                     .collect::<Vec<_>>()
                     .join("\n")
             );
-            context_messages.push(PayloadMessage::new(
-                Speaker::System,
-                history_text,
-            ));
+            context_messages.push(PayloadMessage::new(Speaker::System, history_text));
         }
 
         // Add participant information
         let participants_info = self
             .participants
             .iter()
-            .map(|p| format!("- {} ({}): {}", p.persona.name, p.persona.role, p.persona.background))
+            .map(|p| {
+                format!(
+                    "- {} ({}): {}",
+                    p.persona.name, p.persona.role, p.persona.background
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -2243,7 +2249,10 @@ impl Agent for Dialogue {
             };
 
             if self.participants.len() == 1 {
-                format!("{}Dialogue({})", model_str, self.participants[0].persona.name)
+                format!(
+                    "{}Dialogue({})",
+                    model_str, self.participants[0].persona.name
+                )
             } else {
                 format!(
                     "{}Dialogue({} participants)",
@@ -2663,7 +2672,8 @@ mod tests {
             visual_identity: None,
             capabilities: None,
         });
-        team.execution_strategy = Some(ExecutionModel::OrderedBroadcast(BroadcastOrder::Completion));
+        team.execution_strategy =
+            Some(ExecutionModel::OrderedBroadcast(BroadcastOrder::Completion));
 
         let llm = MockAgent::new("Mock", vec!["Response".to_string()]);
         let mut dialogue = Dialogue::from_persona_team(team, llm).unwrap();

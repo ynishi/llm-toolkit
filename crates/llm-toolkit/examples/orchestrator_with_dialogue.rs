@@ -16,13 +16,13 @@
 //!   └─ Step 3: Regular Agent
 //! ```
 
+use async_trait::async_trait;
 use llm_toolkit::agent::dialogue::{Dialogue, SequentialOrder};
 use llm_toolkit::agent::persona::Persona;
 use llm_toolkit::agent::{Agent, AgentAdapter, AgentError, Payload};
 use llm_toolkit::orchestrator::{
     BlueprintWorkflow, ParallelOrchestrator, StrategyMap, StrategyStep,
 };
-use async_trait::async_trait;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -93,11 +93,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     design_team.add_participant(
         designer_persona,
-        MockAgent::new("Sarah", "Design proposal: Clean, minimal interface with focus on key actions"),
+        MockAgent::new(
+            "Sarah",
+            "Design proposal: Clean, minimal interface with focus on key actions",
+        ),
     );
     design_team.add_participant(
         researcher_persona,
-        MockAgent::new("Mike", "Research validation: User testing shows 85% preference for this approach"),
+        MockAgent::new(
+            "Mike",
+            "Research validation: User testing shows 85% preference for this approach",
+        ),
     );
 
     println!("  ✓ Design Team: 2 participants (Sequential: Sarah → Mike)");
@@ -129,11 +135,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     engineering_team.add_participant(
         backend_persona,
-        MockAgent::new("Alex", "Backend assessment: API endpoints ready, 2 days for implementation"),
+        MockAgent::new(
+            "Alex",
+            "Backend assessment: API endpoints ready, 2 days for implementation",
+        ),
     );
     engineering_team.add_participant(
         frontend_persona,
-        MockAgent::new("Emma", "Frontend assessment: Component library supports this, 3 days needed"),
+        MockAgent::new(
+            "Emma",
+            "Frontend assessment: Component library supports this, 3 days needed",
+        ),
     );
 
     println!("  ✓ Engineering Team: 2 participants (Broadcast)");
@@ -193,8 +205,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "documentation".to_string(),
         "Document the feature specification".to_string(),
         "documentation".to_string(),
-        "Document based on: {{ step_design_output }} and {{ step_engineering_output }}"
-            .to_string(),
+        "Document based on: {{ step_design_output }} and {{ step_engineering_output }}".to_string(),
         "Feature documentation".to_string(),
     ));
 
@@ -217,7 +228,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("\n=== Execution Results ===");
-    println!("Status: {}", if result.success { "Success" } else { "Failed" });
+    println!(
+        "Status: {}",
+        if result.success { "Success" } else { "Failed" }
+    );
     println!("Steps executed: {}", result.steps_executed);
     println!("Steps skipped: {}", result.steps_skipped);
 

@@ -4,11 +4,11 @@
 //! as a regular Agent in orchestration scenarios, enabling bidirectional
 //! composition patterns.
 
+use async_trait::async_trait;
 use llm_toolkit::agent::dialogue::Dialogue;
 use llm_toolkit::agent::persona::Persona;
 use llm_toolkit::agent::{Agent, AgentError, Payload};
 use llm_toolkit::orchestrator::{ParallelOrchestrator, StrategyMap, StrategyStep};
-use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 /// Mock agent for testing
@@ -98,7 +98,12 @@ async fn test_orchestrator_with_dialogue_agent() {
 
     // Execute orchestrator
     let result = orchestrator
-        .execute("Evaluate the proposal", CancellationToken::new(), None, None)
+        .execute(
+            "Evaluate the proposal",
+            CancellationToken::new(),
+            None,
+            None,
+        )
         .await;
 
     // Verify success
@@ -176,7 +181,12 @@ async fn test_orchestrator_with_sequential_dialogue() {
 
     // Execute
     let result = orchestrator
-        .execute("Process quarterly data", CancellationToken::new(), None, None)
+        .execute(
+            "Process quarterly data",
+            CancellationToken::new(),
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -222,10 +232,7 @@ async fn test_multiple_dialogue_agents_in_orchestrator() {
         persona_tech1,
         MockAgent::new("Backend", "API design is solid"),
     );
-    tech_team.add_participant(
-        persona_tech2,
-        MockAgent::new("Frontend", "UI needs work"),
-    );
+    tech_team.add_participant(persona_tech2, MockAgent::new("Frontend", "UI needs work"));
 
     let persona_biz1 = Persona {
         name: "PM".to_string(),
@@ -253,9 +260,8 @@ async fn test_multiple_dialogue_agents_in_orchestrator() {
     );
 
     // Setup orchestrator with both teams
-    let blueprint = llm_toolkit::orchestrator::BlueprintWorkflow::new(
-        "Cross-functional review".to_string(),
-    );
+    let blueprint =
+        llm_toolkit::orchestrator::BlueprintWorkflow::new("Cross-functional review".to_string());
     let mut orchestrator = ParallelOrchestrator::new(blueprint);
 
     orchestrator.add_agent(
@@ -288,7 +294,12 @@ async fn test_multiple_dialogue_agents_in_orchestrator() {
 
     // Execute
     let result = orchestrator
-        .execute("Review the new feature", CancellationToken::new(), None, None)
+        .execute(
+            "Review the new feature",
+            CancellationToken::new(),
+            None,
+            None,
+        )
         .await
         .unwrap();
 
