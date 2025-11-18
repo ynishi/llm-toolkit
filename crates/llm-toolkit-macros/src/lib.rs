@@ -4819,6 +4819,37 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
         }
     };
 
+    let response_handling = if is_string_output {
+        quote! {
+            Ok(#crate_path::agent::normalize_string_output(&response))
+        }
+    } else {
+        quote! {
+            let json_str = #crate_path::extract_json(&response)
+                .map_err(|e| #crate_path::agent::AgentError::ParseError {
+                    message: format!("Failed to extract JSON: {}", e),
+                    reason: #crate_path::agent::error::ParseErrorReason::MarkdownExtractionFailed,
+                })?;
+
+            serde_json::from_str::<Self::Output>(&json_str)
+                .map_err(|e| {
+                    // Determine the parse error reason based on serde_json error type
+                    let reason = if e.is_eof() {
+                        #crate_path::agent::error::ParseErrorReason::UnexpectedEof
+                    } else if e.is_syntax() {
+                        #crate_path::agent::error::ParseErrorReason::InvalidJson
+                    } else {
+                        #crate_path::agent::error::ParseErrorReason::SchemaMismatch
+                    };
+
+                    #crate_path::agent::AgentError::ParseError {
+                        message: format!("Failed to parse JSON: {}", e),
+                        reason,
+                    }
+                })
+        }
+    };
+
     let expanded = quote! {
         #[async_trait::async_trait]
         impl #impl_generics #crate_path::agent::Agent for #struct_name #ty_generics #where_clause {
@@ -4843,30 +4874,7 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
                             // Execute and get response
                             let response = agent_ref.execute(payload).await?;
 
-                            // Extract JSON from the response
-                            let json_str = #crate_path::extract_json(&response)
-                                .map_err(|e| #crate_path::agent::AgentError::ParseError {
-                                    message: format!("Failed to extract JSON: {}", e),
-                                    reason: #crate_path::agent::error::ParseErrorReason::MarkdownExtractionFailed,
-                                })?;
-
-                            // Deserialize into output type
-                            serde_json::from_str::<Self::Output>(&json_str)
-                                .map_err(|e| {
-                                    // Determine the parse error reason based on serde_json error type
-                                    let reason = if e.is_eof() {
-                                        #crate_path::agent::error::ParseErrorReason::UnexpectedEof
-                                    } else if e.is_syntax() {
-                                        #crate_path::agent::error::ParseErrorReason::InvalidJson
-                                    } else {
-                                        #crate_path::agent::error::ParseErrorReason::SchemaMismatch
-                                    };
-
-                                    #crate_path::agent::AgentError::ParseError {
-                                        message: format!("Failed to parse JSON: {}", e),
-                                        reason,
-                                    }
-                                })
+                            #response_handling
                         }
                     }
                 ).await
@@ -5224,6 +5232,31 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
 
                 async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
                     self.inner.execute(intent).await
+                }
+
+                async fn is_available(&self) -> Result<(), #crate_path::agent::AgentError> {
+                    self.inner.is_available().await
+                }
+            }
+        }
+    } else if is_string_output {
+        quote! {
+            #[async_trait::async_trait]
+            impl<#inner_generic_ident> #crate_path::agent::Agent for #struct_name<#inner_generic_ident>
+            where
+                #inner_generic_ident: #crate_path::agent::Agent<Output = String>,
+            {
+                type Output = #output_type;
+
+                fn expertise(&self) -> &str {
+                    #enhanced_expertise
+                }
+
+                #[#crate_path::tracing::instrument(name = "agent.execute", skip_all, fields(agent.name = #struct_name_str, agent.expertise = self.expertise()))]
+                async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
+                    let enhanced_payload = intent.prepend_text(self.expertise());
+                    let response = self.inner.execute(enhanced_payload).await?;
+                    Ok(#crate_path::agent::normalize_string_output(&response))
                 }
 
                 async fn is_available(&self) -> Result<(), #crate_path::agent::AgentError> {

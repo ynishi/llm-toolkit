@@ -2281,6 +2281,9 @@ struct CodeReviewAgent;
 
 3. **String output** → No JSON enforcement
    - For plain text responses
+   - The macros skip `extract_json()`/`serde_json::from_str()` and return the LLM text as-is
+   - If the response happens to be a JSON string (e.g., `"hello world"` or inside ```` ```json` blocks), only the surrounding quotes are stripped; otherwise no additional parsing is applied
+   - Helper: `llm_toolkit::agent::normalize_string_output` (available if you want the same behavior in custom agents)
 
 **Recommendation:** Always use `#[derive(ToPrompt)]` with `#[prompt(mode = "full")]` for structured outputs to get the best LLM compliance.
 

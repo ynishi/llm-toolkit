@@ -402,6 +402,37 @@ pub trait Agent: Send + Sync {
 /// This type alias is useful for storing heterogeneous collections of agents.
 pub type BoxedAgent<T> = Box<dyn Agent<Output = T>>;
 
+/// Normalize raw LLM responses for agents that output plain `String` values.
+///
+/// This helper mirrors the default extraction pipeline (tag stripping, brace detection,
+/// etc.) but adds a final `OriginalText` fallback so that purely textual outputs are
+/// returned untouched. If the extracted content is itself a JSON string, the outer
+/// quotes are removed to match the behavior users expect from plain text agents.
+pub fn normalize_string_output(response: &str) -> String {
+    use crate::extract::{ExtractionStrategy, FlexibleExtractor};
+
+    if let Ok(extracted) = crate::extract_json(response) {
+        if let Ok(unquoted) = serde_json::from_str::<String>(&extracted) {
+            return unquoted;
+        }
+        return extracted;
+    }
+
+    let extractor = FlexibleExtractor::new();
+    let mut strategies = FlexibleExtractor::standard_extraction_strategies();
+    strategies.push(ExtractionStrategy::OriginalText);
+
+    let extracted = extractor
+        .extract_with_strategies(response, &strategies)
+        .unwrap_or_else(|_| response.to_string());
+
+    if let Ok(unquoted) = serde_json::from_str::<String>(&extracted) {
+        return unquoted;
+    }
+
+    extracted
+}
+
 /// Dynamic agent trait for type-erased agent execution.
 ///
 /// This trait allows the orchestrator to work with agents of different output types
