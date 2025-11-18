@@ -2,14 +2,16 @@ use crate::{
     Agent, AgentError, ToPrompt,
     agent::{
         dialogue::{
-            Dialogue, DialogueBlueprint, DialogueContext, DialogueMessage, DialogueTurn,
-            ExecutionModel, MentionMatchStrategy, MessageId, MessageStore, ReactionStrategy,
-            SequentialOrder, Speaker, TalkStyle, format_dialogue_history_as_text,
+            BroadcastOrder, Dialogue, DialogueBlueprint, DialogueContext, DialogueMessage,
+            DialogueTurn, ExecutionModel, MentionMatchStrategy, MessageId, MessageStore,
+            ReactionStrategy, SequentialOrder, Speaker, TalkStyle,
+            format_dialogue_history_as_text,
             message::{self, SentAgents},
         },
         persona::{PersonaTeam, PersonaTeamGenerationRequest},
     },
 };
+use std::sync::Arc;
 
 impl Dialogue {
     /// Creates a new dialogue with the specified execution model.
@@ -20,15 +22,16 @@ impl Dialogue {
             participants: Vec::new(),
             message_store: MessageStore::new(),
             execution_model,
-            sequential_order: SequentialOrder::AsAdded,
             context: None,
             reaction_strategy: ReactionStrategy::default(),
+            moderator: None,
         }
     }
 
     /// Creates a new dialogue with broadcast execution.
     ///
     /// In broadcast mode, all participants respond in parallel to the same input.
+    /// Results are yielded as soon as each participant finishes (completion order).
     ///
     /// # Examples
     ///
@@ -40,12 +43,13 @@ impl Dialogue {
     ///     .add_participant(agent2);
     /// ```
     pub fn broadcast() -> Self {
-        Self::new(ExecutionModel::Broadcast)
+        Self::new(ExecutionModel::OrderedBroadcast(BroadcastOrder::Completion))
     }
 
     /// Creates a new dialogue with sequential execution.
     ///
     /// In sequential mode, the output of one participant becomes the input to the next.
+    /// Participants execute in the order they were added.
     ///
     /// # Examples
     ///
@@ -58,14 +62,31 @@ impl Dialogue {
     ///     .add_participant(persona3, formatter);
     /// ```
     pub fn sequential() -> Self {
-        Self::new(ExecutionModel::Sequential)
+        Self::new(ExecutionModel::OrderedSequential(SequentialOrder::AsAdded))
     }
 
     /// Creates a sequential dialogue with a custom ordering strategy.
     pub fn sequential_with_order(order: SequentialOrder) -> Self {
-        let mut dialogue = Self::new(ExecutionModel::Sequential);
-        dialogue.sequential_order = order;
-        dialogue
+        Self::new(ExecutionModel::OrderedSequential(order))
+    }
+
+    /// Creates a dialogue with moderator-driven execution.
+    ///
+    /// The moderator agent determines the execution strategy for each turn
+    /// dynamically based on context and conversation state.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::Dialogue;
+    ///
+    /// let mut dialogue = Dialogue::moderator()
+    ///     .with_moderator(moderator_agent)
+    ///     .add_participant(persona1, agent1)
+    ///     .add_participant(persona2, agent2);
+    /// ```
+    pub fn moderator() -> Self {
+        Self::new(ExecutionModel::Moderator)
     }
 
     /// Creates a new dialogue with mentioned execution.
@@ -305,7 +326,7 @@ impl Dialogue {
         // Determine execution model from blueprint
         let execution_model = blueprint
             .execution_strategy
-            .unwrap_or(ExecutionModel::Broadcast);
+            .unwrap_or(ExecutionModel::OrderedBroadcast(BroadcastOrder::Completion));
 
         let mut dialogue = Self::new(execution_model);
 
@@ -359,7 +380,9 @@ impl Dialogue {
         T: Agent<Output = String> + Clone + 'static,
     {
         // Determine execution model from team hint
-        let execution_model = team.execution_strategy.unwrap_or(ExecutionModel::Broadcast);
+        let execution_model = team
+            .execution_strategy
+            .unwrap_or(ExecutionModel::OrderedBroadcast(BroadcastOrder::Completion));
 
         let mut dialogue = Self::new(execution_model);
 
@@ -466,12 +489,36 @@ impl Dialogue {
 
     /// Sets the sequential execution order.
     ///
-    /// This only affects dialogues whose execution model is `Sequential`. When set
-    /// to `SequentialOrder::Explicit`, the provided persona names will be executed
-    /// first, and any remaining participants will run afterward in their original
-    /// order.
+    /// This updates the execution model to `OrderedSequential` with the specified order.
+    /// The provided persona names will be executed first, and any remaining participants
+    /// will run afterward in their original order.
+    ///
+    /// # Note
+    ///
+    /// This method overrides the execution model to OrderedSequential.
     pub fn with_sequential_order(&mut self, order: SequentialOrder) -> &mut Self {
-        self.sequential_order = order;
+        self.execution_model = ExecutionModel::OrderedSequential(order);
+        self
+    }
+
+    /// Sets a moderator agent for dynamic execution model selection.
+    ///
+    /// The moderator is consulted at each turn to determine the execution strategy.
+    /// This is only used when execution_model is `Moderator`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::{Dialogue, ExecutionModel};
+    ///
+    /// let mut dialogue = Dialogue::new(ExecutionModel::Moderator)
+    ///     .with_moderator(moderator_agent);
+    /// ```
+    pub fn with_moderator<T>(&mut self, moderator: T) -> &mut Self
+    where
+        T: Agent<Output = ExecutionModel> + 'static,
+    {
+        self.moderator = Some(Arc::new(moderator));
         self
     }
 

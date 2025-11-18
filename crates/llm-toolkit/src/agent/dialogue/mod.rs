@@ -411,13 +411,24 @@ impl Default for MentionMatchStrategy {
 }
 
 /// Represents the execution model for dialogue strategies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// This enum unifies execution mode (Sequential/Broadcast/Mentioned) with
+/// ordering strategy, eliminating the need for separate order fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionModel {
+    /// Sequential execution with ordering control.
+    ///
+    /// Participants execute one by one, with output chained as input.
+    /// Order can be specified explicitly or follow the addition order.
+    OrderedSequential(SequentialOrder),
+
+    /// Broadcast execution with ordering control.
+    ///
     /// All participants respond in parallel to the same input.
-    Broadcast,
-    /// Participants execute sequentially, with output chained as input.
-    Sequential,
+    /// Order controls how results are yielded (completion order vs participant order).
+    OrderedBroadcast(BroadcastOrder),
+
     /// Only @mentioned participants respond (falls back to Broadcast if no mentions).
     ///
     /// Supports multiple mentions like "@Alice @Bob what do you think?"
@@ -427,6 +438,13 @@ pub enum ExecutionModel {
         #[serde(default)]
         strategy: MentionMatchStrategy,
     },
+
+    /// Moderator dynamically determines execution model.
+    ///
+    /// A moderator agent evaluates the current context and decides
+    /// which execution model to use (Sequential with specific order,
+    /// Broadcast, etc.) for each turn.
+    Moderator,
 }
 
 /// Determines when agents should react to messages in a dialogue.
@@ -509,7 +527,8 @@ impl Participant {
 }
 
 /// Controls the order in which broadcast responses are yielded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BroadcastOrder {
     /// Yields turns as soon as each participant finishes (default).
     Completion,
@@ -569,14 +588,17 @@ pub struct Dialogue {
 
     pub(super) execution_model: ExecutionModel,
 
-    /// Controls how participants run when execution model is sequential.
-    pub(super) sequential_order: SequentialOrder,
-
     /// Optional dialogue context that shapes conversation tone and behavior
     pub(super) context: Option<DialogueContext>,
 
     /// Strategy for determining when agents should react to messages
     pub(super) reaction_strategy: ReactionStrategy,
+
+    /// Optional moderator agent for dynamic execution model selection.
+    ///
+    /// When execution_model is Moderator, this agent is consulted to determine
+    /// the execution strategy for each turn.
+    pub(super) moderator: Option<Arc<dyn Agent<Output = ExecutionModel>>>,
 }
 
 impl Dialogue {
@@ -652,8 +674,11 @@ impl Dialogue {
     }
 
     /// Returns the indices for sequential execution respecting the configured order.
-    fn resolve_sequential_indices(&self) -> Result<Vec<usize>, AgentError> {
-        match &self.sequential_order {
+    ///
+    /// This method extracts the SequentialOrder from the ExecutionModel and
+    /// resolves it to participant indices.
+    fn resolve_sequential_indices(&self, order: &SequentialOrder) -> Result<Vec<usize>, AgentError> {
+        match order {
             SequentialOrder::AsAdded => Ok((0..self.participants.len()).collect()),
             SequentialOrder::Explicit(order) => {
                 let mut indices = Vec::with_capacity(self.participants.len());
@@ -1009,19 +1034,130 @@ impl Dialogue {
 
         // Use new implementation for both modes
         // Note: no_react_messages will be prepended by each execution mode
-        match self.execution_model {
-            ExecutionModel::Broadcast => self.run_broadcast(current_turn).await,
-            ExecutionModel::Sequential => self.run_sequential(current_turn).await,
+        match self.execution_model.clone() {
+            ExecutionModel::OrderedBroadcast(order) => {
+                self.run_broadcast(current_turn, order).await
+            }
+            ExecutionModel::OrderedSequential(order) => {
+                self.run_sequential(current_turn, &order).await
+            }
             ExecutionModel::Mentioned { strategy } => {
                 self.run_mentioned(current_turn, strategy).await
             }
+            ExecutionModel::Moderator => {
+                // Consult moderator for execution strategy
+                self.run_with_moderator(current_turn, payload).await
+            }
         }
+    }
+
+    /// Moderator-driven execution.
+    ///
+    /// Consults the moderator agent to determine the execution model for this turn,
+    /// then delegates to the appropriate execution method.
+    async fn run_with_moderator(
+        &mut self,
+        current_turn: usize,
+        payload: Payload,
+    ) -> Result<Vec<DialogueTurn>, AgentError> {
+        debug!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            execution_model = "moderator",
+            participant_count = self.participants.len(),
+            "Consulting moderator for execution strategy"
+        );
+
+        // Get moderator agent
+        let moderator = self.moderator.as_ref().ok_or_else(|| {
+            AgentError::ExecutionFailed(
+                "ExecutionModel::Moderator requires a moderator agent. Use with_moderator() to set one.".to_string(),
+            )
+        })?;
+
+        // Build context for moderator decision
+        let moderator_context = self.build_moderator_context(&payload, current_turn);
+
+        // Consult moderator
+        let decided_model = moderator.execute(moderator_context).await?;
+
+        debug!(
+            target = "llm_toolkit::dialogue",
+            turn = current_turn,
+            decided_model = ?decided_model,
+            "Moderator decided execution strategy"
+        );
+
+        // Execute with the decided model
+        match decided_model {
+            ExecutionModel::OrderedBroadcast(order) => {
+                self.run_broadcast(current_turn, order).await
+            }
+            ExecutionModel::OrderedSequential(order) => {
+                self.run_sequential(current_turn, &order).await
+            }
+            ExecutionModel::Mentioned { strategy } => {
+                self.run_mentioned(current_turn, strategy).await
+            }
+            ExecutionModel::Moderator => {
+                // Prevent infinite recursion
+                Err(AgentError::ExecutionFailed(
+                    "Moderator cannot return Moderator execution model (infinite recursion)".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Builds context for moderator decision-making.
+    ///
+    /// Includes conversation history, participant info, and current payload.
+    fn build_moderator_context(&self, payload: &Payload, current_turn: usize) -> Payload {
+        let mut context_messages = Vec::new();
+
+        // Add conversation history summary
+        if current_turn > 1 {
+            let history = self.history();
+            let history_text = format!(
+                "Conversation history ({} previous turns):\n{}",
+                history.len(),
+                history
+                    .iter()
+                    .map(|turn| format!("[{}]: {}", turn.speaker.name(), turn.content))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            context_messages.push(PayloadMessage::new(
+                Speaker::System,
+                history_text,
+            ));
+        }
+
+        // Add participant information
+        let participants_info = self
+            .participants
+            .iter()
+            .map(|p| format!("- {} ({}): {}", p.persona.name, p.persona.role, p.persona.background))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        context_messages.push(PayloadMessage::new(
+            Speaker::System,
+            format!("Available participants:\n{}", participants_info),
+        ));
+
+        // Add current payload
+        for msg in payload.to_messages() {
+            context_messages.push(msg);
+        }
+
+        Payload::from_messages(context_messages)
     }
 
     /// New broadcast implementation using MessageStore and TurnInput.
     async fn run_broadcast(
         &mut self,
         current_turn: usize,
+        _order: BroadcastOrder,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
         debug!(
             target = "llm_toolkit::dialogue",
@@ -1067,6 +1203,7 @@ impl Dialogue {
     async fn run_sequential(
         &mut self,
         current_turn: usize,
+        order: &SequentialOrder,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
         debug!(
             target = "llm_toolkit::dialogue",
@@ -1106,7 +1243,7 @@ impl Dialogue {
             );
         }
 
-        let sequence_indices = self.resolve_sequential_indices()?;
+        let sequence_indices = self.resolve_sequential_indices(order)?;
         // Execute participants sequentially
         let mut final_turn = None;
 
@@ -1328,7 +1465,8 @@ impl Dialogue {
     /// let mut session = dialogue.partial_session(payload);
     /// ```
     pub fn partial_session(&mut self, initial_prompt: impl Into<Payload>) -> DialogueSession<'_> {
-        self.partial_session_with_order(initial_prompt, BroadcastOrder::Completion)
+        // Don't override execution model - use the configured model
+        self.partial_session_internal(initial_prompt, None)
     }
 
     /// Begins a dialogue session with a specified broadcast ordering policy.
@@ -1359,6 +1497,21 @@ impl Dialogue {
         initial_prompt: impl Into<Payload>,
         broadcast_order: BroadcastOrder,
     ) -> DialogueSession<'_> {
+        self.partial_session_internal(initial_prompt, Some(broadcast_order))
+    }
+
+    /// Internal implementation for partial_session with optional order override.
+    fn partial_session_internal(
+        &mut self,
+        initial_prompt: impl Into<Payload>,
+        broadcast_order_override: Option<BroadcastOrder>,
+    ) -> DialogueSession<'_> {
+        // Temporarily override execution model if broadcast order is specified
+        let original_model = self.execution_model.clone();
+        if let Some(broadcast_order) = broadcast_order_override {
+            self.execution_model = ExecutionModel::OrderedBroadcast(broadcast_order);
+        }
+
         let payload: Payload = initial_prompt.into();
         let current_turn = self.message_store.current_turn() + 1;
 
@@ -1374,7 +1527,9 @@ impl Dialogue {
                 "Starting partial_session passed no react"
             );
             // Return a completed session (no agent reactions)
-            let model = self.execution_model;
+            // Restore original execution model
+            let model = self.execution_model.clone();
+            self.execution_model = original_model;
             return DialogueSession {
                 dialogue: self,
                 state: SessionState::Completed,
@@ -1396,31 +1551,32 @@ impl Dialogue {
             "Stored incoming payload in MessageStore"
         );
 
-        let model = self.execution_model;
-        let state = match model {
-            ExecutionModel::Broadcast => {
+        let model = self.execution_model.clone();
+        let state = match &model {
+            ExecutionModel::OrderedBroadcast(order) => {
                 // Spawn broadcast tasks using helper method
                 let pending = self.spawn_broadcast_tasks();
 
                 SessionState::Broadcast(BroadcastState::new(
                     pending,
-                    broadcast_order,
+                    *order,
                     self.participants.len(),
                     current_turn,
                 ))
             }
             ExecutionModel::Mentioned { strategy } => {
                 // For Mentioned mode, spawn tasks for mentioned participants only
-                let pending = self.spawn_mentioned_tasks(current_turn, strategy);
+                let pending = self.spawn_mentioned_tasks(current_turn, *strategy);
 
+                // Mentioned mode uses Broadcast state with Completion order
                 SessionState::Broadcast(BroadcastState::new(
                     pending,
-                    broadcast_order,
+                    BroadcastOrder::Completion,
                     self.participants.len(),
                     current_turn,
                 ))
             }
-            ExecutionModel::Sequential => {
+            ExecutionModel::OrderedSequential(order) => {
                 let participants_info = self.get_participants_info();
 
                 let prev_agent_outputs: Vec<PayloadMessage> = if current_turn > 1 {
@@ -1434,7 +1590,7 @@ impl Dialogue {
                     Vec::new()
                 };
 
-                match self.resolve_sequential_indices() {
+                match self.resolve_sequential_indices(order) {
                     Ok(sequence) => SessionState::Sequential {
                         next_index: 0,
                         current_turn,
@@ -1456,6 +1612,17 @@ impl Dialogue {
                         SessionState::Failed(Some(err))
                     }
                 }
+            }
+            ExecutionModel::Moderator => {
+                // For Moderator mode, we need to consult the moderator first
+                // This is not supported in partial_session yet - use run() instead
+                error!(
+                    target = "llm_toolkit::dialogue",
+                    "Moderator mode is not supported in partial_session, use run() instead"
+                );
+                SessionState::Failed(Some(AgentError::ExecutionFailed(
+                    "Moderator mode requires run() method, not partial_session()".to_string(),
+                )))
             }
         };
 
@@ -2068,10 +2235,11 @@ impl Agent for Dialogue {
         if self.participants.is_empty() {
             "EmptyDialogue".to_string()
         } else {
-            let model_str = match self.execution_model {
-                ExecutionModel::Broadcast => "Broadcast",
-                ExecutionModel::Sequential => "Sequential",
+            let model_str = match &self.execution_model {
+                ExecutionModel::OrderedBroadcast(_) => "Broadcast",
+                ExecutionModel::OrderedSequential(_) => "Sequential",
                 ExecutionModel::Mentioned { .. } => "Mentioned",
+                ExecutionModel::Moderator => "Moderator",
             };
 
             if self.participants.len() == 1 {
@@ -2337,7 +2505,10 @@ mod tests {
             );
 
         let mut session = dialogue.partial_session("Initial".to_string());
-        assert_eq!(session.execution_model(), ExecutionModel::Sequential);
+        assert_eq!(
+            session.execution_model(),
+            ExecutionModel::OrderedSequential(SequentialOrder::AsAdded)
+        );
 
         let first = session.next_turn().await.unwrap().unwrap();
         assert_eq!(first.speaker.name(), "Step1");
@@ -2413,7 +2584,10 @@ mod tests {
             .add_participant(slow, DelayAgent::new("Slow", 50));
 
         let mut session = dialogue.partial_session("Hello".to_string());
-        assert_eq!(session.execution_model(), ExecutionModel::Broadcast);
+        assert_eq!(
+            session.execution_model(),
+            ExecutionModel::OrderedBroadcast(BroadcastOrder::Completion)
+        );
 
         let first = session.next_turn().await.unwrap().unwrap();
         assert_eq!(first.speaker.name(), "Fast");
@@ -2489,7 +2663,7 @@ mod tests {
             visual_identity: None,
             capabilities: None,
         });
-        team.execution_strategy = Some(ExecutionModel::Broadcast);
+        team.execution_strategy = Some(ExecutionModel::OrderedBroadcast(BroadcastOrder::Completion));
 
         let llm = MockAgent::new("Mock", vec!["Response".to_string()]);
         let mut dialogue = Dialogue::from_persona_team(team, llm).unwrap();
@@ -2524,7 +2698,7 @@ mod tests {
             visual_identity: None,
             capabilities: None,
         });
-        team.execution_strategy = Some(ExecutionModel::Sequential);
+        team.execution_strategy = Some(ExecutionModel::OrderedSequential(SequentialOrder::AsAdded));
 
         let llm = MockAgent::new("Mock", vec!["Step output".to_string()]);
         let mut dialogue = Dialogue::from_persona_team(team, llm).unwrap();
@@ -2707,7 +2881,7 @@ mod tests {
             agenda: "Feature Planning".to_string(),
             context: "Planning new feature".to_string(),
             participants: Some(vec![persona1, persona2]),
-            execution_strategy: Some(ExecutionModel::Broadcast),
+            execution_strategy: Some(ExecutionModel::OrderedBroadcast(BroadcastOrder::Completion)),
         };
 
         // Mock generator agent - won't be used since participants are provided
@@ -6453,5 +6627,154 @@ mod tests {
         // Each execution should be independent (cloned dialogue)
         // Original dialogue should remain unchanged
         assert_eq!(dialogue.history().len(), 0);
+    }
+
+    // ========================================================================
+    // Tests for Moderator Execution Model
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_moderator_execution_model() {
+        // Create a mock moderator that always returns OrderedSequential
+        #[derive(Clone)]
+        struct MockModerator;
+
+        #[async_trait]
+        impl Agent for MockModerator {
+            type Output = ExecutionModel;
+
+            fn expertise(&self) -> &str {
+                "Mock moderator for testing"
+            }
+
+            fn name(&self) -> String {
+                "MockModerator".to_string()
+            }
+
+            async fn execute(&self, _payload: Payload) -> Result<Self::Output, AgentError> {
+                // Always return Sequential with explicit order: Bob -> Alice
+                Ok(ExecutionModel::OrderedSequential(
+                    SequentialOrder::Explicit(vec!["Bob".to_string(), "Alice".to_string()]),
+                ))
+            }
+        }
+
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Engineer".to_string(),
+            background: "Developer".to_string(),
+            communication_style: "Technical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UX specialist".to_string(),
+            communication_style: "Creative".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent1 = MockAgent::new("Alice", vec!["Alice's response".to_string()]);
+        let agent2 = MockAgent::new("Bob", vec!["Bob's response".to_string()]);
+
+        let mut dialogue = Dialogue::moderator();
+        dialogue.with_moderator(MockModerator);
+        dialogue.add_participant(persona1, agent1);
+        dialogue.add_participant(persona2, agent2);
+
+        // Execute - moderator should decide to use Sequential with Bob -> Alice order
+        let payload = Payload::text("Discuss the feature");
+        let output = dialogue.run(payload).await.unwrap();
+
+        // Sequential returns only the last turn (Alice)
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].speaker.name(), "Alice");
+        assert_eq!(output[0].content, "Alice's response");
+    }
+
+    #[tokio::test]
+    async fn test_moderator_without_agent_fails() {
+        let persona = Persona {
+            name: "Alice".to_string(),
+            role: "Engineer".to_string(),
+            background: "Developer".to_string(),
+            communication_style: "Technical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent = MockAgent::new("Alice", vec!["Response".to_string()]);
+
+        // Create dialogue with Moderator but without setting moderator agent
+        let mut dialogue = Dialogue::moderator();
+        dialogue.add_participant(persona, agent);
+
+        // Should fail because moderator is not set
+        let payload = Payload::text("Test");
+        let result = dialogue.run(payload).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            AgentError::ExecutionFailed(msg) => {
+                assert!(msg.contains("moderator agent"));
+            }
+            _ => panic!("Expected ExecutionFailed error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_moderator_prevents_infinite_recursion() {
+        // Create a moderator that returns Moderator (invalid)
+        #[derive(Clone)]
+        struct BadModerator;
+
+        #[async_trait]
+        impl Agent for BadModerator {
+            type Output = ExecutionModel;
+
+            fn expertise(&self) -> &str {
+                "Bad moderator"
+            }
+
+            fn name(&self) -> String {
+                "BadModerator".to_string()
+            }
+
+            async fn execute(&self, _payload: Payload) -> Result<Self::Output, AgentError> {
+                Ok(ExecutionModel::Moderator) // Invalid: returns Moderator
+            }
+        }
+
+        let persona = Persona {
+            name: "Alice".to_string(),
+            role: "Engineer".to_string(),
+            background: "Developer".to_string(),
+            communication_style: "Technical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent = MockAgent::new("Alice", vec!["Response".to_string()]);
+
+        let mut dialogue = Dialogue::moderator();
+        dialogue.with_moderator(BadModerator);
+        dialogue.add_participant(persona, agent);
+
+        // Should fail to prevent infinite recursion
+        let payload = Payload::text("Test");
+        let result = dialogue.run(payload).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            AgentError::ExecutionFailed(msg) => {
+                assert!(msg.contains("infinite recursion"));
+            }
+            _ => panic!("Expected ExecutionFailed error about infinite recursion"),
+        }
     }
 }

@@ -21,7 +21,7 @@ pub struct DialogueSession<'a> {
 impl<'a> DialogueSession<'a> {
     /// Returns the execution model backing this session.
     pub fn execution_model(&self) -> ExecutionModel {
-        self.model
+        self.model.clone()
     }
 
     /// Retrieves the next available dialogue turn.

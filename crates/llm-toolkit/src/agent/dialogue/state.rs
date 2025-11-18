@@ -5,7 +5,7 @@
 
 use super::super::{AgentError, Payload, PayloadMessage};
 use super::message::{DialogueMessage, MessageMetadata, MessageOrigin, Speaker};
-use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel, ParticipantInfo};
+use super::{BroadcastOrder, Dialogue, DialogueTurn, ParticipantInfo};
 use tokio::task::JoinSet;
 use tracing::{info, trace};
 
@@ -113,7 +113,7 @@ impl BroadcastState {
                         };
                         info!(
                             target = "llm_toolkit::dialogue",
-                            mode = ?ExecutionModel::Broadcast,
+                            mode = "broadcast_completion",
                             participant = %participant_name,
                             participant_index = idx,
                             total_participants = dialogue.participants.len(),
@@ -173,7 +173,7 @@ impl BroadcastState {
                         };
                         info!(
                             target = "llm_toolkit::dialogue",
-                            mode = ?ExecutionModel::Broadcast,
+                            mode = "broadcast_participant_order",
                             participant = %participant_name,
                             participant_index = idx,
                             total_participants = participant_total,
