@@ -306,6 +306,6 @@ async fn test_multiple_dialogue_agents_in_orchestrator() {
     assert_eq!(result.steps_executed, 2);
 
     // Both dialogue teams should have provided feedback
-    assert!(result.context.get("step_1_output").is_some());
-    assert!(result.context.get("step_2_output").is_some());
+    assert!(result.context.contains_key("step_1_output"));
+    assert!(result.context.contains_key("step_2_output"));
 }

@@ -244,10 +244,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Design Team Output:");
         if let Some(turns) = design_output.as_array() {
             for turn in turns {
-                if let Some(speaker) = turn.get("speaker").and_then(|s| s.get("name")) {
-                    if let Some(content) = turn.get("content").and_then(|c| c.as_str()) {
-                        println!("  [{}]: {}", speaker, content);
-                    }
+                if let Some(speaker) = turn.get("speaker").and_then(|s| s.get("name"))
+                    && let Some(content) = turn.get("content").and_then(|c| c.as_str())
+                {
+                    println!("  [{}]: {}", speaker, content);
                 }
             }
         }
@@ -258,10 +258,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Engineering Team Output:");
         if let Some(turns) = eng_output.as_array() {
             for turn in turns {
-                if let Some(speaker) = turn.get("speaker").and_then(|s| s.get("name")) {
-                    if let Some(content) = turn.get("content").and_then(|c| c.as_str()) {
-                        println!("  [{}]: {}", speaker, content);
-                    }
+                if let Some(speaker) = turn.get("speaker").and_then(|s| s.get("name"))
+                    && let Some(content) = turn.get("content").and_then(|c| c.as_str())
+                {
+                    println!("  [{}]: {}", speaker, content);
                 }
             }
         }
