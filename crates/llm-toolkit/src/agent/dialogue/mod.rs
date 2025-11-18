@@ -96,6 +96,7 @@ pub mod state;
 pub mod store;
 pub mod turn_input;
 
+use async_trait::async_trait;
 use crate::ToPrompt;
 use crate::agent::chat::Chat;
 use crate::agent::persona::Persona;
@@ -477,6 +478,15 @@ pub(super) struct Participant {
     pub(super) agent: Arc<dyn Agent<Output = String>>,
 }
 
+impl Clone for Participant {
+    fn clone(&self) -> Self {
+        Self {
+            persona: self.persona.clone(),
+            agent: Arc::clone(&self.agent),
+        }
+    }
+}
+
 impl Participant {
     /// Returns the name of the participant from their persona.
     pub(super) fn name(&self) -> &str {
@@ -550,6 +560,7 @@ pub enum SequentialOrder {
 ///
 /// let final_output = dialogue.run("Process this input".to_string()).await?;
 /// ```
+#[derive(Clone)]
 pub struct Dialogue {
     pub(super) participants: Vec<Participant>,
 
@@ -2004,6 +2015,88 @@ impl Dialogue {
         })
     }
 }
+
+// ============================================================================
+// Agent Trait Implementation
+// ============================================================================
+
+/// Implements the Agent trait for Dialogue, enabling it to be used in Orchestrators.
+///
+/// This implementation allows Dialogue (multi-agent conversations) to be registered
+/// and executed as a single agent in orchestration workflows, enabling flexible
+/// composition: Dialogue → Orchestrator or Orchestrator → Dialogue.
+///
+/// # Output Type
+///
+/// The output type is `Vec<DialogueTurn>`, which contains all turns from the conversation.
+/// Each turn includes the speaker and their contribution.
+///
+/// # Expertise
+///
+/// Returns a description of the dialogue's collective capabilities based on
+/// execution model and participant count.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use llm_toolkit::agent::dialogue::Dialogue;
+/// use llm_toolkit::agent::AgentAdapter;
+/// use llm_toolkit::orchestrator::Orchestrator;
+///
+/// // Create a dialogue
+/// let dialogue = Dialogue::sequential()
+///     .add_participant(persona1, agent1)
+///     .add_participant(persona2, agent2);
+///
+/// // Register with orchestrator
+/// orchestrator.add_agent(dialogue);
+///
+/// // Now the orchestrator can use it in StrategyMap like any other agent
+/// ```
+#[async_trait]
+impl Agent for Dialogue {
+    type Output = Vec<DialogueTurn>;
+
+    fn expertise(&self) -> &str {
+        // Note: This returns a static string since Agent::expertise requires &str.
+        // The actual capabilities depend on participants, execution model, etc.
+        "Multi-agent dialogue facilitating collaborative conversations with diverse perspectives"
+    }
+
+    fn name(&self) -> String {
+        // Generate a descriptive name based on execution model and participants
+        if self.participants.is_empty() {
+            "EmptyDialogue".to_string()
+        } else {
+            let model_str = match self.execution_model {
+                ExecutionModel::Broadcast => "Broadcast",
+                ExecutionModel::Sequential => "Sequential",
+                ExecutionModel::Mentioned { .. } => "Mentioned",
+            };
+
+            if self.participants.len() == 1 {
+                format!("{}Dialogue({})", model_str, self.participants[0].persona.name)
+            } else {
+                format!(
+                    "{}Dialogue({} participants)",
+                    model_str,
+                    self.participants.len()
+                )
+            }
+        }
+    }
+
+    async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
+        // Dialogue::run requires &mut self, so we clone to make it mutable.
+        // This is acceptable because:
+        // 1. Participants contain Arc<dyn Agent>, so cloning is cheap (Arc::clone)
+        // 2. MessageStore is cloned, but the orchestrator typically uses fresh dialogues per step
+        // 3. This enables stateless execution from the orchestrator's perspective
+        let mut dialogue_clone = self.clone();
+        dialogue_clone.run(payload).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6238,5 +6331,127 @@ mod tests {
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].speaker.name(), "Alice");
         assert_eq!(turns[0].content, "Response from Alice");
+    }
+
+    // ========================================================================
+    // Tests for Dialogue as Agent
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_dialogue_as_agent_basic() {
+        // Create a dialogue with mock agents
+        let persona1 = Persona {
+            name: "Alice".to_string(),
+            role: "Engineer".to_string(),
+            background: "Senior developer".to_string(),
+            communication_style: "Technical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let persona2 = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UX specialist".to_string(),
+            communication_style: "Creative".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent1 = MockAgent::new("Alice", vec!["Technical perspective".to_string()]);
+        let agent2 = MockAgent::new("Bob", vec!["Design perspective".to_string()]);
+
+        let mut dialogue = Dialogue::broadcast();
+        dialogue.add_participant(persona1, agent1);
+        dialogue.add_participant(persona2, agent2);
+
+        // Use Dialogue as an Agent
+        let agent_name = dialogue.name();
+        assert!(agent_name.contains("Broadcast"));
+        assert!(agent_name.contains("2 participants"));
+
+        let expertise = dialogue.expertise();
+        assert!(expertise.contains("Multi-agent dialogue"));
+
+        // Execute as agent
+        let payload = Payload::text("Discuss the new feature");
+        let output = dialogue.execute(payload).await.unwrap();
+
+        // Should return Vec<DialogueTurn>
+        assert_eq!(output.len(), 2);
+        assert!(output.iter().any(|turn| turn.speaker.name() == "Alice"));
+        assert!(output.iter().any(|turn| turn.speaker.name() == "Bob"));
+    }
+
+    #[tokio::test]
+    async fn test_dialogue_as_agent_sequential() {
+        let persona1 = Persona {
+            name: "Analyzer".to_string(),
+            role: "Data Analyst".to_string(),
+            background: "Statistics expert".to_string(),
+            communication_style: "Analytical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let persona2 = Persona {
+            name: "Writer".to_string(),
+            role: "Technical Writer".to_string(),
+            background: "Documentation specialist".to_string(),
+            communication_style: "Clear and concise".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent1 = MockAgent::new("Analyzer", vec!["Data shows trend X".to_string()]);
+        let agent2 = MockAgent::new("Writer", vec!["Documented the findings".to_string()]);
+
+        let mut dialogue = Dialogue::sequential();
+        dialogue.add_participant(persona1, agent1);
+        dialogue.add_participant(persona2, agent2);
+
+        // Verify name reflects execution model
+        let agent_name = dialogue.name();
+        assert!(agent_name.contains("Sequential"));
+
+        // Execute as agent
+        let payload = Payload::text("Analyze and document the data");
+        let output = dialogue.execute(payload).await.unwrap();
+
+        // Sequential returns only the last turn
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].speaker.name(), "Writer");
+        assert_eq!(output[0].content, "Documented the findings");
+    }
+
+    #[tokio::test]
+    async fn test_dialogue_as_agent_clone_independence() {
+        // Verify that cloning for Agent::execute doesn't affect original dialogue
+        let persona = Persona {
+            name: "Agent".to_string(),
+            role: "Assistant".to_string(),
+            background: "Helper".to_string(),
+            communication_style: "Friendly".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent = MockAgent::new("Agent", vec!["Response 1".to_string()]);
+
+        let mut dialogue = Dialogue::broadcast();
+        dialogue.add_participant(persona, agent);
+
+        // Execute multiple times as Agent
+        let payload1 = Payload::text("First request");
+        let output1 = dialogue.execute(payload1).await.unwrap();
+        assert_eq!(output1.len(), 1);
+
+        let payload2 = Payload::text("Second request");
+        let output2 = dialogue.execute(payload2).await.unwrap();
+        assert_eq!(output2.len(), 1);
+
+        // Each execution should be independent (cloned dialogue)
+        // Original dialogue should remain unchanged
+        assert_eq!(dialogue.history().len(), 0);
     }
 }
