@@ -30,6 +30,7 @@ EXAMPLES := \
 	orchestrator_with_mock \
 	orchestrator_fast_path_e2e \
 	orchestrator_get_typed_output \
+	orchestrator_with_dialogue \
 	check_claude \
 	check_agent_availability \
 	codex_agent_basic \
@@ -49,6 +50,7 @@ EXAMPLES := \
 	orchestrator_streaming \
 	persona_dialogue \
 	persona_macro_test \
+	dialogue_moderator \
 	test_dialogue_logging
 
 # 外部API依存なしのExample（E2Eテストとして実行可能）
