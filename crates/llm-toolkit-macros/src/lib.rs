@@ -4960,6 +4960,26 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    // Prepare optional init function identifier (used when default_inner + init)
+    let init_fn_ident = agent_attrs
+        .init
+        .as_ref()
+        .map(|init| syn::parse_str::<syn::Ident>(init).expect("init must be a valid identifier"));
+
+    // Precompute default construction for custom default_inner
+    let custom_default_inner_expr = agent_attrs.default_inner.as_ref().map(|_| {
+        let base_expr = quote! { <#default_agent_type as Default>::default() };
+        if let Some(init_fn_ident) = &init_fn_ident {
+            let init_fn_ident = init_fn_ident.clone();
+            quote! {{
+                let inner = #base_expr;
+                #init_fn_ident(inner)
+            }}
+        } else {
+            base_expr
+        }
+    });
+
     // Generate struct definition - wrap with PersonaAgent if persona is specified
     let (struct_def, _actual_inner_type, uses_persona) = if let Some(ref _persona_path) = persona {
         // When persona is specified, the inner type is PersonaAgent<ActualInner>
@@ -5049,50 +5069,61 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         };
 
-        let backend_constructors = match backend.as_str() {
-            "claude" => {
-                quote! {
-                    impl #struct_name {
-                        /// Create a new agent with ClaudeCodeAgent backend wrapped in PersonaAgent
-                        pub fn with_claude() -> Self {
-                            let base_agent = #crate_path::agent::impls::ClaudeCodeAgent::new();
-                            Self::new(base_agent)
-                        }
+        let backend_constructors = if custom_default_inner_expr.is_some() {
+            // Skip built-in constructors when a custom default_inner is provided
+            quote! {}
+        } else {
+            match backend.as_str() {
+                "claude" => {
+                    quote! {
+                        impl #struct_name {
+                            /// Create a new agent with ClaudeCodeAgent backend wrapped in PersonaAgent
+                            pub fn with_claude() -> Self {
+                                let base_agent = #crate_path::agent::impls::ClaudeCodeAgent::new();
+                                Self::new(base_agent)
+                            }
 
-                        /// Create a new agent with ClaudeCodeAgent backend and specific model wrapped in PersonaAgent
-                        pub fn with_claude_model(model: &str) -> Self {
-                            let base_agent = #crate_path::agent::impls::ClaudeCodeAgent::new()
-                                .with_model_str(model);
-                            Self::new(base_agent)
+                            /// Create a new agent with ClaudeCodeAgent backend and specific model wrapped in PersonaAgent
+                            pub fn with_claude_model(model: &str) -> Self {
+                                let base_agent = #crate_path::agent::impls::ClaudeCodeAgent::new()
+                                    .with_model_str(model);
+                                Self::new(base_agent)
+                            }
                         }
                     }
                 }
-            }
-            "gemini" => {
-                quote! {
-                    impl #struct_name {
-                        /// Create a new agent with GeminiAgent backend wrapped in PersonaAgent
-                        pub fn with_gemini() -> Self {
-                            let base_agent = #crate_path::agent::impls::GeminiAgent::new();
-                            Self::new(base_agent)
-                        }
+                "gemini" => {
+                    quote! {
+                        impl #struct_name {
+                            /// Create a new agent with GeminiAgent backend wrapped in PersonaAgent
+                            pub fn with_gemini() -> Self {
+                                let base_agent = #crate_path::agent::impls::GeminiAgent::new();
+                                Self::new(base_agent)
+                            }
 
-                        /// Create a new agent with GeminiAgent backend and specific model wrapped in PersonaAgent
-                        pub fn with_gemini_model(model: &str) -> Self {
-                            let base_agent = #crate_path::agent::impls::GeminiAgent::new()
-                                .with_model_str(model);
-                            Self::new(base_agent)
+                            /// Create a new agent with GeminiAgent backend and specific model wrapped in PersonaAgent
+                            pub fn with_gemini_model(model: &str) -> Self {
+                                let base_agent = #crate_path::agent::impls::GeminiAgent::new()
+                                    .with_model_str(model);
+                                Self::new(base_agent)
+                            }
                         }
                     }
                 }
+                _ => quote! {},
             }
-            _ => quote! {},
+        };
+
+        let default_source = if let Some(expr) = &custom_default_inner_expr {
+            expr.clone()
+        } else {
+            agent_init.clone()
         };
 
         let default_impl = quote! {
             impl Default for #struct_name {
                 fn default() -> Self {
-                    let base_agent = #agent_init;
+                    let base_agent = #default_source;
                     Self::new(base_agent)
                 }
             }
@@ -5101,26 +5132,15 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
         (backend_constructors, default_impl)
     } else if agent_attrs.default_inner.is_some() {
         // Custom type - generate Default impl for the default type
-        let default_impl = if let Some(init_fn) = &agent_attrs.init {
-            // Apply init function to transform the default inner agent
-            let init_fn_ident: syn::Ident = syn::parse_str(init_fn).unwrap();
-            quote! {
-                impl Default for #struct_name {
-                    fn default() -> Self {
-                        let inner = <#default_agent_type as Default>::default();
-                        let inner = #init_fn_ident(inner);
-                        Self { inner }
-                    }
-                }
-            }
-        } else {
-            // No init function - use default directly
-            quote! {
-                impl Default for #struct_name {
-                    fn default() -> Self {
-                        Self {
-                            inner: <#default_agent_type as Default>::default(),
-                        }
+        let default_inner_expr = custom_default_inner_expr
+            .as_ref()
+            .expect("custom default inner should exist")
+            .clone();
+        let default_impl = quote! {
+            impl Default for #struct_name {
+                fn default() -> Self {
+                    Self {
+                        inner: #default_inner_expr,
                     }
                 }
             }

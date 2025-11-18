@@ -37,3 +37,9 @@ fn agent_attribute_with_proxy_methods_compile_pass() {
     let t = trybuild::TestCases::new();
     t.pass("tests/ui/agent_attribute_with_proxy_methods.rs");
 }
+
+#[test]
+fn agent_attribute_persona_custom_inner_compile_pass() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/ui/agent_attribute_persona_custom_inner.rs");
+}
