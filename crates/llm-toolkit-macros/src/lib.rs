@@ -4624,6 +4624,24 @@ fn generate_backend_constructors(
                 }
             }
         }
+        "codex" => {
+            quote! {
+                impl #struct_name {
+                    /// Create a new agent with CodexAgent backend
+                    pub fn with_codex() -> Self {
+                        Self::new(#crate_path::agent::impls::CodexAgent::new())
+                    }
+
+                    /// Create a new agent with CodexAgent backend and specific model
+                    pub fn with_codex_model(model: &str) -> Self {
+                        Self::new(
+                            #crate_path::agent::impls::CodexAgent::new()
+                                .with_model_str(model)
+                        )
+                    }
+                }
+            }
+        }
         _ => quote! {},
     }
 }
@@ -4651,6 +4669,16 @@ fn generate_default_impl(
     let agent_init = match backend {
         "gemini" => {
             let mut builder = quote! { #crate_path::agent::impls::GeminiAgent::new() };
+
+            if let Some(model_str) = model {
+                builder = quote! { #builder.with_model_str(#model_str) };
+            }
+
+            builder = quote! { #builder.with_execution_profile(#profile_expr) };
+            builder
+        }
+        "codex" => {
+            let mut builder = quote! { #crate_path::agent::impls::CodexAgent::new() };
 
             if let Some(model_str) = model {
                 builder = quote! { #builder.with_model_str(#model_str) };
@@ -4964,6 +4992,7 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
         // Use backend to determine default type
         match backend.as_str() {
             "gemini" => quote! { #crate_path::agent::impls::GeminiAgent },
+            "codex" => quote! { #crate_path::agent::impls::CodexAgent },
             _ => quote! { #crate_path::agent::impls::ClaudeCodeAgent },
         }
     };
@@ -5057,6 +5086,24 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
                 builder
             }
+            "codex" => {
+                let mut builder = quote! { #crate_path::agent::impls::CodexAgent::new() };
+                if let Some(model_str) = model.as_deref() {
+                    builder = quote! { #builder.with_model_str(#model_str) };
+                }
+                if let Some(profile_str) = profile.as_deref() {
+                    let profile_expr = match profile_str.to_lowercase().as_str() {
+                        "creative" => quote! { #crate_path::agent::ExecutionProfile::Creative },
+                        "balanced" => quote! { #crate_path::agent::ExecutionProfile::Balanced },
+                        "deterministic" => {
+                            quote! { #crate_path::agent::ExecutionProfile::Deterministic }
+                        }
+                        _ => quote! { #crate_path::agent::ExecutionProfile::Balanced },
+                    };
+                    builder = quote! { #builder.with_execution_profile(#profile_expr) };
+                }
+                builder
+            }
             _ => {
                 let mut builder = quote! { #crate_path::agent::impls::ClaudeCodeAgent::new() };
                 if let Some(model_str) = model.as_deref() {
@@ -5112,6 +5159,24 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                             /// Create a new agent with GeminiAgent backend and specific model wrapped in PersonaAgent
                             pub fn with_gemini_model(model: &str) -> Self {
                                 let base_agent = #crate_path::agent::impls::GeminiAgent::new()
+                                    .with_model_str(model);
+                                Self::new(base_agent)
+                            }
+                        }
+                    }
+                }
+                "codex" => {
+                    quote! {
+                        impl #struct_name {
+                            /// Create a new agent with CodexAgent backend wrapped in PersonaAgent
+                            pub fn with_codex() -> Self {
+                                let base_agent = #crate_path::agent::impls::CodexAgent::new();
+                                Self::new(base_agent)
+                            }
+
+                            /// Create a new agent with CodexAgent backend and specific model wrapped in PersonaAgent
+                            pub fn with_codex_model(model: &str) -> Self {
+                                let base_agent = #crate_path::agent::impls::CodexAgent::new()
                                     .with_model_str(model);
                                 Self::new(base_agent)
                             }

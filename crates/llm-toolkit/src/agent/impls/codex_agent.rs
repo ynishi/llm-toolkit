@@ -11,18 +11,22 @@ use tracing::{debug, error, info, instrument};
 
 use super::cli_agent::{CliAgent, CliAgentConfig};
 
-/// Supported Codex models (examples - adjust based on actual Codex model names)
+/// Supported OpenAI Codex models
 #[derive(Debug, Clone, Default)]
 pub enum CodexModel {
-    /// Default Sonnet model
+    /// GPT-5.1 Codex - Optimized for long-running, agentic coding tasks (default for macOS/Linux)
     #[default]
-    Sonnet,
-    /// Opus model
-    Opus,
-    /// Haiku model
-    Haiku,
-    /// O3 model
-    O3,
+    Gpt51Codex,
+    /// GPT-5.1 Codex Mini - Smaller, more cost-effective version
+    Gpt51CodexMini,
+    /// GPT-5.1 - Great for coding and agentic tasks across domains (default for Windows)
+    Gpt51,
+    /// GPT-5 Codex - Legacy version for agentic coding tasks
+    Gpt5Codex,
+    /// GPT-5 Codex Mini - Legacy cost-effective alternative
+    Gpt5CodexMini,
+    /// GPT-5 - Legacy reasoning model for coding tasks
+    Gpt5,
     /// Custom model string
     Custom(String),
 }
@@ -30,10 +34,12 @@ pub enum CodexModel {
 impl CodexModel {
     fn as_str(&self) -> &str {
         match self {
-            CodexModel::Sonnet => "sonnet",
-            CodexModel::Opus => "opus",
-            CodexModel::Haiku => "haiku",
-            CodexModel::O3 => "o3",
+            CodexModel::Gpt51Codex => "gpt-5.1-codex",
+            CodexModel::Gpt51CodexMini => "gpt-5.1-codex-mini",
+            CodexModel::Gpt51 => "gpt-5.1",
+            CodexModel::Gpt5Codex => "gpt-5-codex",
+            CodexModel::Gpt5CodexMini => "gpt-5-codex-mini",
+            CodexModel::Gpt5 => "gpt-5",
             CodexModel::Custom(s) => s.as_str(),
         }
     }
@@ -122,13 +128,16 @@ impl CodexAgent {
 
     /// Sets the model using a string identifier.
     ///
-    /// Accepts: "sonnet", "opus", "haiku", "o3", or any custom model name
+    /// Accepts: "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1", "gpt-5-codex",
+    /// "gpt-5-codex-mini", "gpt-5", or any custom model name
     pub fn with_model_str(mut self, model: &str) -> Self {
         self.model = Some(match model {
-            "sonnet" => CodexModel::Sonnet,
-            "opus" => CodexModel::Opus,
-            "haiku" => CodexModel::Haiku,
-            "o3" => CodexModel::O3,
+            "gpt-5.1-codex" => CodexModel::Gpt51Codex,
+            "gpt-5.1-codex-mini" => CodexModel::Gpt51CodexMini,
+            "gpt-5.1" => CodexModel::Gpt51,
+            "gpt-5-codex" => CodexModel::Gpt5Codex,
+            "gpt-5-codex-mini" => CodexModel::Gpt5CodexMini,
+            "gpt-5" => CodexModel::Gpt5,
             _ => CodexModel::Custom(model.to_string()),
         });
         self
@@ -521,13 +530,13 @@ mod tests {
     #[test]
     fn test_codex_agent_builder() {
         let agent = CodexAgent::new()
-            .with_model(CodexModel::O3)
+            .with_model(CodexModel::Gpt51Codex)
             .with_cwd("/project")
             .with_sandbox("workspace-write")
             .with_approval_policy("on-failure")
             .with_search(true);
 
-        assert!(matches!(agent.model, Some(CodexModel::O3)));
+        assert!(matches!(agent.model, Some(CodexModel::Gpt51Codex)));
         assert_eq!(agent.sandbox, Some("workspace-write".to_string()));
         assert_eq!(agent.approval_policy, Some("on-failure".to_string()));
         assert!(agent.enable_search);
