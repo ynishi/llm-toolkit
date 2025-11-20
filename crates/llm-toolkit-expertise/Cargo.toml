@@ -1,0 +1,24 @@
+[package]
+name = "llm-toolkit-expertise"
+version = "0.1.0"
+description = "Agent as Code: Graph-based composition system for LLM agent capabilities"
+keywords = ["llm", "ai", "agent", "expertise", "composition"]
+categories = ["text-processing"]
+readme = "README.md"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+integration = ["llm-toolkit"]  # llm-toolkit integration (ToPrompt trait implementation)
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = "0.8"
+llm-toolkit = { workspace = true, optional = true }
+
+[dev-dependencies]
+# For testing

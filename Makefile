@@ -57,6 +57,12 @@ EXAMPLES := \
 # Note: check_agent_availability と codex_agent_basic は外部CLIチェック用なので除外
 OFFLINE_EXAMPLES := $(filter-out orchestrator_streaming persona_dialogue persona_macro_test check_agent_availability codex_agent_basic,$(EXAMPLES))
 
+# llm-toolkit-expertise Examples（外部API依存なし）
+EXPERTISE_EXAMPLES := \
+	basic_expertise \
+	generate_schema \
+	prompt_generation
+
 # 全Exampleを実行（外部API依存含む）
 test-examples:
 	@for name in $(EXAMPLES); do \
@@ -67,10 +73,19 @@ test-examples:
 # 外部API依存なしのExampleのみを実行（E2Eテスト）
 test-examples-offline:
 	@echo "🧪 Running offline examples (E2E tests - no external API dependencies)..."
+	@echo ""
+	@echo "--- llm-toolkit examples ---"
 	@for name in $(OFFLINE_EXAMPLES); do \
 		echo ""; \
 		echo "▶ Running $$name..."; \
 		cargo run --example $$name --package llm-toolkit --features="derive agent" || exit 1; \
+	done
+	@echo ""
+	@echo "--- llm-toolkit-expertise examples ---"
+	@for name in $(EXPERTISE_EXAMPLES); do \
+		echo ""; \
+		echo "▶ Running $$name..."; \
+		cargo run --example $$name --package llm-toolkit-expertise || exit 1; \
 	done
 	@echo ""
 	@echo "✅ All offline examples passed!"
