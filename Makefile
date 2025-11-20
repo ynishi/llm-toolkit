@@ -114,7 +114,19 @@ publish: preflight
 	@echo "\n⏳ Waiting 10 seconds for crates.io index to update..."
 	sleep 10
 
-	@echo "\n--- Step 2: Publishing llm-toolkit ---"
+	@echo "--- Step 2: Publishing llm-toolkit-expertise ---"
+	@echo "  Running dry-run for llm-toolkit-expertise..."
+	cargo publish -p llm-toolkit-expertise --dry-run --allow-dirty
+
+	@echo "  ✓ Dry-run successful for llm-toolkit-expertise"
+	@echo "  Publishing llm-toolkit-expertise to crates.io..."
+	cargo publish -p llm-toolkit-expertise --allow-dirty
+
+	@echo "\n✅ llm-toolkit-expertise published successfully!"
+	@echo "\n⏳ Waiting 10 seconds for crates.io index to update..."
+	sleep 10
+
+	@echo "\n--- Step 3: Publishing llm-toolkit ---"
 	@echo "  Running dry-run for llm-toolkit..."
 	cargo publish -p llm-toolkit --dry-run --allow-dirty
 
