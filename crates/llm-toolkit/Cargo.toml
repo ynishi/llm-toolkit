@@ -38,6 +38,7 @@ strum_macros.workspace = true
 env_logger = "0.11"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tempfile = "3.8"
+llm-toolkit-expertise = { workspace = true, features = ["integration"] }
 
 [features]
 default = []
@@ -106,4 +107,12 @@ required-features = ["agent"]
 
 [[example]]
 name = "expandable_basic"
+required-features = ["agent"]
+
+[[example]]
+name = "agent_expertise_toprompt"
+required-features = ["agent"]
+
+[[example]]
+name = "agent_with_expertise_full"
 required-features = ["agent"]

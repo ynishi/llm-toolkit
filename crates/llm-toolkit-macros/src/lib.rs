@@ -4395,9 +4395,20 @@ pub fn to_prompt_for_derive(input: TokenStream) -> TokenStream {
 // Agent Derive Macro
 // ============================================================================
 
+/// Represents the value for the expertise attribute
+/// Supports both string literals and expressions (e.g., const, function call)
+#[derive(Clone)]
+enum ExpertiseValue {
+    /// String literal: expertise = "My expertise"
+    String(String),
+    /// Expression: expertise = MY_EXPERTISE or expertise = get_expertise()
+    /// The expression must implement ToPrompt trait
+    Expr(syn::Expr),
+}
+
 /// Attribute parameters for #[agent(...)]
 struct AgentAttrs {
-    expertise: Option<String>,
+    expertise: Option<ExpertiseValue>,
     output: Option<syn::Type>,
     backend: Option<String>,
     model: Option<String>,
@@ -4429,12 +4440,16 @@ impl Parse for AgentAttrs {
         for meta in pairs {
             match meta {
                 Meta::NameValue(nv) if nv.path.is_ident("expertise") => {
+                    // Check if it's a string literal
                     if let syn::Expr::Lit(syn::ExprLit {
                         lit: syn::Lit::Str(lit_str),
                         ..
                     }) = &nv.value
                     {
-                        expertise = Some(lit_str.value());
+                        expertise = Some(ExpertiseValue::String(lit_str.value()));
+                    } else {
+                        // Otherwise, treat it as an expression (const, function call, etc.)
+                        expertise = Some(ExpertiseValue::Expr(nv.value.clone()));
                     }
                 }
                 Meta::NameValue(nv) if nv.path.is_ident("output") => {
@@ -4730,7 +4745,7 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
 
     let expertise = agent_attrs
         .expertise
-        .unwrap_or_else(|| String::from("general AI assistant"));
+        .unwrap_or_else(|| ExpertiseValue::String("general AI assistant".to_string()));
     let output_type = agent_attrs
         .output
         .unwrap_or_else(|| syn::parse_str::<syn::Type>("String").unwrap());
@@ -4763,42 +4778,89 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
     let is_string_output = output_type_str == "String" || output_type_str == "&str";
 
     // Generate enhanced expertise with JSON schema instruction
-    let enhanced_expertise = if is_string_output {
-        // Plain text output - no JSON enforcement
-        quote! { #expertise }
-    } else {
-        // Structured output - try to use ToPrompt::prompt_schema(), fallback to type name
-        let type_name = quote!(#output_type).to_string();
-        quote! {
-            {
-                use std::sync::OnceLock;
-                static EXPERTISE_CACHE: OnceLock<String> = OnceLock::new();
+    let enhanced_expertise = match &expertise {
+        ExpertiseValue::String(expertise_str) => {
+            if is_string_output {
+                // Plain text output - no JSON enforcement
+                quote! { #expertise_str }
+            } else {
+                // Structured output with string expertise
+                let type_name = quote!(#output_type).to_string();
+                quote! {
+                    {
+                        use std::sync::OnceLock;
+                        static EXPERTISE_CACHE: OnceLock<String> = OnceLock::new();
 
-                EXPERTISE_CACHE.get_or_init(|| {
-                    // Try to get detailed schema from ToPrompt
-                    let schema = <#output_type as #crate_path::prompt::ToPrompt>::prompt_schema();
+                        EXPERTISE_CACHE.get_or_init(|| {
+                            let schema = <#output_type as #crate_path::prompt::ToPrompt>::prompt_schema();
 
-                    if schema.is_empty() {
-                        // Fallback: type name only
-                        format!(
-                            concat!(
-                                #expertise,
-                                "\n\nIMPORTANT: You must respond with valid JSON matching the {} type structure. ",
-                                "Do not include any text outside the JSON object."
-                            ),
-                            #type_name
-                        )
-                    } else {
-                        // Use detailed schema from ToPrompt
-                        format!(
-                            concat!(
-                                #expertise,
-                                "\n\nIMPORTANT: Respond with valid JSON matching this schema:\n\n{}"
-                            ),
-                            schema
-                        )
+                            if schema.is_empty() {
+                                format!(
+                                    concat!(
+                                        #expertise_str,
+                                        "\n\nIMPORTANT: You must respond with valid JSON matching the {} type structure. ",
+                                        "Do not include any text outside the JSON object."
+                                    ),
+                                    #type_name
+                                )
+                            } else {
+                                format!(
+                                    concat!(
+                                        #expertise_str,
+                                        "\n\nIMPORTANT: Respond with valid JSON matching this schema:\n\n{}"
+                                    ),
+                                    schema
+                                )
+                            }
+                        }).as_str()
                     }
-                }).as_str()
+                }
+            }
+        }
+        ExpertiseValue::Expr(expertise_expr) => {
+            // Expression that implements ToPrompt
+            if is_string_output {
+                // Plain text output - call to_prompt() on the expression
+                quote! {
+                    {
+                        use std::sync::OnceLock;
+                        use #crate_path::prompt::ToPrompt;
+                        static EXPERTISE_CACHE: OnceLock<String> = OnceLock::new();
+
+                        EXPERTISE_CACHE.get_or_init(|| {
+                            (#expertise_expr).to_prompt()
+                        }).as_str()
+                    }
+                }
+            } else {
+                // Structured output with ToPrompt expertise
+                let type_name = quote!(#output_type).to_string();
+                quote! {
+                    {
+                        use std::sync::OnceLock;
+                        use #crate_path::prompt::ToPrompt;
+                        static EXPERTISE_CACHE: OnceLock<String> = OnceLock::new();
+
+                        EXPERTISE_CACHE.get_or_init(|| {
+                            let expertise_text = (#expertise_expr).to_prompt();
+                            let schema = <#output_type as #crate_path::prompt::ToPrompt>::prompt_schema();
+
+                            if schema.is_empty() {
+                                format!(
+                                    "{}\n\nIMPORTANT: You must respond with valid JSON matching the {} type structure. Do not include any text outside the JSON object.",
+                                    expertise_text,
+                                    #type_name
+                                )
+                            } else {
+                                format!(
+                                    "{}\n\nIMPORTANT: Respond with valid JSON matching this schema:\n\n{}",
+                                    expertise_text,
+                                    schema
+                                )
+                            }
+                        }).as_str()
+                    }
+                }
             }
         }
     };
@@ -4949,7 +5011,7 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let expertise = agent_attrs
         .expertise
-        .unwrap_or_else(|| String::from("general AI assistant"));
+        .unwrap_or_else(|| ExpertiseValue::String("general AI assistant".to_string()));
     let output_type = agent_attrs
         .output
         .unwrap_or_else(|| syn::parse_str::<syn::Type>("String").unwrap());
@@ -5239,42 +5301,89 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // Generate enhanced expertise with JSON schema instruction (same as derive macro)
-    let enhanced_expertise = if is_string_output {
-        // Plain text output - no JSON enforcement
-        quote! { #expertise }
-    } else {
-        // Structured output - try to use ToPrompt::prompt_schema(), fallback to type name
-        let type_name = quote!(#output_type).to_string();
-        quote! {
-            {
-                use std::sync::OnceLock;
-                static EXPERTISE_CACHE: OnceLock<String> = OnceLock::new();
+    let enhanced_expertise = match &expertise {
+        ExpertiseValue::String(expertise_str) => {
+            if is_string_output {
+                // Plain text output - no JSON enforcement
+                quote! { #expertise_str }
+            } else {
+                // Structured output with string expertise
+                let type_name = quote!(#output_type).to_string();
+                quote! {
+                    {
+                        use std::sync::OnceLock;
+                        static EXPERTISE_CACHE: OnceLock<String> = OnceLock::new();
 
-                EXPERTISE_CACHE.get_or_init(|| {
-                    // Try to get detailed schema from ToPrompt
-                    let schema = <#output_type as #crate_path::prompt::ToPrompt>::prompt_schema();
+                        EXPERTISE_CACHE.get_or_init(|| {
+                            let schema = <#output_type as #crate_path::prompt::ToPrompt>::prompt_schema();
 
-                    if schema.is_empty() {
-                        // Fallback: type name only
-                        format!(
-                            concat!(
-                                #expertise,
-                                "\n\nIMPORTANT: You must respond with valid JSON matching the {} type structure. ",
-                                "Do not include any text outside the JSON object."
-                            ),
-                            #type_name
-                        )
-                    } else {
-                        // Use detailed schema from ToPrompt
-                        format!(
-                            concat!(
-                                #expertise,
-                                "\n\nIMPORTANT: Respond with valid JSON matching this schema:\n\n{}"
-                            ),
-                            schema
-                        )
+                            if schema.is_empty() {
+                                format!(
+                                    concat!(
+                                        #expertise_str,
+                                        "\n\nIMPORTANT: You must respond with valid JSON matching the {} type structure. ",
+                                        "Do not include any text outside the JSON object."
+                                    ),
+                                    #type_name
+                                )
+                            } else {
+                                format!(
+                                    concat!(
+                                        #expertise_str,
+                                        "\n\nIMPORTANT: Respond with valid JSON matching this schema:\n\n{}"
+                                    ),
+                                    schema
+                                )
+                            }
+                        }).as_str()
                     }
-                }).as_str()
+                }
+            }
+        }
+        ExpertiseValue::Expr(expertise_expr) => {
+            // Expression that implements ToPrompt
+            if is_string_output {
+                // Plain text output - call to_prompt() on the expression
+                quote! {
+                    {
+                        use std::sync::OnceLock;
+                        use #crate_path::prompt::ToPrompt;
+                        static EXPERTISE_CACHE: OnceLock<String> = OnceLock::new();
+
+                        EXPERTISE_CACHE.get_or_init(|| {
+                            (#expertise_expr).to_prompt()
+                        }).as_str()
+                    }
+                }
+            } else {
+                // Structured output with ToPrompt expertise
+                let type_name = quote!(#output_type).to_string();
+                quote! {
+                    {
+                        use std::sync::OnceLock;
+                        use #crate_path::prompt::ToPrompt;
+                        static EXPERTISE_CACHE: OnceLock<String> = OnceLock::new();
+
+                        EXPERTISE_CACHE.get_or_init(|| {
+                            let expertise_text = (#expertise_expr).to_prompt();
+                            let schema = <#output_type as #crate_path::prompt::ToPrompt>::prompt_schema();
+
+                            if schema.is_empty() {
+                                format!(
+                                    "{}\n\nIMPORTANT: You must respond with valid JSON matching the {} type structure. Do not include any text outside the JSON object.",
+                                    expertise_text,
+                                    #type_name
+                                )
+                            } else {
+                                format!(
+                                    "{}\n\nIMPORTANT: Respond with valid JSON matching this schema:\n\n{}",
+                                    expertise_text,
+                                    schema
+                                )
+                            }
+                        }).as_str()
+                    }
+                }
             }
         }
     };
