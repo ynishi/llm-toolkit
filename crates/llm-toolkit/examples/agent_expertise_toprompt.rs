@@ -3,7 +3,7 @@
 //! This example demonstrates that the #[agent] macro can accept ToPrompt-implementing
 //! types (like Expertise) as the expertise parameter.
 
-use llm_toolkit::agent::{Agent};
+use llm_toolkit::agent::Agent;
 use llm_toolkit::prompt::ToPrompt;
 use llm_toolkit_macros::agent;
 
@@ -50,13 +50,22 @@ fn main() {
 
     // Test that expertise() method works
     let agent1 = ConstExpertiseAgent::default();
-    println!("1. ConstExpertiseAgent expertise:\n   {}\n", agent1.expertise());
+    println!(
+        "1. ConstExpertiseAgent expertise:\n   {}\n",
+        agent1.expertise()
+    );
 
     let agent2 = FunctionExpertiseAgent::default();
-    println!("2. FunctionExpertiseAgent expertise:\n   {}\n", agent2.expertise());
+    println!(
+        "2. FunctionExpertiseAgent expertise:\n   {}\n",
+        agent2.expertise()
+    );
 
     let agent3 = StringExpertiseAgent::default();
-    println!("3. StringExpertiseAgent expertise:\n   {}\n", agent3.expertise());
+    println!(
+        "3. StringExpertiseAgent expertise:\n   {}\n",
+        agent3.expertise()
+    );
 
     println!("✅ The #[agent] macro now supports:");
     println!("   - String literals (traditional)");

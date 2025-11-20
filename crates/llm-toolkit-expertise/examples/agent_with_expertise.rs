@@ -4,7 +4,7 @@
 //! with the #[agent(expertise = ...)] macro attribute.
 
 use llm_toolkit_expertise::{
-    ContextProfile, Expertise, KnowledgeFragment, Priority, TaskHealth, WeightedFragment, Anchor,
+    Anchor, ContextProfile, Expertise, KnowledgeFragment, Priority, TaskHealth, WeightedFragment,
 };
 
 // Create an Expertise dynamically

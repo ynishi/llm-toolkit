@@ -417,11 +417,17 @@ impl Default for MentionMatchStrategy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionModel {
+    /// Sequential execution.
+    Sequential,
+
     /// Sequential execution with ordering control.
     ///
     /// Participants execute one by one, with output chained as input.
     /// Order can be specified explicitly or follow the addition order.
     OrderedSequential(SequentialOrder),
+
+    /// Broadcast execution.
+    Broadcast,
 
     /// Broadcast execution with ordering control.
     ///
@@ -1038,11 +1044,21 @@ impl Dialogue {
         // Use new implementation for both modes
         // Note: no_react_messages will be prepended by each execution mode
         match self.execution_model.clone() {
-            ExecutionModel::OrderedBroadcast(order) => {
-                self.run_broadcast(current_turn, order).await
+            ExecutionModel::Sequential => {
+                // Sequential with default AsAdded order
+                self.run_sequential(current_turn, &SequentialOrder::AsAdded)
+                    .await
             }
             ExecutionModel::OrderedSequential(order) => {
                 self.run_sequential(current_turn, &order).await
+            }
+            ExecutionModel::Broadcast => {
+                // Broadcast with default Completion order
+                self.run_broadcast(current_turn, BroadcastOrder::Completion)
+                    .await
+            }
+            ExecutionModel::OrderedBroadcast(order) => {
+                self.run_broadcast(current_turn, order).await
             }
             ExecutionModel::Mentioned { strategy } => {
                 self.run_mentioned(current_turn, strategy).await
@@ -1093,11 +1109,21 @@ impl Dialogue {
 
         // Execute with the decided model
         match decided_model {
-            ExecutionModel::OrderedBroadcast(order) => {
-                self.run_broadcast(current_turn, order).await
+            ExecutionModel::Sequential => {
+                // Sequential with default AsAdded order
+                self.run_sequential(current_turn, &SequentialOrder::AsAdded)
+                    .await
             }
             ExecutionModel::OrderedSequential(order) => {
                 self.run_sequential(current_turn, &order).await
+            }
+            ExecutionModel::Broadcast => {
+                // Broadcast with default Completion order
+                self.run_broadcast(current_turn, BroadcastOrder::Completion)
+                    .await
+            }
+            ExecutionModel::OrderedBroadcast(order) => {
+                self.run_broadcast(current_turn, order).await
             }
             ExecutionModel::Mentioned { strategy } => {
                 self.run_mentioned(current_turn, strategy).await
@@ -1559,28 +1585,43 @@ impl Dialogue {
 
         let model = self.execution_model.clone();
         let state = match &model {
-            ExecutionModel::OrderedBroadcast(order) => {
-                // Spawn broadcast tasks using helper method
-                let pending = self.spawn_broadcast_tasks();
+            ExecutionModel::Sequential => {
+                // Sequential with default AsAdded order
+                let participants_info = self.get_participants_info();
 
-                SessionState::Broadcast(BroadcastState::new(
-                    pending,
-                    *order,
-                    self.participants.len(),
-                    current_turn,
-                ))
-            }
-            ExecutionModel::Mentioned { strategy } => {
-                // For Mentioned mode, spawn tasks for mentioned participants only
-                let pending = self.spawn_mentioned_tasks(current_turn, *strategy);
+                let prev_agent_outputs: Vec<PayloadMessage> = if current_turn > 1 {
+                    self.message_store
+                        .messages_for_turn(current_turn - 1)
+                        .into_iter()
+                        .filter(|msg| matches!(msg.speaker, Speaker::Agent { .. }))
+                        .map(PayloadMessage::from)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
 
-                // Mentioned mode uses Broadcast state with Completion order
-                SessionState::Broadcast(BroadcastState::new(
-                    pending,
-                    BroadcastOrder::Completion,
-                    self.participants.len(),
-                    current_turn,
-                ))
+                match self.resolve_sequential_indices(&SequentialOrder::AsAdded) {
+                    Ok(sequence) => SessionState::Sequential {
+                        next_index: 0,
+                        current_turn,
+                        sequence,
+                        payload,
+                        prev_agent_outputs,
+                        current_turn_outputs: Vec::new(),
+                        participants_info,
+                    },
+                    Err(err) => {
+                        error!(
+                            target = "llm_toolkit::dialogue",
+                            turn = current_turn,
+                            execution_model = "sequential",
+                            participant_count = self.participants.len(),
+                            error = %err,
+                            "Failed to resolve sequential order for partial session"
+                        );
+                        SessionState::Failed(Some(err))
+                    }
+                }
             }
             ExecutionModel::OrderedSequential(order) => {
                 let participants_info = self.get_participants_info();
@@ -1618,6 +1659,40 @@ impl Dialogue {
                         SessionState::Failed(Some(err))
                     }
                 }
+            }
+            ExecutionModel::Broadcast => {
+                // Broadcast with default Completion order
+                let pending = self.spawn_broadcast_tasks();
+
+                SessionState::Broadcast(BroadcastState::new(
+                    pending,
+                    BroadcastOrder::Completion,
+                    self.participants.len(),
+                    current_turn,
+                ))
+            }
+            ExecutionModel::OrderedBroadcast(order) => {
+                // Spawn broadcast tasks using helper method
+                let pending = self.spawn_broadcast_tasks();
+
+                SessionState::Broadcast(BroadcastState::new(
+                    pending,
+                    *order,
+                    self.participants.len(),
+                    current_turn,
+                ))
+            }
+            ExecutionModel::Mentioned { strategy } => {
+                // For Mentioned mode, spawn tasks for mentioned participants only
+                let pending = self.spawn_mentioned_tasks(current_turn, *strategy);
+
+                // Mentioned mode uses Broadcast state with Completion order
+                SessionState::Broadcast(BroadcastState::new(
+                    pending,
+                    BroadcastOrder::Completion,
+                    self.participants.len(),
+                    current_turn,
+                ))
             }
             ExecutionModel::Moderator => {
                 // For Moderator mode, we need to consult the moderator first
@@ -2242,8 +2317,10 @@ impl Agent for Dialogue {
             "EmptyDialogue".to_string()
         } else {
             let model_str = match &self.execution_model {
-                ExecutionModel::OrderedBroadcast(_) => "Broadcast",
+                ExecutionModel::Sequential => "Sequential",
                 ExecutionModel::OrderedSequential(_) => "Sequential",
+                ExecutionModel::Broadcast => "Broadcast",
+                ExecutionModel::OrderedBroadcast(_) => "Broadcast",
                 ExecutionModel::Mentioned { .. } => "Mentioned",
                 ExecutionModel::Moderator => "Moderator",
             };

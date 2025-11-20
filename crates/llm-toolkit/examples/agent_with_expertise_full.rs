@@ -4,10 +4,10 @@
 //! Expertise type as the expertise parameter in the #[agent] macro.
 
 use llm_toolkit::agent::Agent;
-use llm_toolkit_macros::agent;
 use llm_toolkit_expertise::{
     Anchor, ContextProfile, Expertise, KnowledgeFragment, Priority, TaskHealth, WeightedFragment,
 };
+use llm_toolkit_macros::agent;
 
 // Create a function that builds our expertise
 fn create_rust_reviewer_expertise() -> Expertise {

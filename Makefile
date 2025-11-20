@@ -1,4 +1,4 @@
-.PHONY: preflight publish test-examples test-examples-offline test test-all
+.PHONY: preflight publish publish-expertise test-examples test-examples-offline test test-all
 
 # Run specific test with features
 # Usage: make test TARGET=test_full_dialogue_context_simple_format
@@ -114,19 +114,7 @@ publish: preflight
 	@echo "\n⏳ Waiting 10 seconds for crates.io index to update..."
 	sleep 10
 
-	@echo "--- Step 2: Publishing llm-toolkit-expertise ---"
-	@echo "  Running dry-run for llm-toolkit-expertise..."
-	cargo publish -p llm-toolkit-expertise --dry-run --allow-dirty
-
-	@echo "  ✓ Dry-run successful for llm-toolkit-expertise"
-	@echo "  Publishing llm-toolkit-expertise to crates.io..."
-	cargo publish -p llm-toolkit-expertise --allow-dirty
-
-	@echo "\n✅ llm-toolkit-expertise published successfully!"
-	@echo "\n⏳ Waiting 10 seconds for crates.io index to update..."
-	sleep 10
-
-	@echo "\n--- Step 3: Publishing llm-toolkit ---"
+	@echo "\n--- Step 2: Publishing llm-toolkit ---"
 	@echo "  Running dry-run for llm-toolkit..."
 	cargo publish -p llm-toolkit --dry-run --allow-dirty
 
@@ -136,3 +124,14 @@ publish: preflight
 
 	@echo "\n✅ llm-toolkit published successfully!"
 	@echo "\n🎉 All crates have been successfully published to crates.io!"
+
+publish-expertise: preflight
+	@echo "--- Publishing llm-toolkit-expertise ---"
+	@echo "  Running dry-run for llm-toolkit-expertise..."
+	cargo publish -p llm-toolkit-expertise --dry-run --allow-dirty
+
+	@echo "  ✓ Dry-run successful for llm-toolkit-expertise"
+	@echo "  Publishing llm-toolkit-expertise to crates.io..."
+	cargo publish -p llm-toolkit-expertise --allow-dirty
+
+	@echo "\n✅ llm-toolkit-expertise published successfully!"
