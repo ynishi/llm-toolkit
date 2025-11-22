@@ -20,7 +20,7 @@
 //!     Priority, ContextProfile, TaskHealth,
 //! };
 //!
-//! let expertise = Expertise::new("code-reviewer", "1.0")
+//! let expertise = Expertise::new("code-reviewer", "1.0", "Rust code review specialist")
 //!     .with_tag("lang:rust")
 //!     .with_tag("role:reviewer")
 //!     .with_fragment(
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_basic_expertise_creation() {
-        let expertise = Expertise::new("test", "1.0")
+        let expertise = Expertise::new("test", "1.0", "Test expertise")
             .with_tag("test")
             .with_fragment(WeightedFragment::new(KnowledgeFragment::Text(
                 "Test".to_string(),
@@ -125,13 +125,14 @@ mod tests {
 
         assert_eq!(expertise.id, "test");
         assert_eq!(expertise.version, "1.0");
+        assert_eq!(expertise.description, "Test expertise");
         assert_eq!(expertise.tags.len(), 1);
         assert_eq!(expertise.content.len(), 1);
     }
 
     #[test]
     fn test_to_prompt_generates_valid_output() {
-        let expertise = Expertise::new("test", "1.0").with_fragment(WeightedFragment::new(
+        let expertise = Expertise::new("test", "1.0", "Test description").with_fragment(WeightedFragment::new(
             KnowledgeFragment::Text("Test content".to_string()),
         ));
 
@@ -142,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_visualizations() {
-        let expertise = Expertise::new("test", "1.0").with_fragment(WeightedFragment::new(
+        let expertise = Expertise::new("test", "1.0", "Test viz").with_fragment(WeightedFragment::new(
             KnowledgeFragment::Text("Test".to_string()),
         ));
 

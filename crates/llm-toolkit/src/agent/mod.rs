@@ -267,6 +267,69 @@ pub use payload_message::{
 
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
+use crate::prompt::ToPrompt;
+
+/// A trait for types that can serve as agent expertise.
+///
+/// This trait bridges the gap between simple string-based expertise (suitable for most users)
+/// and complex `Expertise` types with weighted fragments, priorities, and context-aware prompts.
+///
+/// # Design Philosophy
+///
+/// - **Simple for beginners**: Plain strings (`&str`, `String`) work out of the box
+/// - **Powerful for advanced users**: `Expertise` type enables composition, priorities, and tool definitions
+/// - **Type-safe delegation**: Agent methods automatically delegate to expertise
+///
+/// # Examples
+///
+/// ## Simple usage with plain strings
+///
+/// ```rust,ignore
+/// #[agent(expertise = "GitHub operations and Rust code review specialist")]
+/// struct SimpleAgent;
+/// ```
+///
+/// ## Advanced usage with Expertise type
+///
+/// ```rust,ignore
+/// use llm_toolkit_expertise::Expertise;
+///
+/// #[agent(expertise = self.expertise_def)]
+/// struct AdvancedAgent {
+///     expertise_def: Expertise,
+/// }
+/// ```
+pub trait ToExpertise: ToPrompt {
+    /// Returns a lightweight catalog description for Orchestrator routing.
+    ///
+    /// This should be a concise summary (1-2 sentences) that helps the orchestrator
+    /// select the appropriate agent. For simple string expertise, this is the same
+    /// as the prompt. For complex `Expertise` types, this is a separate description field.
+    fn description(&self) -> &str;
+
+    /// Returns the list of capabilities (tools/actions) this expertise provides.
+    ///
+    /// This is used for precise orchestrator strategy generation and dialogue coordination.
+    /// The default implementation returns an empty vector.
+    ///
+    /// For `Expertise` types, this extracts capabilities from `ToolDefinition` fragments.
+    fn capabilities(&self) -> Vec<Capability> {
+        Vec::new()
+    }
+}
+
+// Implement ToExpertise for plain strings (simple case - most users)
+impl ToExpertise for &str {
+    fn description(&self) -> &str {
+        self
+    }
+}
+
+impl ToExpertise for String {
+    fn description(&self) -> &str {
+        self.as_str()
+    }
+}
 
 /// The output type for agent execution.
 ///
@@ -290,6 +353,31 @@ pub enum AgentOutput {
 /// An agent represents a reusable capability that can execute tasks based on
 /// natural language intents. The agent's expertise and output type are statically
 /// defined, while the specific task is provided dynamically at runtime.
+///
+/// # Type Parameters
+///
+/// - `Output`: The structured output type this agent produces
+/// - `Expertise`: The expertise type (can be `&str`, `String`, or `Expertise`)
+///
+/// # Examples
+///
+/// ## Simple agent with string expertise
+///
+/// ```rust,ignore
+/// #[agent(expertise = "GitHub operations specialist")]
+/// struct SimpleAgent;
+/// // Generated: type Expertise = &'static str;
+/// ```
+///
+/// ## Advanced agent with Expertise type
+///
+/// ```rust,ignore
+/// #[agent(expertise = self.expertise_def)]
+/// struct AdvancedAgent {
+///     expertise_def: llm_toolkit_expertise::Expertise,
+/// }
+/// // Generated: type Expertise = llm_toolkit_expertise::Expertise;
+/// ```
 #[async_trait]
 pub trait Agent: Send + Sync {
     /// The type of output this agent produces.
@@ -298,17 +386,41 @@ pub trait Agent: Send + Sync {
     /// communication between agents and persistence of results.
     type Output: Serialize + DeserializeOwned;
 
-    /// Returns a natural language description of what this agent can do.
+    /// The type of expertise this agent uses.
     ///
-    /// This description is used by orchestrators to select the most appropriate
-    /// agent for a given task. It should be clear, concise, and descriptive.
+    /// This can be a simple string (`&str`, `String`) for most cases, or a complex
+    /// `Expertise` type with weighted fragments, priorities, and tool definitions.
+    type Expertise: ToExpertise;
+
+    /// Returns the expertise definition for this agent.
     ///
-    /// # Example
+    /// The expertise defines:
+    /// - **description()**: Lightweight catalog summary for Orchestrator routing
+    /// - **to_prompt()**: Full system prompt for LLM execution (HEAVY)
+    /// - **capabilities()**: Tool/action definitions for precise orchestration
+    ///
+    /// # Examples
     ///
     /// ```ignore
-    /// "Analyze web content and extract structured information about technical topics"
+    /// // Simple case: returns &str
+    /// fn expertise(&self) -> &&str {
+    ///     &"GitHub operations and Rust code review specialist"
+    /// }
+    ///
+    /// // Advanced case: returns Expertise
+    /// fn expertise(&self) -> &Expertise {
+    ///     &self.expertise_def
+    /// }
     /// ```
-    fn expertise(&self) -> &str;
+    fn expertise(&self) -> &Self::Expertise;
+
+    /// Returns a lightweight catalog description for Orchestrator routing.
+    ///
+    /// This is automatically delegated to `expertise().description()`.
+    /// Override only if you need custom logic.
+    fn description(&self) -> &str {
+        self.expertise().description()
+    }
 
     /// Execute the agent with a specific intent.
     ///
@@ -370,30 +482,31 @@ pub trait Agent: Send + Sync {
     ///
     /// # Default Implementation
     ///
-    /// By default, this returns `None`, meaning the agent does not declare specific
-    /// capabilities. This maintains backward compatibility with existing agents.
+    /// By default, this delegates to `expertise().capabilities()` and returns `None`
+    /// if the list is empty, `Some(vec)` otherwise.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use llm_toolkit::agent::{Agent, Capability};
+    /// // For Expertise types with ToolDefinition fragments:
+    /// // capabilities() automatically extracts from tool definitions
     ///
-    /// struct FileAgent;
-    ///
-    /// impl Agent for FileAgent {
-    ///     // ... other trait methods ...
-    ///
-    ///     fn capabilities(&self) -> Option<Vec<Capability>> {
-    ///         Some(vec![
-    ///             Capability::new("file:read"),
-    ///             Capability::new("file:write")
-    ///                 .with_description("Write content to a file"),
-    ///         ])
-    ///     }
+    /// // For manual override:
+    /// fn capabilities(&self) -> Option<Vec<Capability>> {
+    ///     Some(vec![
+    ///         Capability::new("file:read"),
+    ///         Capability::new("file:write")
+    ///             .with_description("Write content to a file"),
+    ///     ])
     /// }
     /// ```
     fn capabilities(&self) -> Option<Vec<Capability>> {
-        None
+        let caps = self.expertise().capabilities();
+        if caps.is_empty() {
+            None
+        } else {
+            Some(caps)
+        }
     }
 }
 
@@ -446,8 +559,19 @@ pub trait DynamicAgent: Send + Sync {
     /// Returns the name of this agent.
     fn name(&self) -> String;
 
+    /// Returns a lightweight catalog description for Orchestrator routing.
+    ///
+    /// This is the type-erased version of `Agent::description()`.
+    fn description(&self) -> &str;
+
     /// Returns a natural language description of what this agent can do.
-    fn expertise(&self) -> &str;
+    ///
+    /// **Deprecated**: Use `description()` instead. This method is kept for
+    /// backward compatibility and delegates to `description()`.
+    #[deprecated(since = "0.56.0", note = "Use description() instead")]
+    fn expertise(&self) -> &str {
+        self.description()
+    }
 
     /// Checks if the agent's backend is available.
     async fn is_available(&self) -> Result<(), AgentError> {
@@ -478,9 +602,51 @@ type ToPromptFn = Box<dyn Fn(&serde_json::Value) -> Option<String> + Send + Sync
 /// This adapter performs type erasure by converting the agent's structured output
 /// into `serde_json::Value`, allowing agents with different output types to be
 /// stored in the same collection.
+///
+/// The expertise type is also erased to `String` for dynamic dispatch.
 pub struct AgentAdapter<T: Serialize + DeserializeOwned> {
-    inner: Box<dyn Agent<Output = T>>,
+    inner: Box<dyn DynamicAgentInternal<T>>,
     try_to_prompt_fn: Option<ToPromptFn>,
+}
+
+/// Internal trait for type-erasing Agent with specific Output type.
+///
+/// This trait bridges Agent<Output = T, Expertise = E> to DynamicAgent.
+#[async_trait]
+trait DynamicAgentInternal<T>: Send + Sync {
+    async fn execute(&self, intent: Payload) -> Result<T, AgentError>;
+    fn name(&self) -> String;
+    fn description(&self) -> &str;
+    async fn is_available(&self) -> Result<(), AgentError>;
+    fn capabilities(&self) -> Option<Vec<Capability>>;
+}
+
+/// Blanket implementation for all Agent types
+#[async_trait]
+impl<T, A> DynamicAgentInternal<T> for A
+where
+    T: Serialize + DeserializeOwned,
+    A: Agent<Output = T> + Send + Sync,
+{
+    async fn execute(&self, intent: Payload) -> Result<T, AgentError> {
+        Agent::execute(self, intent).await
+    }
+
+    fn name(&self) -> String {
+        Agent::name(self)
+    }
+
+    fn description(&self) -> &str {
+        Agent::description(self)
+    }
+
+    async fn is_available(&self) -> Result<(), AgentError> {
+        Agent::is_available(self).await
+    }
+
+    fn capabilities(&self) -> Option<Vec<Capability>> {
+        Agent::capabilities(self)
+    }
 }
 
 impl<T: Serialize + DeserializeOwned> AgentAdapter<T> {
@@ -524,8 +690,8 @@ impl<T: Serialize + DeserializeOwned> DynamicAgent for AgentAdapter<T> {
         self.inner.name()
     }
 
-    fn expertise(&self) -> &str {
-        self.inner.expertise()
+    fn description(&self) -> &str {
+        self.inner.description()
     }
 
     async fn is_available(&self) -> Result<(), AgentError> {

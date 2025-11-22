@@ -3,7 +3,8 @@
 //! This module provides implementations of llm-toolkit traits when the
 //! "integration" feature is enabled.
 
-use crate::Expertise;
+use crate::{Expertise, KnowledgeFragment};
+use llm_toolkit::agent::{Capability, ToExpertise};
 use llm_toolkit::prompt::{PromptPart, ToPrompt};
 
 impl ToPrompt for Expertise {
@@ -19,6 +20,20 @@ impl ToPrompt for Expertise {
     }
 }
 
+impl ToExpertise for Expertise {
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn capabilities(&self) -> Vec<Capability> {
+        // Extract tool names from ToolDefinition fragments and convert to Capability
+        self.extract_tool_names()
+            .into_iter()
+            .map(|name| Capability::new(name))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -26,7 +41,7 @@ mod tests {
 
     #[test]
     fn test_to_prompt_trait() {
-        let expertise = Expertise::new("test", "1.0").with_fragment(WeightedFragment::new(
+        let expertise = Expertise::new("test", "1.0", "Test desc").with_fragment(WeightedFragment::new(
             KnowledgeFragment::Text("Test content".to_string()),
         ));
 
@@ -37,7 +52,7 @@ mod tests {
 
     #[test]
     fn test_to_prompt_parts() {
-        let expertise = Expertise::new("test", "1.0").with_fragment(WeightedFragment::new(
+        let expertise = Expertise::new("test", "1.0", "Test desc").with_fragment(WeightedFragment::new(
             KnowledgeFragment::Text("Test content".to_string()),
         ));
 

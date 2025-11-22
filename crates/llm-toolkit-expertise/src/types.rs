@@ -21,6 +21,13 @@ pub struct Expertise {
     /// Version string
     pub version: String,
 
+    /// Lightweight catalog description for Orchestrator routing
+    ///
+    /// This is a concise (1-2 sentence) summary used by orchestrators to select
+    /// the appropriate agent. The full expertise details are rendered via `to_prompt()`
+    /// for LLM consumption.
+    pub description: String,
+
     /// Tags for search and grouping (e.g., ["lang:rust", "role:reviewer", "style:friendly"])
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
@@ -31,10 +38,15 @@ pub struct Expertise {
 
 impl Expertise {
     /// Create a new expertise profile
-    pub fn new(id: impl Into<String>, version: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        version: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             version: version.into(),
+            description: description.into(),
             tags: Vec::new(),
             content: Vec::new(),
         }
@@ -56,6 +68,36 @@ impl Expertise {
     pub fn with_fragment(mut self, fragment: WeightedFragment) -> Self {
         self.content.push(fragment);
         self
+    }
+
+    /// Extract tool definitions as capability names
+    ///
+    /// This method scans all fragments and extracts tool names from `ToolDefinition` fragments.
+    /// Returns a vector of capability identifiers that can be used for agent registration.
+    ///
+    /// Note: This is a basic implementation that extracts tool names from JSON schemas.
+    /// For use with llm-toolkit's `Capability` type, enable the "integration" feature.
+    pub fn extract_tool_names(&self) -> Vec<String> {
+        self.content
+            .iter()
+            .filter_map(|wf| match &wf.fragment {
+                KnowledgeFragment::ToolDefinition(tool_json) => {
+                    // Try to extract a name from the tool definition
+                    tool_json
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            // Fallback: use the type field if no name
+                            tool_json
+                                .get("type")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Generate a single prompt string from all fragments
@@ -298,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_expertise_builder() {
-        let expertise = Expertise::new("test", "1.0")
+        let expertise = Expertise::new("test", "1.0", "Test description")
             .with_tag("test-tag")
             .with_fragment(WeightedFragment::new(KnowledgeFragment::Text(
                 "Test content".to_string(),
@@ -306,13 +348,14 @@ mod tests {
 
         assert_eq!(expertise.id, "test");
         assert_eq!(expertise.version, "1.0");
+        assert_eq!(expertise.description, "Test description");
         assert_eq!(expertise.tags.len(), 1);
         assert_eq!(expertise.content.len(), 1);
     }
 
     #[test]
     fn test_to_prompt_ordering() {
-        let expertise = Expertise::new("test", "1.0")
+        let expertise = Expertise::new("test", "1.0", "Test ordering")
             .with_fragment(
                 WeightedFragment::new(KnowledgeFragment::Text("Low priority".to_string()))
                     .with_priority(Priority::Low),
@@ -339,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_context_filtering() {
-        let expertise = Expertise::new("test", "1.0")
+        let expertise = Expertise::new("test", "1.0", "Context test")
             .with_fragment(
                 WeightedFragment::new(KnowledgeFragment::Text("Always visible".to_string()))
                     .with_context(ContextProfile::Always),
@@ -367,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_to_tree() {
-        let expertise = Expertise::new("test", "1.0")
+        let expertise = Expertise::new("test", "1.0", "Tree test")
             .with_tag("test-tag")
             .with_fragment(WeightedFragment::new(KnowledgeFragment::Text(
                 "Test content".to_string(),
@@ -381,7 +424,7 @@ mod tests {
 
     #[test]
     fn test_to_mermaid() {
-        let expertise = Expertise::new("test", "1.0").with_fragment(WeightedFragment::new(
+        let expertise = Expertise::new("test", "1.0", "Mermaid test").with_fragment(WeightedFragment::new(
             KnowledgeFragment::Text("Test content".to_string()),
         ));
 
