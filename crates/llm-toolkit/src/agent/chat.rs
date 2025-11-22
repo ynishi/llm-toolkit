@@ -1,8 +1,6 @@
-use super::{Agent, AgentError, Payload};
+use super::Agent;
 use crate::agent::history::HistoryAwareAgent;
 use crate::agent::persona::{Persona, PersonaAgent};
-use async_trait::async_trait;
-use serde::{Serialize, de::DeserializeOwned};
 
 /// A builder for creating conversational agents with optional persona and history management.
 ///
@@ -213,7 +211,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::PayloadMessage;
+    use crate::agent::{AgentError, Payload, PayloadMessage};
     use async_trait::async_trait;
     use std::sync::Arc;
     use tokio::sync::Mutex;

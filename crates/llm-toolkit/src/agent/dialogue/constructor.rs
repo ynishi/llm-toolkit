@@ -10,7 +10,6 @@ use crate::{
         persona::{PersonaTeam, PersonaTeamGenerationRequest},
     },
 };
-use std::sync::Arc;
 
 impl Dialogue {
     /// Creates a new dialogue with the specified execution model.

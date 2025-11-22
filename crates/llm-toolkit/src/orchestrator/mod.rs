@@ -1141,7 +1141,7 @@ impl Orchestrator {
         let request = IntentGenerationRequest::new(
             step.description.clone(),
             step.expected_output.clone(),
-            agent.expertise().to_string(),
+            agent.description().to_string(),
             step.intent_template.clone(),
             self.format_context(context),
         );

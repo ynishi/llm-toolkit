@@ -3,7 +3,7 @@
 //! This module provides implementations of llm-toolkit traits when the
 //! "integration" feature is enabled.
 
-use crate::{Expertise, KnowledgeFragment};
+use crate::Expertise;
 use llm_toolkit::agent::{Capability, ToExpertise};
 use llm_toolkit::prompt::{PromptPart, ToPrompt};
 
