@@ -4781,8 +4781,14 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
     let enhanced_expertise = match &expertise {
         ExpertiseValue::String(expertise_str) => {
             if is_string_output {
-                // Plain text output - no JSON enforcement
-                quote! { #expertise_str }
+                // Plain text output - no JSON enforcement, but need to return &String
+                quote! {
+                    {
+                        use std::sync::OnceLock;
+                        static EXPERTISE_CACHE: OnceLock<String> = OnceLock::new();
+                        EXPERTISE_CACHE.get_or_init(|| String::from(#expertise_str))
+                    }
+                }
             } else {
                 // Structured output with string expertise
                 let type_name = quote!(#output_type).to_string();
@@ -4812,7 +4818,7 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
                                     schema
                                 )
                             }
-                        }).as_str()
+                        })
                     }
                 }
             }
@@ -4829,7 +4835,7 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
 
                         EXPERTISE_CACHE.get_or_init(|| {
                             (#expertise_expr).to_prompt()
-                        }).as_str()
+                        })
                     }
                 }
             } else {
@@ -4858,7 +4864,7 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
                                     schema
                                 )
                             }
-                        }).as_str()
+                        })
                     }
                 }
             }
@@ -4944,8 +4950,9 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
         #[async_trait::async_trait]
         impl #impl_generics #crate_path::agent::Agent for #struct_name #ty_generics #where_clause {
             type Output = #output_type;
+            type Expertise = String;
 
-            fn expertise(&self) -> &str {
+            fn expertise(&self) -> &String {
                 #enhanced_expertise
             }
 
@@ -5352,7 +5359,7 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
 
                         EXPERTISE_CACHE.get_or_init(|| {
                             (#expertise_expr).to_prompt()
-                        }).as_str()
+                        })
                     }
                 }
             } else {
@@ -5381,7 +5388,7 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                                     schema
                                 )
                             }
-                        }).as_str()
+                        })
                     }
                 }
             }
@@ -5399,8 +5406,9 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                 <#inner_generic_ident as #crate_path::agent::Agent>::Output: Send,
             {
                 type Output = <#inner_generic_ident as #crate_path::agent::Agent>::Output;
+                type Expertise = String;
 
-                fn expertise(&self) -> &str {
+                fn expertise(&self) -> &String {
                     self.inner.expertise()
                 }
 
@@ -5421,12 +5429,13 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #inner_generic_ident: #crate_path::agent::Agent<Output = String>,
             {
                 type Output = #output_type;
+                type Expertise = String;
 
-                fn expertise(&self) -> &str {
+                fn expertise(&self) -> &String {
                     #enhanced_expertise
                 }
 
-                #[#crate_path::tracing::instrument(name = "agent.execute", skip_all, fields(agent.name = #struct_name_str, agent.expertise = self.expertise()))]
+                #[#crate_path::tracing::instrument(name = "agent.execute", skip_all, fields(agent.name = #struct_name_str, agent.description = self.description()))]
                 async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
                     let enhanced_payload = intent.prepend_text(self.expertise());
                     let response = self.inner.execute(enhanced_payload).await?;
@@ -5447,12 +5456,13 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #inner_generic_ident: #crate_path::agent::Agent<Output = String>,
             {
                 type Output = #output_type;
+                type Expertise = String;
 
-                fn expertise(&self) -> &str {
+                fn expertise(&self) -> &String {
                     #enhanced_expertise
                 }
 
-                #[#crate_path::tracing::instrument(name = "agent.execute", skip_all, fields(agent.name = #struct_name_str, agent.expertise = self.expertise()))]
+                #[#crate_path::tracing::instrument(name = "agent.execute", skip_all, fields(agent.name = #struct_name_str, agent.description = self.description()))]
                 async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
                     // Prepend expertise to the payload
                     let enhanced_payload = intent.prepend_text(self.expertise());
