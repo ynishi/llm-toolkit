@@ -32,8 +32,9 @@ impl MockAgent {
 #[async_trait]
 impl Agent for MockAgent {
     type Output = String;
+    type Expertise = String;
 
-    fn expertise(&self) -> &str {
+    fn expertise(&self) -> &String {
         &self.expertise
     }
 
@@ -59,9 +60,11 @@ struct MockJsonAgent;
 #[async_trait]
 impl Agent for MockJsonAgent {
     type Output = StrategyMap;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock strategy generator for testing"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock strategy generator for testing";
+        &EXPERTISE
     }
 
     fn name(&self) -> String {
@@ -112,12 +115,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create orchestrator with mock internal agents
     let mut orchestrator = Orchestrator::with_internal_agents(
         blueprint,
-        Box::new(MockAgent::new(
+        llm_toolkit::agent::AnyAgent::boxed(MockAgent::new(
             "MockInternalAgent",
             "Mock internal agent for intent generation and redesign",
             "🤖 Internal",
         )),
-        Box::new(MockJsonAgent),
+        llm_toolkit::agent::AnyAgent::boxed(MockJsonAgent),
     );
 
     // Add mock agents with different specializations
