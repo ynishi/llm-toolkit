@@ -625,7 +625,7 @@ impl Dialogue {
 
         Participant {
             persona,
-            agent: Arc::new(chat_agent),
+            agent: Arc::new(*chat_agent),
         }
     }
 
@@ -766,7 +766,7 @@ impl Dialogue {
 
         self.participants.push(Participant {
             persona,
-            agent: Arc::new(chat_agent),
+            agent: Arc::new(*chat_agent),
         });
 
         self
@@ -2304,11 +2304,12 @@ impl Dialogue {
 #[async_trait]
 impl Agent for Dialogue {
     type Output = Vec<DialogueTurn>;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
+    fn expertise(&self) -> &&'static str {
         // Note: This returns a static string since Agent::expertise requires &str.
         // The actual capabilities depend on participants, execution model, etc.
-        "Multi-agent dialogue facilitating collaborative conversations with diverse perspectives"
+        &"Multi-agent dialogue facilitating collaborative conversations with diverse perspectives"
     }
 
     fn name(&self) -> String {
@@ -2378,9 +2379,11 @@ mod tests {
     #[async_trait]
     impl Agent for MockAgent {
         type Output = String;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Mock agent for testing"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Mock agent for testing";
+            &EXPERTISE
         }
 
         fn name(&self) -> String {
@@ -2630,9 +2633,11 @@ mod tests {
     #[async_trait]
     impl Agent for DelayAgent {
         type Output = String;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Delayed agent"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Delayed agent";
+            &EXPERTISE
         }
 
         async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
@@ -2978,9 +2983,11 @@ mod tests {
         #[async_trait]
         impl Agent for MockGeneratorAgent {
             type Output = PersonaTeam;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Generator"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Generator";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -3564,9 +3571,11 @@ mod tests {
         #[async_trait]
         impl Agent for EchoAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Echo agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Echo agent";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -3705,9 +3714,11 @@ mod tests {
         #[async_trait]
         impl Agent for VerboseEchoAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Verbose echo agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Verbose echo agent";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -3780,12 +3791,12 @@ mod tests {
 
         dialogue.participants.push(Participant {
             persona: persona_a,
-            agent: Arc::new(chat_a),
+            agent: Arc::new(*chat_a),
         });
 
         dialogue.participants.push(Participant {
             persona: persona_b,
-            agent: Arc::new(chat_b),
+            agent: Arc::new(*chat_b),
         });
 
         // Turn 1
@@ -3964,9 +3975,11 @@ mod tests {
         #[async_trait]
         impl Agent for HistoryEchoAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "History echo agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "History echo agent";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -4063,9 +4076,11 @@ mod tests {
         #[async_trait]
         impl Agent for EchoAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Echo agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Echo agent";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -4189,9 +4204,11 @@ mod tests {
         #[async_trait]
         impl Agent for SimpleAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Simple agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Simple agent";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -4292,9 +4309,11 @@ mod tests {
         #[async_trait]
         impl Agent for TrackingAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Tracking agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Tracking agent";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -4466,9 +4485,11 @@ mod tests {
         #[async_trait]
         impl Agent for TrackingAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Tracking agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Tracking agent";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -4636,9 +4657,11 @@ mod tests {
         #[async_trait]
         impl Agent for TrackingAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Tracking agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Tracking agent";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -4831,9 +4854,11 @@ mod tests {
         #[async_trait]
         impl Agent for TrackingAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Tracking agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Tracking agent";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -5044,9 +5069,11 @@ mod tests {
         #[async_trait]
         impl Agent for TrackingAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Context tracking agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Context tracking agent";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -5143,9 +5170,11 @@ mod tests {
         #[async_trait]
         impl Agent for RecordingAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Order recording agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Order recording agent";
+                &EXPERTISE
             }
 
             async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
@@ -5224,9 +5253,11 @@ mod tests {
         #[async_trait]
         impl Agent for PassthroughAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Passthrough"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Passthrough";
+                &EXPERTISE
             }
 
             async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
@@ -5283,9 +5314,11 @@ mod tests {
         #[async_trait]
         impl Agent for TrackingAgent {
             type Output = String;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Tracking agent"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Tracking agent";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -6181,9 +6214,11 @@ mod tests {
     #[async_trait]
     impl Agent for RecordingAgent {
         type Output = String;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Recording agent for testing"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Recording agent for testing";
+            &EXPERTISE
         }
 
         fn name(&self) -> String {
@@ -6729,9 +6764,11 @@ mod tests {
         #[async_trait]
         impl Agent for MockModerator {
             type Output = ExecutionModel;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Mock moderator for testing"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Mock moderator for testing";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {
@@ -6822,9 +6859,11 @@ mod tests {
         #[async_trait]
         impl Agent for BadModerator {
             type Output = ExecutionModel;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Bad moderator"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Bad moderator";
+                &EXPERTISE
             }
 
             fn name(&self) -> String {

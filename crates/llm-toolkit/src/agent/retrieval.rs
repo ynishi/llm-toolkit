@@ -103,8 +103,9 @@ where
     I::Output: Send,
 {
     type Output = I::Output;
+    type Expertise = I::Expertise;
 
-    fn expertise(&self) -> &str {
+    fn expertise(&self) -> &I::Expertise {
         // Inherit expertise from the inner agent
         self.inner_agent.expertise()
     }
@@ -131,8 +132,8 @@ where
         name = "retrieval_aware_agent.execute",
         skip(self, payload),
         fields(
-            retriever.expertise = self.retriever.expertise(),
-            inner_agent.expertise = self.inner_agent.expertise(),
+            retriever.description = self.retriever.description(),
+            inner_agent.description = self.inner_agent.description(),
         )
     )]
     async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
@@ -202,9 +203,11 @@ mod tests {
     #[async_trait]
     impl Agent for MockRetriever {
         type Output = Vec<Document>;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Mock retriever for testing"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Mock retriever for testing";
+            &EXPERTISE
         }
 
         async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
@@ -239,9 +242,11 @@ mod tests {
         T: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
     {
         type Output = T;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Mock inner agent for testing"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Mock inner agent for testing";
+            &EXPERTISE
         }
 
         async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
@@ -305,9 +310,11 @@ mod tests {
         #[async_trait]
         impl Agent for FailingRetriever {
             type Output = Vec<Document>;
+            type Expertise = &'static str;
 
-            fn expertise(&self) -> &str {
-                "Failing retriever"
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &'static str = "Failing retriever";
+                &EXPERTISE
             }
 
             async fn execute(&self, _payload: Payload) -> Result<Self::Output, AgentError> {
@@ -352,7 +359,7 @@ mod tests {
         let rag_agent = RetrievalAwareAgent::new(retriever, inner_agent);
 
         // Expertise should be inherited from inner agent
-        assert_eq!(rag_agent.expertise(), "Mock inner agent for testing");
+        assert_eq!(rag_agent.description(), "Mock inner agent for testing");
     }
 
     #[tokio::test]

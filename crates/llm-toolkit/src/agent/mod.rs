@@ -267,6 +267,7 @@ pub use payload_message::{
 
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
+use std::sync::Arc;
 use crate::prompt::ToPrompt;
 
 /// A trait for types that can serve as agent expertise.
@@ -787,5 +788,74 @@ impl<T: Serialize + DeserializeOwned> DynamicAgent for AgentAdapter<T> {
 
     fn try_to_prompt(&self, json: &serde_json::Value) -> Option<String> {
         self.try_to_prompt_fn.as_ref().and_then(|f| f(json))
+    }
+}
+
+// Agent implementations for smart pointers (Box, Arc)
+// These enable ergonomic use of boxed/arc-wrapped agents
+
+#[async_trait]
+impl<T: Agent + ?Sized> Agent for Box<T>
+where
+    T::Output: Send,
+{
+    type Output = T::Output;
+    type Expertise = T::Expertise;
+
+    fn expertise(&self) -> &T::Expertise {
+        (**self).expertise()
+    }
+
+    fn description(&self) -> &str {
+        (**self).description()
+    }
+
+    fn capabilities(&self) -> Option<Vec<Capability>> {
+        (**self).capabilities()
+    }
+
+    async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
+        (**self).execute(intent).await
+    }
+
+    fn name(&self) -> String {
+        (**self).name()
+    }
+
+    async fn is_available(&self) -> Result<(), AgentError> {
+        (**self).is_available().await
+    }
+}
+
+#[async_trait]
+impl<T: Agent + ?Sized> Agent for Arc<T>
+where
+    T::Output: Send,
+{
+    type Output = T::Output;
+    type Expertise = T::Expertise;
+
+    fn expertise(&self) -> &T::Expertise {
+        (**self).expertise()
+    }
+
+    fn description(&self) -> &str {
+        (**self).description()
+    }
+
+    fn capabilities(&self) -> Option<Vec<Capability>> {
+        (**self).capabilities()
+    }
+
+    async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
+        (**self).execute(intent).await
+    }
+
+    fn name(&self) -> String {
+        (**self).name()
+    }
+
+    async fn is_available(&self) -> Result<(), AgentError> {
+        (**self).is_available().await
     }
 }

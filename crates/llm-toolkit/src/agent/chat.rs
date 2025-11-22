@@ -241,9 +241,11 @@ mod tests {
     #[async_trait]
     impl Agent for TestAgent {
         type Output = String;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Test agent for Chat builder"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Test agent for Chat builder";
+            &EXPERTISE
         }
 
         async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {

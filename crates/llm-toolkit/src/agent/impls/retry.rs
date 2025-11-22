@@ -111,9 +111,11 @@ mod tests {
     #[async_trait]
     impl Agent for FailingAgent {
         type Output = String;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Test agent that fails a configurable number of times"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Test agent that fails a configurable number of times";
+            &EXPERTISE
         }
 
         async fn execute(&self, _payload: Payload) -> Result<String, AgentError> {
@@ -184,7 +186,7 @@ mod tests {
         let retry_agent = RetryAgent::new(base, 3);
 
         assert_eq!(
-            retry_agent.expertise(),
+            retry_agent.description(),
             "Test agent that fails a configurable number of times"
         );
     }
@@ -213,9 +215,11 @@ mod tests {
     #[async_trait]
     impl Agent for RateLimitedAgent {
         type Output = String;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Test agent that simulates rate limiting with retry_after"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Test agent that simulates rate limiting with retry_after";
+            &EXPERTISE
         }
 
         async fn execute(&self, _payload: Payload) -> Result<String, AgentError> {
@@ -258,9 +262,11 @@ mod tests {
     #[async_trait]
     impl Agent for RateLimited429Agent {
         type Output = String;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Test agent that simulates 429 without retry_after"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Test agent that simulates 429 without retry_after";
+            &EXPERTISE
         }
 
         async fn execute(&self, _payload: Payload) -> Result<String, AgentError> {

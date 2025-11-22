@@ -210,8 +210,8 @@ impl Orchestrator {
         let mut orchestrator = Self {
             blueprint,
             agents: HashMap::new(),
-            internal_json_agent: Box::new(RetryAgent::new(ClaudeCodeJsonAgent::new(), 3)),
-            internal_agent: Box::new(RetryAgent::new(ClaudeCodeAgent::new(), 3)),
+            internal_json_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(ClaudeCodeJsonAgent::new(), 3)),
+            internal_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(ClaudeCodeAgent::new(), 3)),
             strategy_map: None,
             context: HashMap::new(),
             execution_journal: None,
@@ -516,7 +516,7 @@ impl Orchestrator {
         self.agents
             .iter()
             .map(|(name, agent)| {
-                let mut line = format!("- {}: {}", name, agent.expertise());
+                let mut line = format!("- {}: {}", name, agent.description());
                 if let Some(caps) = agent.capabilities()
                     && !caps.is_empty()
                 {
@@ -2677,9 +2677,11 @@ mod tests {
     #[async_trait]
     impl Agent for RecordingAgent {
         type Output = JsonValue;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Test agent"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Test agent";
+            &EXPERTISE
         }
 
         async fn execute(&self, _intent: Payload) -> Result<Self::Output, AgentError> {

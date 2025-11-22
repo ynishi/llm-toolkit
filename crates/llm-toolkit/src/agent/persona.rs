@@ -592,8 +592,9 @@ where
     T::Output: Send,
 {
     type Output = T::Output;
+    type Expertise = String;
 
-    fn expertise(&self) -> &str {
+    fn expertise(&self) -> &String {
         &self.persona.role
     }
 
@@ -821,9 +822,11 @@ mod tests {
         T: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
     {
         type Output = T;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Test agent"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Test agent";
+            &EXPERTISE
         }
 
         async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
@@ -1388,9 +1391,11 @@ Please review the code
     #[async_trait]
     impl Agent for LocalMockAgent {
         type Output = String;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Mock agent for testing"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Mock agent for testing";
+            &EXPERTISE
         }
 
         async fn execute(&self, _payload: Payload) -> Result<Self::Output, AgentError> {

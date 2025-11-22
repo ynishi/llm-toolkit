@@ -3,7 +3,7 @@
 //! This module provides the main `ParallelOrchestrator` implementation that executes
 //! workflow steps concurrently based on their dependencies.
 
-use crate::agent::DynamicAgent;
+use crate::agent::{Agent, DynamicAgent};
 use crate::orchestrator::prompts::ParallelRedesignDecisionRequest;
 use crate::orchestrator::{
     ExecutionJournal, OrchestratorError, StepRecord, StepStatus, StrategyInstruction,
@@ -241,8 +241,8 @@ impl ParallelOrchestrator {
         Self {
             blueprint,
             agents: HashMap::new(),
-            internal_json_agent: Box::new(RetryAgent::new(ClaudeCodeJsonAgent::new(), 3)),
-            internal_agent: Box::new(RetryAgent::new(ClaudeCodeAgent::new(), 3)),
+            internal_json_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(ClaudeCodeJsonAgent::new(), 3)),
+            internal_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(ClaudeCodeAgent::new(), 3)),
             strategy: None,
             config: ParallelOrchestratorConfig::default(),
             execution_journal: None,

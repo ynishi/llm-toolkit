@@ -118,8 +118,9 @@ where
     T::Output: Send,
 {
     type Output = T::Output;
+    type Expertise = T::Expertise;
 
-    fn expertise(&self) -> &str {
+    fn expertise(&self) -> &T::Expertise {
         self.inner_agent.expertise()
     }
 
@@ -132,7 +133,7 @@ where
         name = "history_aware_agent.execute",
         skip(self, intent),
         fields(
-            agent.expertise = self.inner_agent.expertise(),
+            agent.description = self.inner_agent.description(),
             has_history = !self.dialogue_history.try_lock().map(|h| h.is_empty()).unwrap_or(true),
         )
     )]
@@ -165,7 +166,7 @@ where
         // Debug log the final payload
         crate::tracing::debug!(
             target: "llm_toolkit::agent::history",
-            expertise = self.inner_agent.expertise(),
+            description = self.inner_agent.description(),
             history_length = history_len,
             "Sending payload with history to inner agent"
         );
@@ -202,7 +203,7 @@ where
         history.push(response_entry);
         crate::tracing::debug!(
             target: "llm_toolkit::agent::history",
-            expertise = self.inner_agent.expertise(),
+            description = self.inner_agent.description(),
             history_length = history.len(),
             "Updated dialogue history with latest interaction"
         );
@@ -260,9 +261,11 @@ mod tests {
         T: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
     {
         type Output = T;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Test recording agent"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Test recording agent";
+            &EXPERTISE
         }
 
         async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
@@ -388,6 +391,6 @@ mod tests {
         let base_agent = RecordingAgent::new(String::from("response"));
         let history_agent = HistoryAwareAgent::new(base_agent);
 
-        assert_eq!(history_agent.expertise(), "Test recording agent");
+        assert_eq!(history_agent.description(), "Test recording agent");
     }
 }

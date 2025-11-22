@@ -4,7 +4,7 @@
 //! dialogue turns one at a time as they complete, enabling streaming
 //! and responsive UIs.
 
-use super::super::{AgentError, Payload, PayloadMessage};
+use super::super::{Agent, AgentError, Payload, PayloadMessage};
 use super::message::{DialogueMessage, MessageMetadata, MessageOrigin, Speaker};
 use super::state::SessionState;
 use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel, ParticipantInfo};
