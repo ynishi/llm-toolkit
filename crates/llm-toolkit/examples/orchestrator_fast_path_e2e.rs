@@ -36,8 +36,9 @@ impl MockAgent {
 #[async_trait]
 impl Agent for MockAgent {
     type Output = String;
+    type Expertise = String;
 
-    fn expertise(&self) -> &str {
+    fn expertise(&self) -> &String {
         &self.expertise
     }
 
@@ -62,9 +63,11 @@ struct MockInternalAgent;
 #[async_trait]
 impl Agent for MockInternalAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock internal agent"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock internal agent";
+        &EXPERTISE
     }
 
     fn name(&self) -> String {
@@ -90,9 +93,11 @@ struct MockJsonAgent;
 #[async_trait]
 impl Agent for MockJsonAgent {
     type Output = StrategyMap;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock strategy generator"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock strategy generator";
+        &EXPERTISE
     }
 
     fn name(&self) -> String {

@@ -10,9 +10,11 @@ struct MockAgent;
 #[async_trait]
 impl Agent for MockAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "A mock agent that repeats the input."
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "A mock agent that repeats the input.";
+        &EXPERTISE
     }
 
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {

@@ -12,9 +12,11 @@ struct MockLLMAgent {
 #[async_trait]
 impl Agent for MockLLMAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "A mock LLM agent."
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "A mock LLM agent.";
+        &EXPERTISE
     }
 
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {

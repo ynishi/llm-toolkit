@@ -34,9 +34,11 @@ impl MockSuccessAgent {
 #[async_trait::async_trait]
 impl Agent for MockSuccessAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock success agent for journal testing"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock success agent for journal testing";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -74,9 +76,11 @@ impl MockFailingAgent {
 #[async_trait::async_trait]
 impl Agent for MockFailingAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock failing agent for journal testing"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock failing agent for journal testing";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -228,9 +232,11 @@ struct NoRedesignAgent;
 #[async_trait::async_trait]
 impl Agent for NoRedesignAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock agent that never triggers redesign"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock agent that never triggers redesign";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -244,9 +250,11 @@ struct DummyStrategyGenerator;
 #[async_trait::async_trait]
 impl Agent for DummyStrategyGenerator {
     type Output = StrategyMap;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Dummy strategy generator (should not be called)"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Dummy strategy generator (should not be called)";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {

@@ -36,9 +36,11 @@ impl MockRetrieverAgent {
 #[async_trait]
 impl Agent for MockRetrieverAgent {
     type Output = Vec<Document>;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock document retriever"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock document retriever";
+        &EXPERTISE
     }
 
     async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
@@ -73,9 +75,11 @@ where
     T: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     type Output = T;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock inner agent"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock inner agent";
+        &EXPERTISE
     }
 
     async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
@@ -157,9 +161,11 @@ async fn test_retrieval_aware_agent_propagates_retriever_error() {
     #[async_trait]
     impl Agent for FailingRetriever {
         type Output = Vec<Document>;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Failing retriever"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &'static str = "Failing retriever";
+            &EXPERTISE
         }
 
         async fn execute(&self, _payload: Payload) -> Result<Self::Output, AgentError> {

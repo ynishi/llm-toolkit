@@ -57,9 +57,11 @@ struct SimpleStrategyAgent;
 #[async_trait::async_trait]
 impl llm_toolkit::agent::Agent for SimpleStrategyAgent {
     type Output = StrategyMap;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Strategy generator"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Strategy generator";
+        &EXPERTISE
     }
 
     fn name(&self) -> String {

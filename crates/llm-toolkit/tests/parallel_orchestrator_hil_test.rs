@@ -37,9 +37,11 @@ impl ApprovalAgent {
 #[async_trait::async_trait]
 impl Agent for ApprovalAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock agent that requests human approval"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock agent that requests human approval";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -54,8 +56,12 @@ impl DynamicAgent for ApprovalAgent {
         self.agent_name.clone()
     }
 
-    fn expertise(&self) -> &str {
+    fn description(&self) -> &str {
         "Mock agent that requests human approval"
+    }
+
+    fn expertise(&self) -> &str {
+        self.description()
     }
 
     async fn execute_dynamic(&self, _input: Payload) -> Result<AgentOutput, AgentError> {
@@ -85,9 +91,11 @@ impl MockAgent {
 #[async_trait::async_trait]
 impl Agent for MockAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock agent for testing"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock agent for testing";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -101,8 +109,12 @@ impl DynamicAgent for MockAgent {
         self.agent_name.clone()
     }
 
-    fn expertise(&self) -> &str {
+    fn description(&self) -> &str {
         "Mock agent for testing"
+    }
+
+    fn expertise(&self) -> &str {
+        self.description()
     }
 
     async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {

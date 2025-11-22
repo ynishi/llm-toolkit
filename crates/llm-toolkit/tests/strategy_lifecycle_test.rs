@@ -33,9 +33,11 @@ impl MockAgent {
 #[async_trait::async_trait]
 impl Agent for MockAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock agent for lifecycle testing"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock agent for lifecycle testing";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -74,9 +76,11 @@ impl MockStrategyGenerator {
 #[async_trait::async_trait]
 impl Agent for MockStrategyGenerator {
     type Output = StrategyMap;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock strategy generator"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock strategy generator";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -97,9 +101,11 @@ impl MockStringAgent {
 #[async_trait::async_trait]
 impl Agent for MockStringAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock string agent"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock string agent";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
