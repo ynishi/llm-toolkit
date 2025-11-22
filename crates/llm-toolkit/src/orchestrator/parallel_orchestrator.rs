@@ -279,16 +279,20 @@ impl ParallelOrchestrator {
     /// );
     /// ```
     #[cfg(feature = "agent")]
-    pub fn with_internal_agents(
+    pub fn with_internal_agents<I, J>(
         blueprint: crate::orchestrator::BlueprintWorkflow,
-        internal_agent: Box<crate::agent::AnyAgent<String>>,
-        internal_json_agent: Box<crate::agent::AnyAgent<StrategyMap>>,
-    ) -> Self {
+        internal_agent: I,
+        internal_json_agent: J,
+    ) -> Self
+    where
+        I: crate::agent::Agent<Output = String> + 'static,
+        J: crate::agent::Agent<Output = StrategyMap> + 'static,
+    {
         Self {
             blueprint,
             agents: HashMap::new(),
-            internal_json_agent,
-            internal_agent,
+            internal_json_agent: crate::agent::AnyAgent::boxed(internal_json_agent),
+            internal_agent: crate::agent::AnyAgent::boxed(internal_agent),
             strategy: None,
             config: ParallelOrchestratorConfig::default(),
             execution_journal: None,

@@ -115,12 +115,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create orchestrator with mock internal agents
     let mut orchestrator = Orchestrator::with_internal_agents(
         blueprint,
-        llm_toolkit::agent::AnyAgent::boxed(MockAgent::new(
+        MockAgent::new(
             "MockInternalAgent",
             "Mock internal agent for intent generation and redesign",
             "🤖 Internal",
-        )),
-        llm_toolkit::agent::AnyAgent::boxed(MockJsonAgent),
+        ),
+        MockJsonAgent,
     );
 
     // Add mock agents with different specializations
