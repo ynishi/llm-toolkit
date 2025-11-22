@@ -52,9 +52,10 @@ impl Default for InnerValidatorAgent {
 #[async_trait]
 impl Agent for InnerValidatorAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "A built-in agent that validates the output of a previous step against the overall task goal and specific quality criteria. It returns a JSON string with a 'status' ('PASS' or 'FAIL') and a 'reason'."
+    fn expertise(&self) -> &Self::Expertise {
+        &"A built-in agent that validates the output of a previous step against the overall task goal and specific quality criteria. It returns a JSON string with a 'status' ('PASS' or 'FAIL') and a 'reason'."
     }
 
     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {

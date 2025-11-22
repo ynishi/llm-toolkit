@@ -54,8 +54,9 @@ where
     T::Output: Send,
 {
     type Output = T::Output;
+    type Expertise = T::Expertise;
 
-    fn expertise(&self) -> &str {
+    fn expertise(&self) -> &Self::Expertise {
         self.inner.expertise()
     }
 

@@ -510,10 +510,93 @@ pub trait Agent: Send + Sync {
     }
 }
 
+/// A type-erased agent wrapper for easy dynamic dispatch.
+///
+/// This wrapper allows you to store agents with different expertise types
+/// in the same collection by erasing the Expertise type parameter.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use llm_toolkit::agent::AnyAgent;
+///
+/// // Create from any agent
+/// let agent1 = AnyAgent::new(simple_agent);  // expertise = &str
+/// let agent2 = AnyAgent::new(advanced_agent); // expertise = Expertise
+///
+/// // Store in collections
+/// let agents: Vec<Arc<AnyAgent<String>>> = vec![
+///     Arc::new(agent1),
+///     Arc::new(agent2),
+/// ];
+/// ```
+pub struct AnyAgent<T: Serialize + DeserializeOwned> {
+    inner: Box<dyn DynamicAgentInternal<T>>,
+    description: String,
+    capabilities: Option<Vec<Capability>>,
+}
+
+impl<T: Serialize + DeserializeOwned> AnyAgent<T> {
+    /// Create a new AnyAgent from any Agent implementation.
+    pub fn new<A: Agent<Output = T> + 'static>(agent: A) -> Self {
+        let description = agent.description().to_string();
+        let capabilities = agent.capabilities();
+        Self {
+            inner: Box::new(agent),
+            description,
+            capabilities,
+        }
+    }
+
+    /// Create a new AnyAgent by boxing an agent.
+    pub fn boxed<A: Agent<Output = T> + 'static>(agent: A) -> Box<Self> {
+        Box::new(Self::new(agent))
+    }
+
+    /// Create a new AnyAgent by arc-ing an agent.
+    pub fn arc<A: Agent<Output = T> + 'static>(agent: A) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self::new(agent))
+    }
+}
+
+#[async_trait]
+impl<T: Serialize + DeserializeOwned> Agent for AnyAgent<T> {
+    type Output = T;
+    type Expertise = String;
+
+    fn expertise(&self) -> &String {
+        &self.description
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn capabilities(&self) -> Option<Vec<Capability>> {
+        self.capabilities.clone()
+    }
+
+    async fn execute(&self, intent: Payload) -> Result<T, AgentError> {
+        self.inner.execute(intent).await
+    }
+
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+
+    async fn is_available(&self) -> Result<(), AgentError> {
+        self.inner.is_available().await
+    }
+}
+
 /// A boxed agent trait object for dynamic dispatch.
 ///
-/// This type alias is useful for storing heterogeneous collections of agents.
-pub type BoxedAgent<T> = Box<dyn Agent<Output = T>>;
+/// **Deprecated**: Use `AnyAgent<T>` instead for better ergonomics.
+///
+/// This type alias requires specifying the Expertise type, which is
+/// inconvenient for dynamic dispatch. Use `Box<AnyAgent<T>>` instead.
+#[deprecated(since = "0.56.0", note = "Use Box<AnyAgent<T>> or Arc<AnyAgent<T>> instead")]
+pub type BoxedAgent<T, E = String> = Box<dyn Agent<Output = T, Expertise = E>>;
 
 /// Normalize raw LLM responses for agents that output plain `String` values.
 ///

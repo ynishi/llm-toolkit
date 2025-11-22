@@ -354,9 +354,10 @@ impl CliAgent for ClaudeCodeAgent {
 #[async_trait]
 impl Agent for ClaudeCodeAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "A general-purpose AI agent capable of coding, research, analysis, \
+    fn expertise(&self) -> &Self::Expertise {
+        &"A general-purpose AI agent capable of coding, research, analysis, \
          writing, and problem-solving across various domains. Can handle \
          complex multi-step tasks autonomously."
     }
@@ -580,8 +581,9 @@ where
     T: Serialize + for<'de> Deserialize<'de> + Send + Sync,
 {
     type Output = T;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
+    fn expertise(&self) -> &Self::Expertise {
         self.inner.expertise()
     }
 

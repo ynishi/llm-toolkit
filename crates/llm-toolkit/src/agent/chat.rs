@@ -148,7 +148,7 @@ impl<A: Agent> Chat<A> {
     /// // Use the built agent
     /// let response = chat.execute("Hello!".into()).await?;
     /// ```
-    pub fn build(self) -> Box<dyn Agent<Output = A::Output>>
+    pub fn build(self) -> Box<crate::agent::AnyAgent<A::Output>>
     where
         A: 'static,
         A::Output: 'static + Send,
@@ -156,12 +156,12 @@ impl<A: Agent> Chat<A> {
         if self.with_history {
             match self.identity {
                 Some((name, role)) => {
-                    Box::new(HistoryAwareAgent::new_with_identity(self.agent, name, role))
+                    crate::agent::AnyAgent::boxed(HistoryAwareAgent::new_with_identity(self.agent, name, role))
                 }
-                None => Box::new(HistoryAwareAgent::new(self.agent)),
+                None => crate::agent::AnyAgent::boxed(HistoryAwareAgent::new(self.agent)),
             }
         } else {
-            Box::new(self.agent)
+            crate::agent::AnyAgent::boxed(self.agent)
         }
     }
 }
@@ -207,32 +207,8 @@ where
     }
 }
 
-/// Implementation of the `Agent` trait for boxed agents.
-///
-/// This allows the boxed result from `build()` to be used directly as an agent.
-#[async_trait]
-impl<T> Agent for Box<dyn Agent<Output = T>>
-where
-    T: Serialize + DeserializeOwned + Send + Sync,
-{
-    type Output = T;
-
-    fn expertise(&self) -> &str {
-        (**self).expertise()
-    }
-
-    async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
-        (**self).execute(intent).await
-    }
-
-    fn name(&self) -> String {
-        (**self).name()
-    }
-
-    async fn is_available(&self) -> Result<(), AgentError> {
-        (**self).is_available().await
-    }
-}
+// Note: Box<AnyAgent<T>> automatically implements Agent via Deref,
+// so no explicit impl is needed.
 
 #[cfg(test)]
 mod tests {

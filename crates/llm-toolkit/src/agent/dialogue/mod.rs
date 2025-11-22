@@ -499,7 +499,7 @@ impl Default for ReactionStrategy {
 /// Wraps a persona and its associated agent implementation.
 pub(super) struct Participant {
     pub(super) persona: Persona,
-    pub(super) agent: Arc<dyn Agent<Output = String>>,
+    pub(super) agent: Arc<crate::agent::AnyAgent<String>>,
 }
 
 impl Clone for Participant {
@@ -604,7 +604,7 @@ pub struct Dialogue {
     ///
     /// When execution_model is Moderator, this agent is consulted to determine
     /// the execution strategy for each turn.
-    pub(super) moderator: Option<Arc<dyn Agent<Output = ExecutionModel>>>,
+    pub(super) moderator: Option<Arc<crate::agent::AnyAgent<ExecutionModel>>>,
 }
 
 impl Dialogue {

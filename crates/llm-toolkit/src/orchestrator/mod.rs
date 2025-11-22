@@ -173,12 +173,12 @@ pub struct Orchestrator {
     /// Internal JSON agent for structured strategy generation.
     /// Output type is StrategyMap for generating execution strategies.
     #[cfg(feature = "agent")]
-    internal_json_agent: Box<dyn Agent<Output = StrategyMap>>,
+    internal_json_agent: Box<crate::agent::AnyAgent<StrategyMap>>,
 
     /// Internal string agent for intent generation and redesign decisions.
     /// Output type is String for generating prompts and making decisions.
     #[cfg(feature = "agent")]
-    internal_agent: Box<dyn Agent<Output = String>>,
+    internal_agent: Box<crate::agent::AnyAgent<String>>,
 
     /// The currently active execution strategy.
     strategy_map: Option<StrategyMap>,
@@ -259,8 +259,8 @@ impl Orchestrator {
     #[cfg(feature = "agent")]
     pub fn with_internal_agents(
         blueprint: BlueprintWorkflow,
-        internal_agent: Box<dyn Agent<Output = String>>,
-        internal_json_agent: Box<dyn Agent<Output = StrategyMap>>,
+        internal_agent: Box<crate::agent::AnyAgent<String>>,
+        internal_json_agent: Box<crate::agent::AnyAgent<StrategyMap>>,
     ) -> Self {
         let mut orchestrator = Self {
             blueprint,

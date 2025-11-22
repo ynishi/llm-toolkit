@@ -135,7 +135,7 @@ pub use prompt::{PromptPart, PromptSetError, ToPrompt, ToPromptFor, ToPromptSet}
 pub use retrieval::Document;
 
 #[cfg(feature = "agent")]
-pub use agent::{Agent, AgentError};
+pub use agent::{Agent, AgentError, AnyAgent, ToExpertise};
 
 #[cfg(feature = "agent")]
 pub use agent::persona::{ContextConfig, Persona, PersonaAgent};

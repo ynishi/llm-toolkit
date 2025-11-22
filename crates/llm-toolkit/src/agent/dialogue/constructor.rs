@@ -517,7 +517,7 @@ impl Dialogue {
     where
         T: Agent<Output = ExecutionModel> + 'static,
     {
-        self.moderator = Some(Arc::new(moderator));
+        self.moderator = Some(crate::agent::AnyAgent::arc(moderator));
         self
     }
 

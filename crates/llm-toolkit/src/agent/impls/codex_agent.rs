@@ -422,9 +422,10 @@ impl CliAgent for CodexAgent {
 #[async_trait]
 impl Agent for CodexAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "General-purpose AI assistant powered by Codex CLI, capable of coding, analysis, \
+    fn expertise(&self) -> &Self::Expertise {
+        &"General-purpose AI assistant powered by Codex CLI, capable of coding, analysis, \
          research, and autonomous task execution with sandbox support"
     }
 

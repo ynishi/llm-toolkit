@@ -343,9 +343,10 @@ impl CliAgent for GeminiAgent {
 #[async_trait]
 impl Agent for GeminiAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "General-purpose AI assistant powered by Google Gemini, capable of coding, analysis, and research tasks"
+    fn expertise(&self) -> &Self::Expertise {
+        &"General-purpose AI assistant powered by Google Gemini, capable of coding, analysis, and research tasks"
     }
 
     #[instrument(skip(self, intent), fields(
