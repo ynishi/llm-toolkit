@@ -366,8 +366,8 @@ impl Orchestrator {
     /// ```
     #[cfg(feature = "agent")]
     pub fn with_detection_mode(mut self, mode: DetectionMode) -> Self {
-        use crate::agent::{AgentBasedDetector, RuleBasedDetector};
         use crate::agent::impls::RetryAgent;
+        use crate::agent::{AgentBasedDetector, RuleBasedDetector};
 
         self.config.detection_mode = mode;
 
@@ -409,8 +409,8 @@ impl Orchestrator {
         #[cfg(feature = "agent")]
         {
             // Re-instantiate detector if detection_mode changed
-            use crate::agent::{AgentBasedDetector, RuleBasedDetector};
             use crate::agent::impls::RetryAgent;
+            use crate::agent::{AgentBasedDetector, RuleBasedDetector};
 
             self.detector = match config.detection_mode {
                 DetectionMode::None => None,

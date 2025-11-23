@@ -4,11 +4,11 @@
 //! (typically a lightweight LLM like Haiku) to perform semantic analysis of Payload
 //! contents and infer high-level context.
 
+use super::Agent;
 use super::context_detector::ContextDetector;
 use super::detected_context::{ConfidenceScores, DetectedContext};
 use super::error::AgentError;
 use super::payload::{Payload, PayloadContent};
-use super::Agent;
 use crate::context::TaskHealth;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -219,18 +219,21 @@ Respond with JSON only, no additional text.
 
     /// Builds the detection prompt from request.
     fn build_prompt(&self, request: &DetectionRequest) -> String {
-        let template = self.prompt_template.as_deref()
+        let template = self
+            .prompt_template
+            .as_deref()
             .unwrap_or(Self::default_prompt());
 
-        let request_json = serde_json::to_string_pretty(request)
-            .unwrap_or_else(|_| format!("{:?}", request));
+        let request_json =
+            serde_json::to_string_pretty(request).unwrap_or_else(|_| format!("{:?}", request));
 
         template.replace("{request}", &request_json)
     }
 
     /// Extracts text content from payload.
     fn extract_text_content(&self, payload: &Payload) -> String {
-        payload.contents()
+        payload
+            .contents()
             .iter()
             .filter_map(|c| match c {
                 PayloadContent::Text(t) => Some(t.as_str()),
@@ -248,8 +251,7 @@ Respond with JSON only, no additional text.
                 redesign_count: env.redesign_count,
                 has_journal: env.journal_summary.is_some(),
                 success_rate: env.journal_summary.as_ref().map(|j| j.success_rate),
-                consecutive_failures: env.journal_summary.as_ref()
-                    .map(|j| j.consecutive_failures),
+                consecutive_failures: env.journal_summary.as_ref().map(|j| j.consecutive_failures),
                 strategy_phase: env.strategy_phase.clone(),
             }
         } else {
@@ -265,13 +267,13 @@ Respond with JSON only, no additional text.
 
     /// Builds detected context summary from existing context.
     fn build_detected_summary(&self, payload: &Payload) -> Option<DetectedContextSummary> {
-        payload.latest_detected_context().map(|detected| {
-            DetectedContextSummary {
+        payload
+            .latest_detected_context()
+            .map(|detected| DetectedContextSummary {
                 task_type: detected.task_type.clone(),
                 task_health: detected.task_health.map(|h| format!("{:?}", h)),
                 user_states: detected.user_states.clone(),
-            }
-        })
+            })
     }
 
     /// Parses TaskHealth from string.
@@ -303,15 +305,15 @@ where
         let detection_payload = Payload::text(prompt);
 
         // Execute agent
-        let agent_output = self.inner_agent
-            .execute(detection_payload)
-            .await?;
+        let agent_output = self.inner_agent.execute(detection_payload).await?;
 
         // Parse response (Agent returns String, parse as JSON)
-        let response: DetectionResponse = serde_json::from_str(&agent_output)
-            .map_err(|e| AgentError::ExecutionFailed(format!(
-                "Failed to parse detection response: {}. Output: {}", e, agent_output
-            )))?;
+        let response: DetectionResponse = serde_json::from_str(&agent_output).map_err(|e| {
+            AgentError::ExecutionFailed(format!(
+                "Failed to parse detection response: {}. Output: {}",
+                e, agent_output
+            ))
+        })?;
 
         // Build DetectedContext from response
         let mut detected = DetectedContext::new();
@@ -320,10 +322,10 @@ where
             detected = detected.with_task_type(task_type);
         }
 
-        if let Some(ref health_str) = response.task_health {
-            if let Some(health) = self.parse_task_health(health_str) {
-                detected = detected.with_task_health(health);
-            }
+        if let Some(ref health_str) = response.task_health
+            && let Some(health) = self.parse_task_health(health_str)
+        {
+            detected = detected.with_task_health(health);
         }
 
         for state in response.user_states {
@@ -383,12 +385,13 @@ mod tests {
             reasoning: Some("Test reasoning".to_string()),
         };
 
-        let agent = MockAgent { response: mock_response };
+        let agent = MockAgent {
+            response: mock_response,
+        };
         let detector = AgentBasedDetector::new(agent);
 
         let env = EnvContext::new().with_redesign_count(3);
-        let payload = Payload::text("Review this security code")
-            .with_env_context(env);
+        let payload = Payload::text("Review this security code").with_env_context(env);
 
         let detected = detector.detect(&payload).await.unwrap();
 
@@ -415,11 +418,13 @@ mod tests {
             reasoning: None,
         };
 
-        let agent = MockAgent { response: mock_response };
+        let agent = MockAgent {
+            response: mock_response,
+        };
         let detector = AgentBasedDetector::new(agent);
 
-        let payload = Payload::text("This bug keeps coming back!")
-            .with_detected_context(existing_detected);
+        let payload =
+            Payload::text("This bug keeps coming back!").with_detected_context(existing_detected);
 
         let detected = detector.detect(&payload).await.unwrap();
 
