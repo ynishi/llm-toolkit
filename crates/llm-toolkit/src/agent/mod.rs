@@ -244,6 +244,9 @@ pub mod dialogue;
 #[cfg(feature = "agent")]
 pub mod expertise;
 
+#[cfg(feature = "agent")]
+pub mod expertise_agent;
+
 /// Defines the execution profile for an agent, controlling its behavior.
 ///
 /// This enum provides a semantic way to configure agents for different tasks
@@ -261,6 +264,8 @@ pub enum ExecutionProfile {
 
 pub use capability::Capability;
 pub use error::AgentError;
+#[cfg(feature = "agent")]
+pub use expertise_agent::ExpertiseAgent;
 pub use payload::{Payload, PayloadContent};
 #[cfg(feature = "agent")]
 pub use payload_message::{

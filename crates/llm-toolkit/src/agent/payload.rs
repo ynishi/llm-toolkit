@@ -10,6 +10,9 @@ use crate::retrieval::Document;
 use std::fmt;
 use std::sync::Arc;
 
+#[cfg(feature = "agent")]
+use super::expertise::RenderContext;
+
 /// Content that can be included in a payload.
 ///
 /// This enum allows agents to receive different types of input,
@@ -55,6 +58,15 @@ pub enum PayloadContent {
 #[derive(Debug, Clone, PartialEq)]
 struct PayloadInner {
     contents: Vec<PayloadContent>,
+
+    /// Runtime context for expertise rendering (not serialized)
+    ///
+    /// This is used by ExpertiseAgent to determine which knowledge fragments
+    /// should be included and how they should be prioritized during prompt generation.
+    ///
+    /// Separate from `PayloadContent::Context` which is for LLM-visible natural language context.
+    #[cfg(feature = "agent")]
+    render_context: Option<RenderContext>,
 }
 
 /// A multi-modal payload that can contain multiple content items.
@@ -87,6 +99,8 @@ impl Payload {
         Self {
             inner: Arc::new(PayloadInner {
                 contents: Vec::new(),
+                #[cfg(feature = "agent")]
+                render_context: None,
             }),
         }
     }
@@ -96,6 +110,8 @@ impl Payload {
         Self {
             inner: Arc::new(PayloadInner {
                 contents: vec![PayloadContent::Text(text.into())],
+                #[cfg(feature = "agent")]
+                render_context: None,
             }),
         }
     }
@@ -115,6 +131,8 @@ impl Payload {
         Self {
             inner: Arc::new(PayloadInner {
                 contents: vec![PayloadContent::Attachment(attachment)],
+                #[cfg(feature = "agent")]
+                render_context: None,
             }),
         }
     }
@@ -168,14 +186,21 @@ impl Payload {
         })
     }
 
+    /// Helper: Creates a new PayloadInner from contents while preserving render_context
+    fn create_inner(&self, contents: Vec<PayloadContent>) -> PayloadInner {
+        PayloadInner {
+            contents,
+            #[cfg(feature = "agent")]
+            render_context: self.inner.render_context.clone(),
+        }
+    }
+
     /// Adds text content to this payload.
     pub fn with_text(self, text: impl Into<String>) -> Self {
         let mut new_contents = self.inner.contents.clone();
         new_contents.push(PayloadContent::Text(text.into()));
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -185,9 +210,7 @@ impl Payload {
         new_contents.retain(|c| !matches!(c, PayloadContent::Text(_)));
         new_contents.push(PayloadContent::Text(text.into()));
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -206,9 +229,7 @@ impl Payload {
         let mut new_contents = self.inner.contents.clone();
         new_contents.push(PayloadContent::Attachment(attachment));
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -233,9 +254,7 @@ impl Payload {
         let mut new_contents = self.inner.contents.clone();
         new_contents.push(PayloadContent::Document(document));
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -261,9 +280,7 @@ impl Payload {
         let mut new_contents = self.inner.contents.clone();
         new_contents.extend(documents.into_iter().map(PayloadContent::Document));
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -286,9 +303,7 @@ impl Payload {
         let mut new_contents = self.inner.contents.clone();
         new_contents.insert(0, PayloadContent::Text(text.into()));
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -321,9 +336,7 @@ impl Payload {
             },
         );
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -339,9 +352,7 @@ impl Payload {
             .collect::<Vec<PayloadContent>>();
         new_messages.append(&mut new_contents);
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_messages,
-            }),
+            inner: Arc::new(self.create_inner(new_messages)),
         }
     }
 
@@ -375,9 +386,7 @@ impl Payload {
             metadata,
         });
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -420,9 +429,7 @@ impl Payload {
         let mut new_contents = self.inner.contents.clone();
         new_contents.extend(other.contents().iter().cloned());
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -450,9 +457,7 @@ impl Payload {
             metadata: MessageMetadata::default(),
         });
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -480,7 +485,11 @@ impl Payload {
             .collect();
 
         Self {
-            inner: Arc::new(PayloadInner { contents }),
+            inner: Arc::new(PayloadInner {
+                contents,
+                #[cfg(feature = "agent")]
+                render_context: None,
+            }),
         }
     }
 
@@ -510,9 +519,7 @@ impl Payload {
         let mut new_contents = self.inner.contents.clone();
         new_contents.push(PayloadContent::Participants(participants));
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -687,6 +694,10 @@ impl Payload {
     ///
     /// PersonaAgent will place this context strategically based on conversation length.
     ///
+    /// **Note**: This is for LLM-visible natural language context. For structured context
+    /// that controls expertise rendering, use `with_render_context()` or the builder methods
+    /// `with_task_type()`, `with_user_state()`, `with_task_health()`.
+    ///
     /// # Examples
     ///
     /// ```rust,ignore
@@ -699,9 +710,7 @@ impl Payload {
         let mut new_contents = self.inner.contents.clone();
         new_contents.push(PayloadContent::Context(context.into()));
         Self {
-            inner: Arc::new(PayloadInner {
-                contents: new_contents,
-            }),
+            inner: Arc::new(self.create_inner(new_contents)),
         }
     }
 
@@ -727,6 +736,127 @@ impl Payload {
                 _ => None,
             })
             .collect()
+    }
+
+    // ============================================================================
+    // RenderContext builder methods (for ExpertiseAgent)
+    // ============================================================================
+
+    /// Sets the render context explicitly.
+    ///
+    /// This is used by ExpertiseAgent to determine which knowledge fragments
+    /// should be included during prompt generation.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::agent::expertise::RenderContext;
+    /// use llm_toolkit::TaskHealth;
+    ///
+    /// let context = RenderContext::new()
+    ///     .with_task_type("security-review")
+    ///     .with_task_health(TaskHealth::AtRisk);
+    ///
+    /// let payload = Payload::text("Review this code")
+    ///     .with_render_context(context);
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn with_render_context(self, context: RenderContext) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.render_context = Some(context);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Returns the render context if present.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// let payload = Payload::text("Task")
+    ///     .with_task_type("security-review");
+    ///
+    /// if let Some(context) = payload.render_context() {
+    ///     println!("Task type: {:?}", context.task_type);
+    /// }
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn render_context(&self) -> Option<&RenderContext> {
+        self.inner.render_context.as_ref()
+    }
+
+    /// Adds a task type to the render context.
+    ///
+    /// This is a convenience method for building render context incrementally.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// let payload = Payload::text("Review this code")
+    ///     .with_task_type("security-review");
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn with_task_type(self, task_type: impl Into<String>) -> Self {
+        let context = self
+            .inner
+            .render_context
+            .clone()
+            .unwrap_or_default()
+            .with_task_type(task_type);
+        self.with_render_context(context)
+    }
+
+    /// Adds a user state to the render context.
+    ///
+    /// This is a convenience method for building render context incrementally.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// let payload = Payload::text("Explain this concept")
+    ///     .with_user_state("beginner");
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn with_user_state(self, state: impl Into<String>) -> Self {
+        let context = self
+            .inner
+            .render_context
+            .clone()
+            .unwrap_or_default()
+            .with_user_state(state);
+        self.with_render_context(context)
+    }
+
+    /// Sets the task health in the render context.
+    ///
+    /// This is a convenience method for building render context incrementally.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    /// use llm_toolkit::TaskHealth;
+    ///
+    /// let payload = Payload::text("Debug this issue")
+    ///     .with_task_health(TaskHealth::AtRisk);
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn with_task_health(self, health: crate::context::TaskHealth) -> Self {
+        let context = self
+            .inner
+            .render_context
+            .clone()
+            .unwrap_or_default()
+            .with_task_health(health);
+        self.with_render_context(context)
     }
 }
 
