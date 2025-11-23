@@ -11,9 +11,11 @@ struct SimpleAgent {
 #[async_trait]
 impl Agent for SimpleAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Simple agent"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Simple agent";
+        &EXPERTISE
     }
 
     fn name(&self) -> String {

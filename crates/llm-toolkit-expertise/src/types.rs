@@ -21,12 +21,16 @@ pub struct Expertise {
     /// Version string
     pub version: String,
 
-    /// Lightweight catalog description for Orchestrator routing
+    /// Optional lightweight catalog description for Orchestrator routing
     ///
     /// This is a concise (1-2 sentence) summary used by orchestrators to select
     /// the appropriate agent. The full expertise details are rendered via `to_prompt()`
     /// for LLM consumption.
-    pub description: String,
+    ///
+    /// If not provided, it will be auto-generated from the first fragment content
+    /// (typically starts with "You are XXX" or "XXX Agent...").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 
     /// Tags for search and grouping (e.g., ["lang:rust", "role:reviewer", "style:friendly"])
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -38,18 +42,55 @@ pub struct Expertise {
 
 impl Expertise {
     /// Create a new expertise profile
-    pub fn new(
-        id: impl Into<String>,
-        version: impl Into<String>,
-        description: impl Into<String>,
-    ) -> Self {
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier for this expertise
+    /// * `version` - Version string (e.g., "1.0.0")
+    ///
+    /// # Description Auto-generation
+    ///
+    /// The `description` field is optional. If not set via [`with_description()`](Self::with_description),
+    /// it will be auto-generated from the first fragment's content when needed.
+    /// Typical patterns include:
+    /// - "You are a Rust expert..."
+    /// - "Senior software engineer specialized in..."
+    /// - "Code reviewer with focus on..."
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use llm_toolkit_expertise::Expertise;
+    ///
+    /// let expertise = Expertise::new("rust-expert", "1.0.0");
+    /// ```
+    pub fn new(id: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             version: version.into(),
-            description: description.into(),
+            description: None,
             tags: Vec::new(),
             content: Vec::new(),
         }
+    }
+
+    /// Set an explicit description for catalog/routing purposes
+    ///
+    /// This overrides the auto-generated description. Use this when you want
+    /// a specific concise summary for orchestrator routing that differs from
+    /// the first fragment's content.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use llm_toolkit_expertise::Expertise;
+    ///
+    /// let expertise = Expertise::new("rust-expert", "1.0.0")
+    ///     .with_description("Expert Rust developer and code reviewer");
+    /// ```
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
     }
 
     /// Add a tag
@@ -68,6 +109,57 @@ impl Expertise {
     pub fn with_fragment(mut self, fragment: WeightedFragment) -> Self {
         self.content.push(fragment);
         self
+    }
+
+    /// Get the description, auto-generating if not explicitly set
+    ///
+    /// If no explicit description was set via [`with_description()`](Self::with_description),
+    /// this method generates one from the first fragment's content. It extracts the first
+    /// ~100 characters, which typically captures patterns like:
+    /// - "You are a Rust expert..."
+    /// - "Senior software engineer specialized in..."
+    ///
+    /// Returns an empty string if there are no fragments.
+    pub fn get_description(&self) -> String {
+        if let Some(desc) = &self.description {
+            return desc.clone();
+        }
+
+        // Auto-generate from first fragment
+        if let Some(first_fragment) = self.content.first() {
+            let content = match &first_fragment.fragment {
+                KnowledgeFragment::Text(text) => text.clone(),
+                KnowledgeFragment::Logic { instruction, .. } => instruction.clone(),
+                KnowledgeFragment::Guideline { rule, .. } => rule.clone(),
+                KnowledgeFragment::QualityStandard { criteria, .. } => {
+                    criteria.first().cloned().unwrap_or_else(|| format!("{} v{}", self.id, self.version))
+                }
+                _ => {
+                    // For ToolDefinition and other types, look for next usable fragment
+                    self.content
+                        .iter()
+                        .skip(1)
+                        .find_map(|wf| match &wf.fragment {
+                            KnowledgeFragment::Text(t) => Some(t.clone()),
+                            KnowledgeFragment::Logic { instruction, .. } => Some(instruction.clone()),
+                            KnowledgeFragment::Guideline { rule, .. } => Some(rule.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| format!("{} v{}", self.id, self.version))
+                }
+            };
+
+            // Take first ~100 chars or first sentence
+            let truncated = content.chars().take(100).collect::<String>();
+            if truncated.len() < content.len() {
+                format!("{}...", truncated.trim_end())
+            } else {
+                truncated
+            }
+        } else {
+            // No fragments, use id/version
+            format!("{} v{}", self.id, self.version)
+        }
     }
 
     /// Extract tool definitions as capability names
@@ -340,7 +432,8 @@ mod tests {
 
     #[test]
     fn test_expertise_builder() {
-        let expertise = Expertise::new("test", "1.0", "Test description")
+        let expertise = Expertise::new("test", "1.0")
+            .with_description("Test description")
             .with_tag("test-tag")
             .with_fragment(WeightedFragment::new(KnowledgeFragment::Text(
                 "Test content".to_string(),
@@ -348,14 +441,14 @@ mod tests {
 
         assert_eq!(expertise.id, "test");
         assert_eq!(expertise.version, "1.0");
-        assert_eq!(expertise.description, "Test description");
+        assert_eq!(expertise.description, Some("Test description".to_string()));
         assert_eq!(expertise.tags.len(), 1);
         assert_eq!(expertise.content.len(), 1);
     }
 
     #[test]
     fn test_to_prompt_ordering() {
-        let expertise = Expertise::new("test", "1.0", "Test ordering")
+        let expertise = Expertise::new("test", "1.0")
             .with_fragment(
                 WeightedFragment::new(KnowledgeFragment::Text("Low priority".to_string()))
                     .with_priority(Priority::Low),
@@ -382,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_context_filtering() {
-        let expertise = Expertise::new("test", "1.0", "Context test")
+        let expertise = Expertise::new("test", "1.0")
             .with_fragment(
                 WeightedFragment::new(KnowledgeFragment::Text("Always visible".to_string()))
                     .with_context(ContextProfile::Always),
@@ -410,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_to_tree() {
-        let expertise = Expertise::new("test", "1.0", "Tree test")
+        let expertise = Expertise::new("test", "1.0")
             .with_tag("test-tag")
             .with_fragment(WeightedFragment::new(KnowledgeFragment::Text(
                 "Test content".to_string(),
@@ -424,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_to_mermaid() {
-        let expertise = Expertise::new("test", "1.0", "Mermaid test").with_fragment(WeightedFragment::new(
+        let expertise = Expertise::new("test", "1.0").with_fragment(WeightedFragment::new(
             KnowledgeFragment::Text("Test content".to_string()),
         ));
 

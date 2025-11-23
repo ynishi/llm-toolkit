@@ -22,7 +22,15 @@ impl ToPrompt for Expertise {
 
 impl ToExpertise for Expertise {
     fn description(&self) -> &str {
-        &self.description
+        // If explicit description exists, return it
+        if let Some(desc) = &self.description {
+            return desc;
+        }
+
+        // Fallback to id if no description is set
+        // Note: For richer auto-generation, users should call get_description() explicitly
+        // or set description via with_description()
+        &self.id
     }
 
     fn capabilities(&self) -> Vec<Capability> {
@@ -41,7 +49,7 @@ mod tests {
 
     #[test]
     fn test_to_prompt_trait() {
-        let expertise = Expertise::new("test", "1.0", "Test desc").with_fragment(WeightedFragment::new(
+        let expertise = Expertise::new("test", "1.0").with_fragment(WeightedFragment::new(
             KnowledgeFragment::Text("Test content".to_string()),
         ));
 
@@ -52,7 +60,7 @@ mod tests {
 
     #[test]
     fn test_to_prompt_parts() {
-        let expertise = Expertise::new("test", "1.0", "Test desc").with_fragment(WeightedFragment::new(
+        let expertise = Expertise::new("test", "1.0").with_fragment(WeightedFragment::new(
             KnowledgeFragment::Text("Test content".to_string()),
         ));
 
@@ -65,5 +73,26 @@ mod tests {
             }
             _ => panic!("Expected Text PromptPart"),
         }
+    }
+
+    #[test]
+    fn test_auto_description() {
+        // No explicit description - should fallback to id
+        let expertise = Expertise::new("test-agent", "1.0");
+        assert_eq!(expertise.description(), "test-agent");
+
+        // With explicit description
+        let expertise_with_desc = Expertise::new("test-agent", "1.0")
+            .with_description("A test agent");
+        assert_eq!(expertise_with_desc.description(), "A test agent");
+
+        // get_description() auto-generates from first fragment
+        let expertise_with_fragment = Expertise::new("test-agent", "1.0")
+            .with_fragment(WeightedFragment::new(
+                KnowledgeFragment::Text("You are a helpful assistant specialized in Rust programming. You provide clear, concise, and accurate answers.".to_string()),
+            ));
+        let auto_desc = expertise_with_fragment.get_description();
+        assert!(auto_desc.starts_with("You are a helpful assistant"));
+        assert!(auto_desc.len() <= 103); // ~100 chars + "..."
     }
 }

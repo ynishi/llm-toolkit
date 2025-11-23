@@ -81,9 +81,11 @@ impl MockCalculatorAgent {
 #[async_trait::async_trait]
 impl Agent for MockCalculatorAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock calculator agent for demonstration"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock calculator agent for demonstration";
+        &EXPERTISE
     }
 
     async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {

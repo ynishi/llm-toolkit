@@ -48,9 +48,11 @@ impl VectorStoreAgent {
 impl Agent for VectorStoreAgent {
     // KEY: Retriever agents return Vec<Document>
     type Output = Vec<Document>;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Semantic search over programming language documentation"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Semantic search over programming language documentation";
+        &EXPERTISE
     }
 
     async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
@@ -102,9 +104,11 @@ struct MockLLMAgent;
 #[async_trait]
 impl Agent for MockLLMAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Answering questions about programming languages"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Answering questions about programming languages";
+        &EXPERTISE
     }
 
     async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {

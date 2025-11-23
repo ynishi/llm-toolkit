@@ -53,7 +53,7 @@ impl Default for TaskGeneratorAgent {
 }
 
 impl TaskGeneratorAgent {
-    fn get_expertise() -> &'static str {
+    fn get_expertise() -> &'static String {
         static EXPERTISE: OnceLock<String> = OnceLock::new();
         EXPERTISE.get_or_init(|| {
             let priority_schema = Priority::prompt_schema();
@@ -80,8 +80,9 @@ IMPORTANT: Respond with valid JSON matching the Task schema above."#,
 #[async_trait::async_trait]
 impl Agent for TaskGeneratorAgent {
     type Output = Task;
+    type Expertise = String;
 
-    fn expertise(&self) -> &str {
+    fn expertise(&self) -> &String {
         Self::get_expertise()
     }
 

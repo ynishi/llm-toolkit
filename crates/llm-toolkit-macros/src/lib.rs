@@ -5311,8 +5311,14 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
     let enhanced_expertise = match &expertise {
         ExpertiseValue::String(expertise_str) => {
             if is_string_output {
-                // Plain text output - no JSON enforcement
-                quote! { #expertise_str }
+                // Plain text output - no JSON enforcement, but need to return &String
+                quote! {
+                    {
+                        use std::sync::OnceLock;
+                        static EXPERTISE_CACHE: OnceLock<String> = OnceLock::new();
+                        EXPERTISE_CACHE.get_or_init(|| String::from(#expertise_str))
+                    }
+                }
             } else {
                 // Structured output with string expertise
                 let type_name = quote!(#output_type).to_string();
@@ -5342,7 +5348,7 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                                     schema
                                 )
                             }
-                        }).as_str()
+                        })
                     }
                 }
             }
