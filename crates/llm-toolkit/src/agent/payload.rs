@@ -13,6 +13,12 @@ use std::sync::Arc;
 #[cfg(feature = "agent")]
 use super::expertise::RenderContext;
 
+#[cfg(feature = "agent")]
+use super::execution_context::ExecutionContext;
+
+#[cfg(feature = "agent")]
+use super::detected_context::DetectedContext;
+
 /// Content that can be included in a payload.
 ///
 /// This enum allows agents to receive different types of input,
@@ -67,6 +73,20 @@ struct PayloadInner {
     /// Separate from `PayloadContent::Context` which is for LLM-visible natural language context.
     #[cfg(feature = "agent")]
     render_context: Option<RenderContext>,
+
+    /// Raw execution context from orchestrator layer (not serialized)
+    ///
+    /// Contains factual runtime information like step info, journal summary,
+    /// and redesign count. Used by context detectors to infer higher-level context.
+    #[cfg(feature = "agent")]
+    execution_context: Option<ExecutionContext>,
+
+    /// Detected context from analysis layers (not serialized)
+    ///
+    /// Contains inferred information like task_type, task_health, and user_states.
+    /// Progressively enriched by multiple detector layers (rule-based → LLM-based).
+    #[cfg(feature = "agent")]
+    detected_context: Option<DetectedContext>,
 }
 
 /// A multi-modal payload that can contain multiple content items.
@@ -101,6 +121,10 @@ impl Payload {
                 contents: Vec::new(),
                 #[cfg(feature = "agent")]
                 render_context: None,
+                #[cfg(feature = "agent")]
+                execution_context: None,
+                #[cfg(feature = "agent")]
+                detected_context: None,
             }),
         }
     }
@@ -112,6 +136,10 @@ impl Payload {
                 contents: vec![PayloadContent::Text(text.into())],
                 #[cfg(feature = "agent")]
                 render_context: None,
+                #[cfg(feature = "agent")]
+                execution_context: None,
+                #[cfg(feature = "agent")]
+                detected_context: None,
             }),
         }
     }
@@ -133,6 +161,10 @@ impl Payload {
                 contents: vec![PayloadContent::Attachment(attachment)],
                 #[cfg(feature = "agent")]
                 render_context: None,
+                #[cfg(feature = "agent")]
+                execution_context: None,
+                #[cfg(feature = "agent")]
+                detected_context: None,
             }),
         }
     }
@@ -186,12 +218,16 @@ impl Payload {
         })
     }
 
-    /// Helper: Creates a new PayloadInner from contents while preserving render_context
+    /// Helper: Creates a new PayloadInner from contents while preserving all contexts
     fn create_inner(&self, contents: Vec<PayloadContent>) -> PayloadInner {
         PayloadInner {
             contents,
             #[cfg(feature = "agent")]
             render_context: self.inner.render_context.clone(),
+            #[cfg(feature = "agent")]
+            execution_context: self.inner.execution_context.clone(),
+            #[cfg(feature = "agent")]
+            detected_context: self.inner.detected_context.clone(),
         }
     }
 
@@ -489,6 +525,10 @@ impl Payload {
                 contents,
                 #[cfg(feature = "agent")]
                 render_context: None,
+                #[cfg(feature = "agent")]
+                execution_context: None,
+                #[cfg(feature = "agent")]
+                detected_context: None,
             }),
         }
     }
@@ -857,6 +897,151 @@ impl Payload {
             .unwrap_or_default()
             .with_task_health(health);
         self.with_render_context(context)
+    }
+
+    // ============================================================================
+    // ExecutionContext methods (for Orchestrator injection)
+    // ============================================================================
+
+    /// Sets the execution context from orchestrator.
+    ///
+    /// This contains raw runtime information like step info, journal summary,
+    /// and redesign count. Used by context detectors to infer higher-level context.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::{Payload, ExecutionContext, StepInfo};
+    ///
+    /// let exec_ctx = ExecutionContext::new()
+    ///     .with_step_info(StepInfo::new("step_1", "Analyze code", "AnalyzerAgent"))
+    ///     .with_redesign_count(2);
+    ///
+    /// let payload = Payload::text("Analyze this code")
+    ///     .with_execution_context(exec_ctx);
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn with_execution_context(self, context: ExecutionContext) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.execution_context = Some(context);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Returns the execution context if present.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// if let Some(exec_ctx) = payload.execution_context() {
+    ///     println!("Redesign count: {}", exec_ctx.redesign_count);
+    /// }
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn execution_context(&self) -> Option<&ExecutionContext> {
+        self.inner.execution_context.as_ref()
+    }
+
+    // ============================================================================
+    // DetectedContext methods (for layered detection)
+    // ============================================================================
+
+    /// Sets the detected context from detector analysis.
+    ///
+    /// For layered detection, use the `merge()` pattern to progressively
+    /// enrich the detected context:
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::{Payload, DetectedContext};
+    /// use llm_toolkit::TaskHealth;
+    ///
+    /// // Layer 1: Rule-based detection
+    /// let detected1 = DetectedContext::new()
+    ///     .with_task_health(TaskHealth::AtRisk)
+    ///     .detected_by("RuleBasedDetector");
+    ///
+    /// let payload = Payload::text("Review code")
+    ///     .with_detected_context(detected1);
+    ///
+    /// // Layer 2: LLM-based enrichment
+    /// let detected2 = DetectedContext::new()
+    ///     .with_user_state("confused")
+    ///     .detected_by("LLMDetector");
+    ///
+    /// // Merge with existing
+    /// let merged = payload.detected_context()
+    ///     .cloned()
+    ///     .unwrap_or_default()
+    ///     .merge(detected2);
+    ///
+    /// let payload = payload.with_detected_context(merged);
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn with_detected_context(self, context: DetectedContext) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.detected_context = Some(context);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Returns the detected context if present.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// if let Some(detected) = payload.detected_context() {
+    ///     println!("Task health: {:?}", detected.task_health);
+    ///     println!("Detected by: {:?}", detected.detected_by);
+    /// }
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn detected_context(&self) -> Option<&DetectedContext> {
+        self.inner.detected_context.as_ref()
+    }
+
+    /// Merges additional detected context into existing detected context.
+    ///
+    /// This is a convenience method for layered detection. If no detected context
+    /// exists yet, the provided context becomes the initial detected context.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::{Payload, DetectedContext};
+    ///
+    /// let payload = Payload::text("Review code");
+    ///
+    /// // Layer 1
+    /// let layer1 = DetectedContext::new()
+    ///     .with_task_type("security-review")
+    ///     .detected_by("Layer1");
+    /// let payload = payload.merge_detected_context(layer1);
+    ///
+    /// // Layer 2
+    /// let layer2 = DetectedContext::new()
+    ///     .with_user_state("beginner")
+    ///     .detected_by("Layer2");
+    /// let payload = payload.merge_detected_context(layer2);
+    ///
+    /// // Result: contains both task_type and user_state
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn merge_detected_context(self, context: DetectedContext) -> Self {
+        let merged = self
+            .inner
+            .detected_context
+            .clone()
+            .unwrap_or_default()
+            .merge(context);
+        self.with_detected_context(merged)
     }
 }
 

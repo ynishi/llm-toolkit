@@ -247,6 +247,18 @@ pub mod expertise;
 #[cfg(feature = "agent")]
 pub mod expertise_agent;
 
+#[cfg(feature = "agent")]
+pub mod env_context;
+
+#[cfg(feature = "agent")]
+pub mod detected_context;
+
+#[cfg(feature = "agent")]
+pub mod execution_context;
+
+#[cfg(feature = "agent")]
+pub mod context_detector;
+
 /// Defines the execution profile for an agent, controlling its behavior.
 ///
 /// This enum provides a semantic way to configure agents for different tasks
@@ -272,6 +284,18 @@ pub use payload_message::{
     PayloadMessage, RelatedParticipant, RelatedPayloadMessage, SpeakerRelation,
     participant_relation,
 };
+
+#[cfg(feature = "agent")]
+pub use env_context::{EnvContext, JournalSummary, StepInfo};
+
+#[cfg(feature = "agent")]
+pub use detected_context::{ConfidenceScores, DetectedContext};
+
+#[cfg(feature = "agent")]
+pub use execution_context::{ExecutionContext, ExecutionContextExt};
+
+#[cfg(feature = "agent")]
+pub use context_detector::{ContextDetector, DetectContextExt};
 
 use crate::prompt::ToPrompt;
 use async_trait::async_trait;

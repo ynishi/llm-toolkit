@@ -22,7 +22,7 @@ use crate::context::{ContextProfile, TaskHealth};
 ///     .with_user_state("beginner")
 ///     .with_task_health(TaskHealth::AtRisk);
 /// ```
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RenderContext {
     /// Current task type (e.g., "security-review", "code-review", "debug")
     pub task_type: Option<String>,
