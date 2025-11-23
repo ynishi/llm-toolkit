@@ -124,79 +124,7 @@ pub enum ContextProfile {
     },
 }
 
-impl ContextProfile {
-    /// Check if this context profile matches the given context
-    ///
-    /// **Note**: This method uses the legacy `ContextMatcher` API.
-    /// It will be updated to use `RenderContext` in the next phase.
-    pub fn matches(&self, context: &ContextMatcher) -> bool {
-        match self {
-            ContextProfile::Always => true,
-            ContextProfile::Conditional {
-                task_types,
-                user_states,
-                task_health,
-            } => {
-                let task_match = task_types.is_empty()
-                    || context
-                        .task_type
-                        .as_ref()
-                        .map(|t| task_types.contains(t))
-                        .unwrap_or(false);
 
-                let user_match = user_states.is_empty()
-                    || context
-                        .user_state
-                        .as_ref()
-                        .map(|s| user_states.contains(s))
-                        .unwrap_or(false);
-
-                let health_match = task_health
-                    .as_ref()
-                    .map(|h| context.task_health.as_ref() == Some(h))
-                    .unwrap_or(true);
-
-                task_match && user_match && health_match
-            }
-        }
-    }
-}
-
-/// ContextMatcher: Runtime context for matching conditional fragments (Legacy)
-///
-/// **Deprecated**: This type will be removed in favor of `RenderContext`.
-/// Used to evaluate whether conditional fragments should be activated.
-#[derive(Debug, Clone, Default)]
-pub struct ContextMatcher {
-    pub task_type: Option<String>,
-    pub user_state: Option<String>,
-    pub task_health: Option<TaskHealth>,
-}
-
-impl ContextMatcher {
-    /// Create a new context matcher
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set task type
-    pub fn with_task_type(mut self, task_type: impl Into<String>) -> Self {
-        self.task_type = Some(task_type.into());
-        self
-    }
-
-    /// Set user state
-    pub fn with_user_state(mut self, user_state: impl Into<String>) -> Self {
-        self.user_state = Some(user_state.into());
-        self
-    }
-
-    /// Set task health
-    pub fn with_task_health(mut self, task_health: TaskHealth) -> Self {
-        self.task_health = Some(task_health);
-        self
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -217,30 +145,4 @@ mod tests {
         assert_eq!(Priority::Low.weight(), 1);
     }
 
-    #[test]
-    fn test_context_always_matches() {
-        let profile = ContextProfile::Always;
-        let context = ContextMatcher::new();
-        assert!(profile.matches(&context));
-    }
-
-    #[test]
-    fn test_context_conditional_matching() {
-        let profile = ContextProfile::Conditional {
-            task_types: vec!["Debug".to_string()],
-            user_states: vec![],
-            task_health: Some(TaskHealth::AtRisk),
-        };
-
-        let matching_context = ContextMatcher::new()
-            .with_task_type("Debug")
-            .with_task_health(TaskHealth::AtRisk);
-
-        let non_matching_context = ContextMatcher::new()
-            .with_task_type("Review")
-            .with_task_health(TaskHealth::OnTrack);
-
-        assert!(profile.matches(&matching_context));
-        assert!(!profile.matches(&non_matching_context));
-    }
 }

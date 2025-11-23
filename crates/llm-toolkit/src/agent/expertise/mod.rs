@@ -98,7 +98,7 @@ pub mod render;
 pub use fragment::{Anchor, KnowledgeFragment};
 pub use render::{ContextualPrompt, RenderContext};
 
-use crate::context::{ContextMatcher, ContextProfile, Priority};
+use crate::context::{ContextProfile, Priority};
 use crate::prompt::{PromptPart, ToPrompt};
 use crate::agent::{Capability, ToExpertise};
 use schemars::JsonSchema;
@@ -292,12 +292,12 @@ impl Expertise {
     ///
     /// Fragments are ordered by priority (Critical → High → Normal → Low)
     pub fn to_prompt(&self) -> String {
-        self.to_prompt_with_context(&ContextMatcher::default())
+        self.to_prompt_with_render_context(&RenderContext::default())
     }
 
     /// Generate a prompt string with render context filtering (Phase 2)
     ///
-    /// This is the new context-aware rendering API that supports multiple user states
+    /// This is the context-aware rendering API that supports multiple user states
     /// and improved context matching.
     ///
     /// # Examples
@@ -319,18 +319,6 @@ impl Expertise {
     /// let prompt = expertise.to_prompt_with_render_context(&context);
     /// ```
     pub fn to_prompt_with_render_context(&self, context: &RenderContext) -> String {
-        // Convert RenderContext to ContextMatcher for now
-        // In the future, we can refactor to use RenderContext directly
-        self.to_prompt_with_context(&context.to_context_matcher())
-    }
-
-    /// Generate a prompt string with context filtering (legacy API)
-    ///
-    /// Only includes fragments that match the given context conditions.
-    ///
-    /// **Note**: Consider using `to_prompt_with_render_context()` for the new API
-    /// with improved context matching.
-    pub fn to_prompt_with_context(&self, context: &ContextMatcher) -> String {
         let mut result = format!("# Expertise: {} (v{})\n\n", self.id, self.version);
 
         if !self.tags.is_empty() {
@@ -345,7 +333,7 @@ impl Expertise {
         let mut sorted_fragments: Vec<_> = self
             .content
             .iter()
-            .filter(|f| f.context.matches(context))
+            .filter(|f| context.matches(&f.context))
             .collect();
         sorted_fragments.sort_by(|a, b| b.priority.cmp(&a.priority));
 
@@ -657,13 +645,13 @@ mod tests {
             );
 
         // Without debug context
-        let prompt1 = expertise.to_prompt_with_context(&ContextMatcher::new());
+        let prompt1 = expertise.to_prompt_with_render_context(&RenderContext::new());
         assert!(prompt1.contains("Always visible"));
         assert!(!prompt1.contains("Debug only"));
 
         // With debug context
         let prompt2 =
-            expertise.to_prompt_with_context(&ContextMatcher::new().with_task_type("Debug"));
+            expertise.to_prompt_with_render_context(&RenderContext::new().with_task_type("Debug"));
         assert!(prompt2.contains("Always visible"));
         assert!(prompt2.contains("Debug only"));
     }

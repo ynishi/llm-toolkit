@@ -122,7 +122,7 @@ pub mod agent;
 pub mod orchestrator;
 
 pub use attachment::{Attachment, AttachmentSchema, ToAttachments};
-pub use context::{ContextMatcher, ContextProfile, Priority, TaskHealth};
+pub use context::{ContextProfile, Priority, TaskHealth};
 pub use extract::{FlexibleExtractor, MarkdownCodeBlockExtractor};
 #[cfg(feature = "agent")]
 pub use intent::expandable::{

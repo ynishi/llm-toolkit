@@ -4,7 +4,7 @@
 //! allowing dynamic filtering and ordering of knowledge fragments based
 //! on runtime context.
 
-use crate::context::{ContextMatcher, ContextProfile, TaskHealth};
+use crate::context::{ContextProfile, TaskHealth};
 
 /// Runtime context for prompt rendering
 ///
@@ -153,33 +153,6 @@ impl RenderContext {
         }
     }
 
-    /// Convert to legacy ContextMatcher for backward compatibility
-    ///
-    /// Note: ContextMatcher only supports a single user_state, so the first
-    /// user_state from the Vec will be used.
-    pub fn to_context_matcher(&self) -> ContextMatcher {
-        ContextMatcher {
-            task_type: self.task_type.clone(),
-            user_state: self.user_states.first().cloned(),
-            task_health: self.task_health,
-        }
-    }
-}
-
-/// Convert from legacy ContextMatcher
-impl From<ContextMatcher> for RenderContext {
-    fn from(matcher: ContextMatcher) -> Self {
-        let mut user_states = Vec::new();
-        if let Some(state) = matcher.user_state {
-            user_states.push(state);
-        }
-
-        Self {
-            task_type: matcher.task_type,
-            user_states,
-            task_health: matcher.task_health,
-        }
-    }
 }
 
 /// Context-aware prompt renderer (Phase 2)
