@@ -12,7 +12,7 @@ repository.workspace = true
 
 [features]
 default = []
-integration = ["llm-toolkit"]  # llm-toolkit integration (ToPrompt trait implementation)
+integration = ["llm-toolkit", "llm-toolkit/agent"]  # llm-toolkit integration (ToPrompt trait implementation + Agent trait)
 
 [dependencies]
 serde = { workspace = true }

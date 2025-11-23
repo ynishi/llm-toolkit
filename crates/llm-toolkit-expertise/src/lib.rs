@@ -59,6 +59,46 @@
 //! println!("{}", mermaid);
 //! ```
 //!
+//! ## Context-Aware Rendering
+//!
+//! Phase 2 adds dynamic prompt rendering based on runtime context:
+//!
+//! ```rust
+//! use llm_toolkit_expertise::{
+//!     Expertise, WeightedFragment, KnowledgeFragment,
+//!     RenderContext, ContextualPrompt, Priority, ContextProfile, TaskHealth,
+//! };
+//!
+//! // Create expertise with conditional fragments
+//! let expertise = Expertise::new("rust-tutor", "1.0")
+//!     .with_fragment(
+//!         WeightedFragment::new(KnowledgeFragment::Text(
+//!             "You are a Rust tutor".to_string()
+//!         ))
+//!         .with_context(ContextProfile::Always)
+//!     )
+//!     .with_fragment(
+//!         WeightedFragment::new(KnowledgeFragment::Text(
+//!             "Provide detailed explanations".to_string()
+//!         ))
+//!         .with_context(ContextProfile::Conditional {
+//!             task_types: vec![],
+//!             user_states: vec!["beginner".to_string()],
+//!             task_health: None,
+//!         })
+//!     );
+//!
+//! // Render with context
+//! let beginner_context = RenderContext::new().with_user_state("beginner");
+//! let prompt = expertise.to_prompt_with_render_context(&beginner_context);
+//! // Includes both "Always" and "beginner" fragments
+//!
+//! // Or use ContextualPrompt wrapper
+//! let prompt = ContextualPrompt::from_expertise(&expertise, RenderContext::new())
+//!     .with_user_state("beginner")
+//!     .to_prompt();
+//! ```
+//!
 //! ## JSON Schema
 //!
 //! This library supports JSON Schema generation for expertise definitions:

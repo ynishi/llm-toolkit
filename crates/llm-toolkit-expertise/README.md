@@ -169,6 +169,83 @@ let expertise = Expertise::new("test", "1.0")
 let prompt_part = expertise.to_prompt()?;
 ```
 
+### 🎨 Context-Aware Rendering (Phase 2)
+
+Dynamically filter and render expertise based on runtime context:
+
+```rust
+use llm_toolkit_expertise::{
+    Expertise, WeightedFragment, KnowledgeFragment,
+    RenderContext, ContextualPrompt, Priority, ContextProfile, TaskHealth,
+};
+
+// Create expertise with conditional fragments
+let expertise = Expertise::new("rust-tutor", "1.0")
+    .with_fragment(
+        WeightedFragment::new(KnowledgeFragment::Text(
+            "You are a Rust programming tutor".to_string()
+        ))
+        .with_priority(Priority::High)
+        .with_context(ContextProfile::Always)
+    )
+    .with_fragment(
+        WeightedFragment::new(KnowledgeFragment::Text(
+            "Provide detailed explanations with examples".to_string()
+        ))
+        .with_context(ContextProfile::Conditional {
+            task_types: vec![],
+            user_states: vec!["beginner".to_string()],
+            task_health: None,
+        })
+    )
+    .with_fragment(
+        WeightedFragment::new(KnowledgeFragment::Text(
+            "Focus on advanced patterns and optimizations".to_string()
+        ))
+        .with_context(ContextProfile::Conditional {
+            task_types: vec![],
+            user_states: vec!["expert".to_string()],
+            task_health: None,
+        })
+    );
+
+// Method 1: Direct rendering with context
+let beginner_context = RenderContext::new().with_user_state("beginner");
+let beginner_prompt = expertise.to_prompt_with_render_context(&beginner_context);
+// Contains: base fragment + beginner-specific guidance
+
+// Method 2: ContextualPrompt wrapper (for DTO integration)
+let expert_prompt = ContextualPrompt::from_expertise(&expertise, RenderContext::new())
+    .with_user_state("expert")
+    .to_prompt();
+// Contains: base fragment + expert-specific guidance
+
+// Method 3: DTO pattern integration
+#[derive(Serialize, ToPrompt)]
+#[prompt(template = "# Expertise\n{{expertise}}\n\n# Task\n{{task}}")]
+struct AgentRequest {
+    expertise: String,  // ContextualPrompt.to_prompt() result
+    task: String,
+}
+
+let request = AgentRequest {
+    expertise: ContextualPrompt::from_expertise(
+        &expertise,
+        RenderContext::new().with_user_state("beginner")
+    ).to_prompt(),
+    task: "Explain ownership and borrowing".to_string(),
+};
+
+let final_prompt = request.to_prompt();
+```
+
+**Key Features:**
+- **Dynamic Filtering**: Fragments are included/excluded based on runtime context
+- **Priority Ordering**: Critical → High → Normal → Low in the output
+- **Multiple User States**: Supports checking against multiple simultaneous user states
+- **DTO Integration**: `ContextualPrompt` implements `to_prompt()` for seamless template usage
+- **Backward Compatible**: Existing `to_prompt()` still works (uses empty context)
+
 ### 📋 JSON Schema Generation
 
 Generate JSON Schema for validation and tooling:
@@ -222,10 +299,13 @@ This mirrors how senior engineers adjust their approach based on project health.
 
 ## Roadmap
 
-### Phase 2: Prompt Compiler
-- Dynamic System Prompt generation from weighted fragments
-- Priority-based ordering (Critical first, Low last)
-- Context-aware fragment selection engine
+### ✅ Phase 2: Context-Aware Rendering (Completed)
+- ✅ Dynamic System Prompt generation from weighted fragments
+- ✅ Priority-based ordering (Critical first, Low last)
+- ✅ Context-aware fragment selection engine
+- ✅ `RenderContext` for runtime context management
+- ✅ `ContextualPrompt` wrapper for DTO integration
+- ✅ Backward compatible with legacy `to_prompt()`
 
 ### Phase 3: State Analyzer
 - Conversation history analysis
