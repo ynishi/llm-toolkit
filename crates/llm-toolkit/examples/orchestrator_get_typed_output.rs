@@ -59,8 +59,9 @@ impl MockTypedAgent {
 #[async_trait]
 impl Agent for MockTypedAgent {
     type Output = DataAnalysisResult;
+    type Expertise = String;
 
-    fn expertise(&self) -> &str {
+    fn expertise(&self) -> &String {
         &self.expertise
     }
 
@@ -97,9 +98,11 @@ struct MockStrategyAgent;
 #[async_trait]
 impl Agent for MockStrategyAgent {
     type Output = StrategyMap;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock strategy generator"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock strategy generator";
+        &EXPERTISE
     }
 
     fn name(&self) -> String {
@@ -128,9 +131,11 @@ struct MockInternalAgent;
 #[async_trait]
 impl Agent for MockInternalAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock internal agent"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &'static str = "Mock internal agent";
+        &EXPERTISE
     }
 
     fn name(&self) -> String {
@@ -156,8 +161,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create orchestrator with mock internal agents
     let mut orchestrator = Orchestrator::with_internal_agents(
         blueprint,
-        Box::new(MockInternalAgent),
-        Box::new(MockStrategyAgent),
+        MockInternalAgent,
+        MockStrategyAgent,
     );
 
     // Add the typed agent
