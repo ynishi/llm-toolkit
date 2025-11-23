@@ -2215,6 +2215,8 @@ struct ArticleDraft {
 #[derive(Agent)]
 #[agent(
     expertise = "Research topics and generate well-structured article drafts with citations",
+    description = "Article research and drafting specialist",  // Optional: lightweight summary
+    capabilities = ["research", "writing", "citations"],  // Optional: explicit capabilities
     output = "ArticleDraft"
 )]
 struct ContentSynthesizerAgent;
@@ -2284,10 +2286,15 @@ struct FileAgent;
 - `agent.expertise()` → Returns full expertise text (for LLM execution)
 - `agent.capabilities()` → Returns `Option<Vec<Capability>>` (for capability-based selection)
 
+**Note:** The `description` and `capabilities` attributes work the same way as in the `#[agent]` macro (see above). Both attributes are optional and follow the same behavior:
+- `description` auto-generates from the first 100 characters of `expertise` if omitted
+- `capabilities` returns `None` if not specified
+
 **Features:**
 - ✅ Simplest possible interface
 - ✅ Minimal boilerplate
 - ✅ Perfect for prototyping
+- ✅ Supports `description` and `capabilities` attributes for orchestrator integration
 - ⚠️ Creates internal agent on each `execute()` call (stateless)
 
 **Automatic JSON Schema Enforcement:**

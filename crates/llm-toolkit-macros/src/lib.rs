@@ -4903,6 +4903,70 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
         }
     };
 
+    // Generate description static value (similar to enhanced_expertise)
+    let description_static = if let Some(desc) = &agent_attrs.description {
+        // Explicit description provided
+        quote! {
+            {
+                use std::sync::OnceLock;
+                static DESCRIPTION_CACHE: OnceLock<String> = OnceLock::new();
+                DESCRIPTION_CACHE.get_or_init(|| String::from(#desc))
+            }
+        }
+    } else {
+        // Auto-generate from expertise
+        match &expertise {
+            ExpertiseValue::String(expertise_str) => {
+                quote! {
+                    {
+                        use std::sync::OnceLock;
+                        static DESCRIPTION_CACHE: OnceLock<String> = OnceLock::new();
+                        DESCRIPTION_CACHE.get_or_init(|| {
+                            #crate_path::agent::expertise::Expertise::auto_description_from_text(#expertise_str)
+                        })
+                    }
+                }
+            }
+            ExpertiseValue::Expr(expertise_expr) => {
+                quote! {
+                    {
+                        use std::sync::OnceLock;
+                        use #crate_path::prompt::ToPrompt;
+                        static DESCRIPTION_CACHE: OnceLock<String> = OnceLock::new();
+                        DESCRIPTION_CACHE.get_or_init(|| {
+                            let prompt_text = (#expertise_expr).to_prompt();
+                            #crate_path::agent::expertise::Expertise::auto_description_from_text(&prompt_text)
+                        })
+                    }
+                }
+            }
+        }
+    };
+
+    // Generate capabilities static value
+    let capabilities_static = if let Some(caps) = &agent_attrs.capabilities {
+        let cap_strings = caps.iter().map(|c| c.as_str()).collect::<Vec<_>>();
+        quote! {
+            {
+                use std::sync::OnceLock;
+                static CAPABILITIES_CACHE: OnceLock<Option<Vec<#crate_path::agent::Capability>>> = OnceLock::new();
+                CAPABILITIES_CACHE.get_or_init(|| {
+                    Some(vec![
+                        #(#crate_path::agent::Capability::new(#cap_strings)),*
+                    ])
+                })
+            }
+        }
+    } else {
+        quote! {
+            {
+                use std::sync::OnceLock;
+                static CAPABILITIES_CACHE: OnceLock<Option<Vec<#crate_path::agent::Capability>>> = OnceLock::new();
+                CAPABILITIES_CACHE.get_or_init(|| None)
+            }
+        }
+    };
+
     // Generate agent initialization code based on backend
     let agent_init = match backend.as_str() {
         "gemini" => {
@@ -4986,6 +5050,14 @@ pub fn derive_agent(input: TokenStream) -> TokenStream {
 
             fn expertise(&self) -> &String {
                 #enhanced_expertise
+            }
+
+            fn description(&self) -> &str {
+                #description_static
+            }
+
+            fn capabilities(&self) -> Option<Vec<#crate_path::agent::Capability>> {
+                #capabilities_static.clone()
             }
 
             async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
