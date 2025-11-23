@@ -51,13 +51,19 @@ EXAMPLES := \
 	persona_dialogue \
 	persona_macro_test \
 	dialogue_moderator \
-	test_dialogue_logging
+	test_dialogue_logging \
+	agent_expertise_toprompt \
+	agent_with_expertise_full \
+	expertise_basic \
+	expertise_generate_schema \
+	expertise_prompt_generation
 
 # 外部API依存なしのExample（E2Eテストとして実行可能）
 # Note: check_agent_availability と codex_agent_basic は外部CLIチェック用なので除外
 OFFLINE_EXAMPLES := $(filter-out orchestrator_streaming persona_dialogue persona_macro_test check_agent_availability codex_agent_basic,$(EXAMPLES))
 
 # llm-toolkit-expertise Examples（外部API依存なし）
+# NOTE: llm-toolkit-expertise is deprecated. These examples are kept for backward compatibility.
 EXPERTISE_EXAMPLES := \
 	basic_expertise \
 	generate_schema \

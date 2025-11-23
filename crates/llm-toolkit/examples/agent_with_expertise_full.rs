@@ -1,12 +1,11 @@
-//! Example: Using Expertise type from llm-toolkit-expertise with Agent macro
+//! Example: Using Expertise type with Agent macro
 //!
-//! This example demonstrates the full integration: using llm-toolkit-expertise's
+//! This example demonstrates the full integration: using llm-toolkit's
 //! Expertise type as the expertise parameter in the #[agent] macro.
 
 use llm_toolkit::agent::Agent;
-use llm_toolkit_expertise::{
-    Anchor, ContextProfile, Expertise, KnowledgeFragment, Priority, TaskHealth, WeightedFragment,
-};
+use llm_toolkit::agent::expertise::{Anchor, Expertise, KnowledgeFragment, WeightedFragment};
+use llm_toolkit::context::{ContextProfile, Priority, TaskHealth};
 use llm_toolkit_macros::agent;
 
 // Create a function that builds our expertise
