@@ -83,7 +83,7 @@
 //!
 //! // Render with context
 //! let beginner_context = RenderContext::new().with_user_state("beginner");
-//! let prompt = expertise.to_prompt_with_render_context(&beginner_context);
+//! let prompt = expertise.to_prompt_with_context(&beginner_context);
 //! // Includes both "Always" and "beginner" fragments
 //!
 //! // Or use ContextualPrompt wrapper
@@ -292,13 +292,13 @@ impl Expertise {
     ///
     /// Fragments are ordered by priority (Critical → High → Normal → Low)
     pub fn to_prompt(&self) -> String {
-        self.to_prompt_with_render_context(&RenderContext::default())
+        self.to_prompt_with_context(&RenderContext::default())
     }
 
-    /// Generate a prompt string with render context filtering (Phase 2)
+    /// Generate a prompt string with context filtering
     ///
-    /// This is the context-aware rendering API that supports multiple user states
-    /// and improved context matching.
+    /// This is the context-aware rendering API that supports runtime context
+    /// for dynamic fragment selection based on task type, user states, and health.
     ///
     /// # Examples
     ///
@@ -316,9 +316,9 @@ impl Expertise {
     ///     .with_task_type("security-review")
     ///     .with_task_health(TaskHealth::AtRisk);
     ///
-    /// let prompt = expertise.to_prompt_with_render_context(&context);
+    /// let prompt = expertise.to_prompt_with_context(&context);
     /// ```
-    pub fn to_prompt_with_render_context(&self, context: &RenderContext) -> String {
+    pub fn to_prompt_with_context(&self, context: &RenderContext) -> String {
         let mut result = format!("# Expertise: {} (v{})\n\n", self.id, self.version);
 
         if !self.tags.is_empty() {
@@ -645,13 +645,13 @@ mod tests {
             );
 
         // Without debug context
-        let prompt1 = expertise.to_prompt_with_render_context(&RenderContext::new());
+        let prompt1 = expertise.to_prompt_with_context(&RenderContext::new());
         assert!(prompt1.contains("Always visible"));
         assert!(!prompt1.contains("Debug only"));
 
         // With debug context
         let prompt2 =
-            expertise.to_prompt_with_render_context(&RenderContext::new().with_task_type("Debug"));
+            expertise.to_prompt_with_context(&RenderContext::new().with_task_type("Debug"));
         assert!(prompt2.contains("Always visible"));
         assert!(prompt2.contains("Debug only"));
     }

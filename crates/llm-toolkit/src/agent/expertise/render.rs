@@ -303,7 +303,7 @@ impl<'a> ContextualPrompt<'a> {
     /// assert!(prompt.contains("Test content"));
     /// ```
     pub fn to_prompt(&self) -> String {
-        self.expertise.to_prompt_with_render_context(&self.context)
+        self.expertise.to_prompt_with_context(&self.context)
     }
 }
 
