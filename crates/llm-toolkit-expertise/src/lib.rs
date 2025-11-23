@@ -75,11 +75,13 @@ extern crate self as llm_toolkit_expertise;
 
 pub mod context;
 pub mod fragment;
+pub mod render;
 pub mod types;
 
 // Re-export main types
 pub use context::{ContextMatcher, ContextProfile, Priority, TaskHealth};
 pub use fragment::{Anchor, KnowledgeFragment};
+pub use render::{ContextualPrompt, RenderContext};
 pub use types::{Expertise, WeightedFragment};
 
 // Optional integration with llm-toolkit

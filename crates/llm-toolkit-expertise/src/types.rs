@@ -202,9 +202,41 @@ impl Expertise {
         self.to_prompt_with_context(&ContextMatcher::default())
     }
 
-    /// Generate a prompt string with context filtering
+    /// Generate a prompt string with render context filtering (Phase 2)
     ///
-    /// Only includes fragments that match the given context conditions
+    /// This is the new context-aware rendering API that supports multiple user states
+    /// and improved context matching.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use llm_toolkit_expertise::{Expertise, WeightedFragment, KnowledgeFragment};
+    /// use llm_toolkit_expertise::render::RenderContext;
+    /// use llm_toolkit_expertise::context::TaskHealth;
+    ///
+    /// let expertise = Expertise::new("test", "1.0")
+    ///     .with_fragment(WeightedFragment::new(
+    ///         KnowledgeFragment::Text("Test".to_string())
+    ///     ));
+    ///
+    /// let context = RenderContext::new()
+    ///     .with_task_type("security-review")
+    ///     .with_task_health(TaskHealth::AtRisk);
+    ///
+    /// let prompt = expertise.to_prompt_with_render_context(&context);
+    /// ```
+    pub fn to_prompt_with_render_context(&self, context: &crate::render::RenderContext) -> String {
+        // Convert RenderContext to ContextMatcher for now
+        // In the future, we can refactor to use RenderContext directly
+        self.to_prompt_with_context(&context.to_context_matcher())
+    }
+
+    /// Generate a prompt string with context filtering (legacy API)
+    ///
+    /// Only includes fragments that match the given context conditions.
+    ///
+    /// **Note**: Consider using `to_prompt_with_render_context()` for the new API
+    /// with improved context matching.
     pub fn to_prompt_with_context(&self, context: &ContextMatcher) -> String {
         let mut result = format!("# Expertise: {} (v{})\n\n", self.id, self.version);
 
