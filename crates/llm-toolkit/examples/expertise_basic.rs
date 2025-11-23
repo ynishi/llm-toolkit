@@ -1,6 +1,8 @@
 //! Basic expertise creation and usage example
 
-use llm_toolkit::agent::expertise::{Anchor, Expertise, KnowledgeFragment, RenderContext, WeightedFragment};
+use llm_toolkit::agent::expertise::{
+    Anchor, Expertise, KnowledgeFragment, RenderContext, WeightedFragment,
+};
 use llm_toolkit::context::{ContextProfile, Priority, TaskHealth};
 
 fn main() {

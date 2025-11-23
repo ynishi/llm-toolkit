@@ -3,11 +3,11 @@
 //! Tests for ContextualPrompt integration with ToPrompt-based DTO pattern.
 //! These tests demonstrate how ContextualPrompt works in real-world scenarios.
 
+use llm_toolkit::ToPrompt;
 use llm_toolkit::agent::expertise::{
     ContextualPrompt, Expertise, KnowledgeFragment, RenderContext, WeightedFragment,
 };
 use llm_toolkit::context::{ContextProfile, Priority, TaskHealth};
-use llm_toolkit::ToPrompt;
 use serde::Serialize;
 
 // ============================================================================

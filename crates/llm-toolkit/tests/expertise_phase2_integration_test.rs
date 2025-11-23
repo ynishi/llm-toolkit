@@ -119,9 +119,8 @@ fn test_context_filtering_by_task_health() {
     assert!(!at_risk_prompt.contains("STOP"));
 
     // OffTrack: Standard + OffTrack fragment
-    let off_track_prompt = expertise.to_prompt_with_context(
-        &RenderContext::new().with_task_health(TaskHealth::OffTrack),
-    );
+    let off_track_prompt = expertise
+        .to_prompt_with_context(&RenderContext::new().with_task_health(TaskHealth::OffTrack));
 
     assert!(off_track_prompt.contains("Standard debugging steps"));
     assert!(!off_track_prompt.contains("SLOW DOWN"));

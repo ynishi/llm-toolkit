@@ -1,6 +1,8 @@
 //! Integration tests for llm-toolkit expertise module
 
-use llm_toolkit::agent::expertise::{Anchor, Expertise, KnowledgeFragment, RenderContext, WeightedFragment};
+use llm_toolkit::agent::expertise::{
+    Anchor, Expertise, KnowledgeFragment, RenderContext, WeightedFragment,
+};
 use llm_toolkit::context::{ContextProfile, Priority, TaskHealth};
 
 #[test]
