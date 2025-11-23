@@ -202,11 +202,9 @@ mod tests {
     #[test]
     fn test_timeline_chronological_order() {
         let contexts = vec![
-            ExecutionContext::Env(EnvContext::new().with_step_info(StepInfo::new(
-                "step_1",
-                "First",
-                "Agent1",
-            ))),
+            ExecutionContext::Env(
+                EnvContext::new().with_step_info(StepInfo::new("step_1", "First", "Agent1")),
+            ),
             ExecutionContext::Detected(DetectedContext::new().detected_by("Detector1")),
             ExecutionContext::Detected(DetectedContext::new().detected_by("Detector2")),
         ];

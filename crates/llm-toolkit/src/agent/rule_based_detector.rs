@@ -128,28 +128,17 @@ impl RuleBasedDetector {
                 vec!["review", "pr", "pull request", "refactor"],
                 0.7,
             ),
-            (
-                "debug",
-                vec!["debug", "error", "bug", "fix", "crash"],
-                0.8,
-            ),
+            ("debug", vec!["debug", "error", "bug", "fix", "crash"], 0.8),
             (
                 "implementation",
                 vec!["implement", "feature", "add", "create"],
                 0.6,
             ),
-            (
-                "test",
-                vec!["test", "spec", "coverage"],
-                0.7,
-            ),
+            ("test", vec!["test", "spec", "coverage"], 0.7),
         ];
 
         for (task_type, keywords, base_confidence) in patterns {
-            let matches = keywords
-                .iter()
-                .filter(|kw| text.contains(*kw))
-                .count();
+            let matches = keywords.iter().filter(|kw| text.contains(*kw)).count();
 
             if matches > 0 {
                 let confidence = (matches as f64 / keywords.len() as f64) * base_confidence;
@@ -255,8 +244,7 @@ mod tests {
     async fn test_detect_combined() {
         let detector = RuleBasedDetector::new();
         let env = EnvContext::new().with_redesign_count(3);
-        let payload = Payload::text("Debug this security vulnerability")
-            .with_env_context(env);
+        let payload = Payload::text("Debug this security vulnerability").with_env_context(env);
 
         let detected = detector.detect(&payload).await.unwrap();
 

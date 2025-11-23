@@ -77,18 +77,12 @@ pub trait DetectContextExt: Sized {
     ///
     /// If the payload already has a `DetectedContext`, the new detection
     /// is merged using `DetectedContext::merge()`.
-    async fn detect_with<D: ContextDetector>(
-        self,
-        detector: &D,
-    ) -> Result<Self, AgentError>;
+    async fn detect_with<D: ContextDetector>(self, detector: &D) -> Result<Self, AgentError>;
 }
 
 #[async_trait]
 impl DetectContextExt for Payload {
-    async fn detect_with<D: ContextDetector>(
-        self,
-        detector: &D,
-    ) -> Result<Self, AgentError> {
+    async fn detect_with<D: ContextDetector>(self, detector: &D) -> Result<Self, AgentError> {
         let detected = detector.detect(&self).await?;
         Ok(self.merge_detected_context(detected))
     }
@@ -110,10 +104,11 @@ mod tests {
         async fn detect(&self, payload: &Payload) -> Result<DetectedContext, AgentError> {
             let mut detected = DetectedContext::new();
 
-            if let Some(env_ctx) = payload.latest_env_context() {
-                if self.should_detect_at_risk && env_ctx.redesign_count > 2 {
-                    detected = detected.with_task_health(TaskHealth::AtRisk);
-                }
+            if let Some(env_ctx) = payload.latest_env_context()
+                && self.should_detect_at_risk
+                && env_ctx.redesign_count > 2
+            {
+                detected = detected.with_task_health(TaskHealth::AtRisk);
             }
 
             Ok(detected.detected_by("MockDetector"))
