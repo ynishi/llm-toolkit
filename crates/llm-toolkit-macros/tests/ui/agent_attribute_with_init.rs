@@ -34,9 +34,11 @@ impl CustomAgent {
 #[async_trait::async_trait]
 impl Agent for CustomAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Custom agent with workspace"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Custom agent with workspace";
+        &EXPERTISE
     }
 
     async fn execute(&self, intent: Payload) -> Result<String, AgentError> {

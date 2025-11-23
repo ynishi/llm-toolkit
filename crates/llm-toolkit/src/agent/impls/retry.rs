@@ -218,8 +218,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &str =
-                "Test agent that simulates rate limiting with retry_after";
+            const EXPERTISE: &str = "Test agent that simulates rate limiting with retry_after";
             &EXPERTISE
         }
 

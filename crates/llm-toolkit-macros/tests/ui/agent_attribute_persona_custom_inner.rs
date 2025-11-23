@@ -41,9 +41,11 @@ impl OlamaAgent {
 #[async_trait::async_trait]
 impl Agent for OlamaAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "General purpose Olama agent"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "General purpose Olama agent";
+        &EXPERTISE
     }
 
     async fn execute(&self, intent: Payload) -> Result<String, AgentError> {
