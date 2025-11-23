@@ -19,6 +19,9 @@ use super::execution_context::ExecutionContext;
 #[cfg(feature = "agent")]
 use super::detected_context::DetectedContext;
 
+#[cfg(feature = "agent")]
+use super::env_context::EnvContext;
+
 /// Content that can be included in a payload.
 ///
 /// This enum allows agents to receive different types of input,
@@ -65,28 +68,30 @@ pub enum PayloadContent {
 struct PayloadInner {
     contents: Vec<PayloadContent>,
 
-    /// Runtime context for expertise rendering (not serialized)
+    /// Timeline-based execution contexts (not serialized)
     ///
-    /// This is used by ExpertiseAgent to determine which knowledge fragments
-    /// should be included and how they should be prioritized during prompt generation.
+    /// Contains a chronological sequence of execution contexts including:
+    /// - `ExecutionContext::Env`: Raw environment info from orchestrator/external
+    /// - `ExecutionContext::Detected`: Inferred context from detectors
     ///
-    /// Separate from `PayloadContent::Context` which is for LLM-visible natural language context.
+    /// This enables:
+    /// - Full context history tracking
+    /// - Layered context detection (multiple detector passes)
+    /// - Access to latest/all contexts via helper methods
+    ///
+    /// # Example Timeline
+    ///
+    /// ```ignore
+    /// contexts: [
+    ///   Env(step_1_info),        // Initial from Orc
+    ///   Detected(layer1),        // Rule-based detection
+    ///   Detected(layer2),        // LLM-based enrichment
+    ///   Env(step_2_info),        // Updated from Orc
+    ///   Detected(layer3),        // Re-detection
+    /// ]
+    /// ```
     #[cfg(feature = "agent")]
-    render_context: Option<RenderContext>,
-
-    /// Raw execution context from orchestrator layer (not serialized)
-    ///
-    /// Contains factual runtime information like step info, journal summary,
-    /// and redesign count. Used by context detectors to infer higher-level context.
-    #[cfg(feature = "agent")]
-    execution_context: Option<ExecutionContext>,
-
-    /// Detected context from analysis layers (not serialized)
-    ///
-    /// Contains inferred information like task_type, task_health, and user_states.
-    /// Progressively enriched by multiple detector layers (rule-based → LLM-based).
-    #[cfg(feature = "agent")]
-    detected_context: Option<DetectedContext>,
+    contexts: Vec<ExecutionContext>,
 }
 
 /// A multi-modal payload that can contain multiple content items.
@@ -120,11 +125,7 @@ impl Payload {
             inner: Arc::new(PayloadInner {
                 contents: Vec::new(),
                 #[cfg(feature = "agent")]
-                render_context: None,
-                #[cfg(feature = "agent")]
-                execution_context: None,
-                #[cfg(feature = "agent")]
-                detected_context: None,
+                contexts: Vec::new(),
             }),
         }
     }
@@ -135,11 +136,7 @@ impl Payload {
             inner: Arc::new(PayloadInner {
                 contents: vec![PayloadContent::Text(text.into())],
                 #[cfg(feature = "agent")]
-                render_context: None,
-                #[cfg(feature = "agent")]
-                execution_context: None,
-                #[cfg(feature = "agent")]
-                detected_context: None,
+                contexts: Vec::new(),
             }),
         }
     }
@@ -160,11 +157,7 @@ impl Payload {
             inner: Arc::new(PayloadInner {
                 contents: vec![PayloadContent::Attachment(attachment)],
                 #[cfg(feature = "agent")]
-                render_context: None,
-                #[cfg(feature = "agent")]
-                execution_context: None,
-                #[cfg(feature = "agent")]
-                detected_context: None,
+                contexts: Vec::new(),
             }),
         }
     }
@@ -218,16 +211,12 @@ impl Payload {
         })
     }
 
-    /// Helper: Creates a new PayloadInner from contents while preserving all contexts
+    /// Helper: Creates a new PayloadInner from contents while preserving context timeline
     fn create_inner(&self, contents: Vec<PayloadContent>) -> PayloadInner {
         PayloadInner {
             contents,
             #[cfg(feature = "agent")]
-            render_context: self.inner.render_context.clone(),
-            #[cfg(feature = "agent")]
-            execution_context: self.inner.execution_context.clone(),
-            #[cfg(feature = "agent")]
-            detected_context: self.inner.detected_context.clone(),
+            contexts: self.inner.contexts.clone(),
         }
     }
 
@@ -524,11 +513,7 @@ impl Payload {
             inner: Arc::new(PayloadInner {
                 contents,
                 #[cfg(feature = "agent")]
-                render_context: None,
-                #[cfg(feature = "agent")]
-                execution_context: None,
-                #[cfg(feature = "agent")]
-                detected_context: None,
+                contexts: Vec::new(),
             }),
         }
     }
@@ -784,8 +769,8 @@ impl Payload {
 
     /// Sets the render context explicitly.
     ///
-    /// This is used by ExpertiseAgent to determine which knowledge fragments
-    /// should be included during prompt generation.
+    /// **Note**: This creates a DetectedContext wrapping the RenderContext and pushes to timeline.
+    /// For more control, use `with_detected_context()` directly.
     ///
     /// # Examples
     ///
@@ -803,14 +788,25 @@ impl Payload {
     /// ```
     #[cfg(feature = "agent")]
     pub fn with_render_context(self, context: RenderContext) -> Self {
-        let mut inner = (*self.inner).clone();
-        inner.render_context = Some(context);
-        Self {
-            inner: Arc::new(inner),
+        // Create a DetectedContext from RenderContext
+        let mut detected = DetectedContext::new();
+        detected.render = context.clone();
+
+        // Extract fields from RenderContext back to DetectedContext
+        // (This maintains consistency)
+        if let Some(task_type) = &context.task_type {
+            detected.task_type = Some(task_type.clone());
         }
+        if let Some(task_health) = context.task_health {
+            detected.task_health = Some(task_health);
+        }
+        detected.user_states = context.user_states.clone();
+        detected.detected_by.push("with_render_context".to_string());
+
+        self.with_detected_context(detected)
     }
 
-    /// Returns the render context if present.
+    /// Returns the latest render context.
     ///
     /// # Examples
     ///
@@ -826,12 +822,13 @@ impl Payload {
     /// ```
     #[cfg(feature = "agent")]
     pub fn render_context(&self) -> Option<&RenderContext> {
-        self.inner.render_context.as_ref()
+        self.latest_render_context()
     }
 
-    /// Adds a task type to the render context.
+    /// Adds a task type to the detected context.
     ///
-    /// This is a convenience method for building render context incrementally.
+    /// This is a convenience method for building detected context incrementally.
+    /// Creates or updates the latest detected context with the task type.
     ///
     /// # Examples
     ///
@@ -843,18 +840,16 @@ impl Payload {
     /// ```
     #[cfg(feature = "agent")]
     pub fn with_task_type(self, task_type: impl Into<String>) -> Self {
-        let context = self
-            .inner
-            .render_context
-            .clone()
-            .unwrap_or_default()
-            .with_task_type(task_type);
-        self.with_render_context(context)
+        let detected = DetectedContext::new()
+            .with_task_type(task_type)
+            .detected_by("with_task_type");
+        self.merge_detected_context(detected)
     }
 
-    /// Adds a user state to the render context.
+    /// Adds a user state to the detected context.
     ///
-    /// This is a convenience method for building render context incrementally.
+    /// This is a convenience method for building detected context incrementally.
+    /// Creates or updates the latest detected context with the user state.
     ///
     /// # Examples
     ///
@@ -866,18 +861,16 @@ impl Payload {
     /// ```
     #[cfg(feature = "agent")]
     pub fn with_user_state(self, state: impl Into<String>) -> Self {
-        let context = self
-            .inner
-            .render_context
-            .clone()
-            .unwrap_or_default()
-            .with_user_state(state);
-        self.with_render_context(context)
+        let detected = DetectedContext::new()
+            .with_user_state(state)
+            .detected_by("with_user_state");
+        self.merge_detected_context(detected)
     }
 
-    /// Sets the task health in the render context.
+    /// Sets the task health in the detected context.
     ///
-    /// This is a convenience method for building render context incrementally.
+    /// This is a convenience method for building detected context incrementally.
+    /// Creates or updates the latest detected context with the task health.
     ///
     /// # Examples
     ///
@@ -890,69 +883,66 @@ impl Payload {
     /// ```
     #[cfg(feature = "agent")]
     pub fn with_task_health(self, health: crate::context::TaskHealth) -> Self {
-        let context = self
-            .inner
-            .render_context
-            .clone()
-            .unwrap_or_default()
-            .with_task_health(health);
-        self.with_render_context(context)
+        let detected = DetectedContext::new()
+            .with_task_health(health)
+            .detected_by("with_task_health");
+        self.merge_detected_context(detected)
     }
 
     // ============================================================================
     // ExecutionContext methods (for Orchestrator injection)
     // ============================================================================
 
-    /// Sets the execution context from orchestrator.
+    /// Sets the environment context from orchestrator.
     ///
     /// This contains raw runtime information like step info, journal summary,
     /// and redesign count. Used by context detectors to infer higher-level context.
     ///
+    /// **Note**: This wraps the EnvContext in ExecutionContext::Env and pushes to timeline.
+    ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use llm_toolkit::agent::{Payload, ExecutionContext, StepInfo};
+    /// use llm_toolkit::agent::{Payload, EnvContext, StepInfo};
     ///
-    /// let exec_ctx = ExecutionContext::new()
+    /// let env_ctx = EnvContext::new()
     ///     .with_step_info(StepInfo::new("step_1", "Analyze code", "AnalyzerAgent"))
     ///     .with_redesign_count(2);
     ///
     /// let payload = Payload::text("Analyze this code")
-    ///     .with_execution_context(exec_ctx);
+    ///     .with_env_context(env_ctx);
     /// ```
     #[cfg(feature = "agent")]
-    pub fn with_execution_context(self, context: ExecutionContext) -> Self {
-        let mut inner = (*self.inner).clone();
-        inner.execution_context = Some(context);
-        Self {
-            inner: Arc::new(inner),
-        }
+    pub fn with_env_context(self, context: EnvContext) -> Self {
+        self.push_context(ExecutionContext::Env(context))
     }
 
-    /// Returns the execution context if present.
+    /// Returns the latest environment context.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// use llm_toolkit::agent::Payload;
     ///
-    /// if let Some(exec_ctx) = payload.execution_context() {
-    ///     println!("Redesign count: {}", exec_ctx.redesign_count);
+    /// if let Some(env_ctx) = payload.env_context() {
+    ///     println!("Redesign count: {}", env_ctx.redesign_count);
     /// }
     /// ```
     #[cfg(feature = "agent")]
-    pub fn execution_context(&self) -> Option<&ExecutionContext> {
-        self.inner.execution_context.as_ref()
+    pub fn env_context(&self) -> Option<&EnvContext> {
+        self.latest_env_context()
     }
 
     // ============================================================================
     // DetectedContext methods (for layered detection)
     // ============================================================================
 
-    /// Sets the detected context from detector analysis.
+    /// Pushes a detected context to the timeline.
     ///
-    /// For layered detection, use the `merge()` pattern to progressively
-    /// enrich the detected context:
+    /// For layered detection, prefer `merge_detected_context()` which automatically
+    /// merges with the latest detected context.
+    ///
+    /// **Note**: This wraps the DetectedContext in ExecutionContext::Detected and pushes to timeline.
     ///
     /// # Examples
     ///
@@ -968,29 +958,19 @@ impl Payload {
     /// let payload = Payload::text("Review code")
     ///     .with_detected_context(detected1);
     ///
-    /// // Layer 2: LLM-based enrichment
+    /// // Layer 2: Use merge for automatic merging
     /// let detected2 = DetectedContext::new()
     ///     .with_user_state("confused")
     ///     .detected_by("LLMDetector");
     ///
-    /// // Merge with existing
-    /// let merged = payload.detected_context()
-    ///     .cloned()
-    ///     .unwrap_or_default()
-    ///     .merge(detected2);
-    ///
-    /// let payload = payload.with_detected_context(merged);
+    /// let payload = payload.merge_detected_context(detected2);
     /// ```
     #[cfg(feature = "agent")]
     pub fn with_detected_context(self, context: DetectedContext) -> Self {
-        let mut inner = (*self.inner).clone();
-        inner.detected_context = Some(context);
-        Self {
-            inner: Arc::new(inner),
-        }
+        self.push_context(ExecutionContext::Detected(context))
     }
 
-    /// Returns the detected context if present.
+    /// Returns the latest detected context from the timeline.
     ///
     /// # Examples
     ///
@@ -1004,7 +984,7 @@ impl Payload {
     /// ```
     #[cfg(feature = "agent")]
     pub fn detected_context(&self) -> Option<&DetectedContext> {
-        self.inner.detected_context.as_ref()
+        self.latest_detected_context()
     }
 
     /// Merges additional detected context into existing detected context.
@@ -1036,12 +1016,119 @@ impl Payload {
     #[cfg(feature = "agent")]
     pub fn merge_detected_context(self, context: DetectedContext) -> Self {
         let merged = self
-            .inner
-            .detected_context
-            .clone()
+            .latest_detected_context()
+            .cloned()
             .unwrap_or_default()
             .merge(context);
-        self.with_detected_context(merged)
+        self.push_context(ExecutionContext::Detected(merged))
+    }
+
+    // ============================================================================
+    // Timeline-based context methods (new unified API)
+    // ============================================================================
+
+    /// Pushes a new execution context to the timeline.
+    ///
+    /// This is the core method for adding context. All other context methods
+    /// are built on top of this.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::{Payload, ExecutionContext, EnvContext, DetectedContext};
+    ///
+    /// // From orchestrator
+    /// let env = EnvContext::new().with_redesign_count(2);
+    /// let payload = Payload::text("Task")
+    ///     .push_context(ExecutionContext::Env(env));
+    ///
+    /// // From detector
+    /// let detected = DetectedContext::new()
+    ///     .with_task_health(TaskHealth::AtRisk)
+    ///     .detected_by("RuleDetector");
+    /// let payload = payload.push_context(ExecutionContext::Detected(detected));
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn push_context(self, context: ExecutionContext) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.contexts.push(context);
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Returns all execution contexts in chronological order.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// for ctx in payload.all_contexts() {
+    ///     match ctx {
+    ///         ExecutionContext::Env(env) => println!("Env: {:?}", env),
+    ///         ExecutionContext::Detected(det) => println!("Detected: {:?}", det),
+    ///     }
+    /// }
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn all_contexts(&self) -> &[ExecutionContext] {
+        &self.inner.contexts
+    }
+
+    /// Returns the latest EnvContext in the timeline.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// if let Some(env) = payload.latest_env_context() {
+    ///     println!("Redesign count: {}", env.redesign_count);
+    /// }
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn latest_env_context(&self) -> Option<&EnvContext> {
+        use super::execution_context::ExecutionContextExt;
+        self.inner.contexts.latest_env()
+    }
+
+    /// Returns the latest DetectedContext in the timeline.
+    ///
+    /// This is what ExpertiseAgent uses to extract RenderContext.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// if let Some(detected) = payload.latest_detected_context() {
+    ///     let render = detected.to_render_context();
+    ///     // Use for expertise filtering...
+    /// }
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn latest_detected_context(&self) -> Option<&DetectedContext> {
+        use super::execution_context::ExecutionContextExt;
+        self.inner.contexts.latest_detected()
+    }
+
+    /// Returns the latest RenderContext (from latest DetectedContext).
+    ///
+    /// This is a convenience method for ExpertiseAgent.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::Payload;
+    ///
+    /// if let Some(render) = payload.latest_render_context() {
+    ///     // Use for expertise filtering...
+    /// }
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn latest_render_context(&self) -> Option<&RenderContext> {
+        self.latest_detected_context().map(|d| &d.render)
     }
 }
 

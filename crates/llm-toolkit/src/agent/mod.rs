@@ -259,6 +259,9 @@ pub mod execution_context;
 #[cfg(feature = "agent")]
 pub mod context_detector;
 
+#[cfg(feature = "agent")]
+pub mod rule_based_detector;
+
 /// Defines the execution profile for an agent, controlling its behavior.
 ///
 /// This enum provides a semantic way to configure agents for different tasks
@@ -296,6 +299,9 @@ pub use execution_context::{ExecutionContext, ExecutionContextExt};
 
 #[cfg(feature = "agent")]
 pub use context_detector::{ContextDetector, DetectContextExt};
+
+#[cfg(feature = "agent")]
+pub use rule_based_detector::RuleBasedDetector;
 
 use crate::prompt::ToPrompt;
 use async_trait::async_trait;

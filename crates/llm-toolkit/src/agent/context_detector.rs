@@ -97,7 +97,7 @@ impl DetectContextExt for Payload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{ExecutionContext, JournalSummary, StepInfo};
+    use crate::agent::EnvContext;
     use crate::context::TaskHealth;
 
     // Mock detector for testing
@@ -110,8 +110,8 @@ mod tests {
         async fn detect(&self, payload: &Payload) -> Result<DetectedContext, AgentError> {
             let mut detected = DetectedContext::new();
 
-            if let Some(exec_ctx) = payload.execution_context() {
-                if self.should_detect_at_risk && exec_ctx.redesign_count > 2 {
+            if let Some(env_ctx) = payload.latest_env_context() {
+                if self.should_detect_at_risk && env_ctx.redesign_count > 2 {
                     detected = detected.with_task_health(TaskHealth::AtRisk);
                 }
             }
@@ -126,9 +126,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_context_detector_basic() {
-        let exec_ctx = ExecutionContext::new().with_redesign_count(3);
+        let env_ctx = EnvContext::new().with_redesign_count(3);
 
-        let payload = Payload::text("Test").with_execution_context(exec_ctx);
+        let payload = Payload::text("Test").with_env_context(env_ctx);
 
         let detector = MockDetector {
             should_detect_at_risk: true,
@@ -142,14 +142,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_detect_context_ext() {
-        let exec_ctx = ExecutionContext::new().with_redesign_count(3);
+        let env_ctx = EnvContext::new().with_redesign_count(3);
 
         let detector = MockDetector {
             should_detect_at_risk: true,
         };
 
         let payload = Payload::text("Test")
-            .with_execution_context(exec_ctx)
+            .with_env_context(env_ctx)
             .detect_with(&detector)
             .await
             .unwrap();
@@ -160,7 +160,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_layered_detection() {
-        let exec_ctx = ExecutionContext::new().with_redesign_count(3);
+        let env_ctx = EnvContext::new().with_redesign_count(3);
 
         let detector1 = MockDetector {
             should_detect_at_risk: true,
@@ -171,7 +171,7 @@ mod tests {
         };
 
         let payload = Payload::text("Test")
-            .with_execution_context(exec_ctx)
+            .with_env_context(env_ctx)
             .detect_with(&detector1)
             .await
             .unwrap()
