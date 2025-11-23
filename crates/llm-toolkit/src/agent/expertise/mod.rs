@@ -1,0 +1,745 @@
+//! Agent Expertise Module
+//!
+//! Agent as Code v2: Graph-based composition system for LLM agent capabilities.
+//!
+//! This module provides a flexible, composition-based approach to defining agent expertise
+//! through weighted knowledge fragments. Instead of inheritance hierarchies, expertise is
+//! built by composing independent fragments with priorities and contextual activation rules.
+//!
+//! ## Core Concepts
+//!
+//! - **Composition over Inheritance**: Build agents like RPG equipment sets
+//! - **Weighted Fragments**: Knowledge with priority levels (Critical/High/Normal/Low)
+//! - **Context-Driven**: Dynamic behavior based on TaskHealth and context
+//!
+//! ## Example
+//!
+//! ```
+//! use llm_toolkit::agent::expertise::{
+//!     Expertise, WeightedFragment, KnowledgeFragment,
+//! };
+//! use llm_toolkit::{Priority, ContextProfile, TaskHealth};
+//!
+//! let expertise = Expertise::new("code-reviewer", "1.0")
+//!     .with_description("Rust code review specialist")
+//!     .with_tag("lang:rust")
+//!     .with_tag("role:reviewer")
+//!     .with_fragment(
+//!         WeightedFragment::new(KnowledgeFragment::Text(
+//!             "Always verify code compiles before review".to_string()
+//!         ))
+//!         .with_priority(Priority::Critical)
+//!     )
+//!     .with_fragment(
+//!         WeightedFragment::new(KnowledgeFragment::Logic {
+//!             instruction: "Check for security issues".to_string(),
+//!             steps: vec![
+//!                 "Scan for SQL injection vulnerabilities".to_string(),
+//!                 "Check input validation".to_string(),
+//!             ],
+//!         })
+//!         .with_priority(Priority::High)
+//!         .with_context(ContextProfile::Conditional {
+//!             task_types: vec!["security-review".to_string()],
+//!             user_states: vec![],
+//!             task_health: None,
+//!         })
+//!     );
+//!
+//! // Generate prompt
+//! let prompt = expertise.to_prompt();
+//! println!("{}", prompt);
+//! ```
+//!
+//! ## Context-Aware Rendering
+//!
+//! Phase 2 adds dynamic prompt rendering based on runtime context:
+//!
+//! ```
+//! use llm_toolkit::agent::expertise::{
+//!     Expertise, WeightedFragment, KnowledgeFragment,
+//!     RenderContext, ContextualPrompt,
+//! };
+//! use llm_toolkit::{Priority, ContextProfile, TaskHealth};
+//!
+//! // Create expertise with conditional fragments
+//! let expertise = Expertise::new("rust-tutor", "1.0")
+//!     .with_fragment(
+//!         WeightedFragment::new(KnowledgeFragment::Text(
+//!             "You are a Rust tutor".to_string()
+//!         ))
+//!         .with_context(ContextProfile::Always)
+//!     )
+//!     .with_fragment(
+//!         WeightedFragment::new(KnowledgeFragment::Text(
+//!             "Provide detailed explanations".to_string()
+//!         ))
+//!         .with_context(ContextProfile::Conditional {
+//!             task_types: vec![],
+//!             user_states: vec!["beginner".to_string()],
+//!             task_health: None,
+//!         })
+//!     );
+//!
+//! // Render with context
+//! let beginner_context = RenderContext::new().with_user_state("beginner");
+//! let prompt = expertise.to_prompt_with_render_context(&beginner_context);
+//! // Includes both "Always" and "beginner" fragments
+//!
+//! // Or use ContextualPrompt wrapper
+//! let prompt = ContextualPrompt::from_expertise(&expertise, RenderContext::new())
+//!     .with_user_state("beginner")
+//!     .to_prompt();
+//! ```
+
+pub mod fragment;
+pub mod render;
+
+pub use fragment::{Anchor, KnowledgeFragment};
+pub use render::{ContextualPrompt, RenderContext};
+
+use crate::context::{ContextMatcher, ContextProfile, Priority};
+use crate::prompt::{PromptPart, ToPrompt};
+use crate::agent::{Capability, ToExpertise};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// Expertise: Agent capability package (Graph node)
+///
+/// Represents a complete agent expertise profile composed of weighted
+/// knowledge fragments. Uses composition instead of inheritance for
+/// flexible capability mixing.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Expertise {
+    /// Unique identifier
+    pub id: String,
+
+    /// Version string
+    pub version: String,
+
+    /// Optional lightweight catalog description for Orchestrator routing
+    ///
+    /// This is a concise (1-2 sentence) summary used by orchestrators to select
+    /// the appropriate agent. The full expertise details are rendered via `to_prompt()`
+    /// for LLM consumption.
+    ///
+    /// If not provided, it will be auto-generated from the first fragment content
+    /// (typically starts with "You are XXX" or "XXX Agent...").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Tags for search and grouping (e.g., ["lang:rust", "role:reviewer", "style:friendly"])
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+
+    /// Knowledge and capability components (weighted)
+    pub content: Vec<WeightedFragment>,
+}
+
+impl Expertise {
+    /// Create a new expertise profile
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier for this expertise
+    /// * `version` - Version string (e.g., "1.0.0")
+    ///
+    /// # Description Auto-generation
+    ///
+    /// The `description` field is optional. If not set via [`with_description()`](Self::with_description),
+    /// it will be auto-generated from the first fragment's content when needed.
+    /// Typical patterns include:
+    /// - "You are a Rust expert..."
+    /// - "Senior software engineer specialized in..."
+    /// - "Code reviewer with focus on..."
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use llm_toolkit::agent::expertise::Expertise;
+    ///
+    /// let expertise = Expertise::new("rust-expert", "1.0.0");
+    /// ```
+    pub fn new(id: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            version: version.into(),
+            description: None,
+            tags: Vec::new(),
+            content: Vec::new(),
+        }
+    }
+
+    /// Set an explicit description for catalog/routing purposes
+    ///
+    /// This overrides the auto-generated description. Use this when you want
+    /// a specific concise summary for orchestrator routing that differs from
+    /// the first fragment's content.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use llm_toolkit::agent::expertise::Expertise;
+    ///
+    /// let expertise = Expertise::new("rust-expert", "1.0.0")
+    ///     .with_description("Expert Rust developer and code reviewer");
+    /// ```
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Add a tag
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tags.push(tag.into());
+        self
+    }
+
+    /// Add tags
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags.extend(tags);
+        self
+    }
+
+    /// Add a weighted fragment
+    pub fn with_fragment(mut self, fragment: WeightedFragment) -> Self {
+        self.content.push(fragment);
+        self
+    }
+
+    /// Get the description, auto-generating if not explicitly set
+    ///
+    /// If no explicit description was set via [`with_description()`](Self::with_description),
+    /// this method generates one from the first fragment's content. It extracts the first
+    /// ~100 characters, which typically captures patterns like:
+    /// - "You are a Rust expert..."
+    /// - "Senior software engineer specialized in..."
+    ///
+    /// Returns an empty string if there are no fragments.
+    pub fn get_description(&self) -> String {
+        if let Some(desc) = &self.description {
+            return desc.clone();
+        }
+
+        // Auto-generate from first fragment
+        if let Some(first_fragment) = self.content.first() {
+            let content = match &first_fragment.fragment {
+                KnowledgeFragment::Text(text) => text.clone(),
+                KnowledgeFragment::Logic { instruction, .. } => instruction.clone(),
+                KnowledgeFragment::Guideline { rule, .. } => rule.clone(),
+                KnowledgeFragment::QualityStandard { criteria, .. } => criteria
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| format!("{} v{}", self.id, self.version)),
+                _ => {
+                    // For ToolDefinition and other types, look for next usable fragment
+                    self.content
+                        .iter()
+                        .skip(1)
+                        .find_map(|wf| match &wf.fragment {
+                            KnowledgeFragment::Text(t) => Some(t.clone()),
+                            KnowledgeFragment::Logic { instruction, .. } => {
+                                Some(instruction.clone())
+                            }
+                            KnowledgeFragment::Guideline { rule, .. } => Some(rule.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| format!("{} v{}", self.id, self.version))
+                }
+            };
+
+            // Take first ~100 chars or first sentence
+            let truncated = content.chars().take(100).collect::<String>();
+            if truncated.len() < content.len() {
+                format!("{}...", truncated.trim_end())
+            } else {
+                truncated
+            }
+        } else {
+            // No fragments, use id/version
+            format!("{} v{}", self.id, self.version)
+        }
+    }
+
+    /// Extract tool definitions as capability names
+    ///
+    /// This method scans all fragments and extracts tool names from `ToolDefinition` fragments.
+    /// Returns a vector of capability identifiers that can be used for agent registration.
+    pub fn extract_tool_names(&self) -> Vec<String> {
+        self.content
+            .iter()
+            .filter_map(|wf| match &wf.fragment {
+                KnowledgeFragment::ToolDefinition(tool_json) => {
+                    // Try to extract a name from the tool definition
+                    tool_json
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            // Fallback: use the type field if no name
+                            tool_json
+                                .get("type")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Generate a single prompt string from all fragments
+    ///
+    /// Fragments are ordered by priority (Critical → High → Normal → Low)
+    pub fn to_prompt(&self) -> String {
+        self.to_prompt_with_context(&ContextMatcher::default())
+    }
+
+    /// Generate a prompt string with render context filtering (Phase 2)
+    ///
+    /// This is the new context-aware rendering API that supports multiple user states
+    /// and improved context matching.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use llm_toolkit::agent::expertise::{Expertise, WeightedFragment, KnowledgeFragment};
+    /// use llm_toolkit::agent::expertise::RenderContext;
+    /// use llm_toolkit::TaskHealth;
+    ///
+    /// let expertise = Expertise::new("test", "1.0")
+    ///     .with_fragment(WeightedFragment::new(
+    ///         KnowledgeFragment::Text("Test".to_string())
+    ///     ));
+    ///
+    /// let context = RenderContext::new()
+    ///     .with_task_type("security-review")
+    ///     .with_task_health(TaskHealth::AtRisk);
+    ///
+    /// let prompt = expertise.to_prompt_with_render_context(&context);
+    /// ```
+    pub fn to_prompt_with_render_context(&self, context: &RenderContext) -> String {
+        // Convert RenderContext to ContextMatcher for now
+        // In the future, we can refactor to use RenderContext directly
+        self.to_prompt_with_context(&context.to_context_matcher())
+    }
+
+    /// Generate a prompt string with context filtering (legacy API)
+    ///
+    /// Only includes fragments that match the given context conditions.
+    ///
+    /// **Note**: Consider using `to_prompt_with_render_context()` for the new API
+    /// with improved context matching.
+    pub fn to_prompt_with_context(&self, context: &ContextMatcher) -> String {
+        let mut result = format!("# Expertise: {} (v{})\n\n", self.id, self.version);
+
+        if !self.tags.is_empty() {
+            result.push_str("**Tags:** ");
+            result.push_str(&self.tags.join(", "));
+            result.push_str("\n\n");
+        }
+
+        result.push_str("---\n\n");
+
+        // Sort fragments by priority (highest first)
+        let mut sorted_fragments: Vec<_> = self
+            .content
+            .iter()
+            .filter(|f| f.context.matches(context))
+            .collect();
+        sorted_fragments.sort_by(|a, b| b.priority.cmp(&a.priority));
+
+        // Group by priority
+        let mut current_priority: Option<Priority> = None;
+        for weighted in sorted_fragments {
+            // Add priority header if changed
+            if current_priority != Some(weighted.priority) {
+                current_priority = Some(weighted.priority);
+                result.push_str(&format!("## Priority: {}\n\n", weighted.priority.label()));
+            }
+
+            // Add fragment content
+            result.push_str(&weighted.fragment.to_prompt());
+            result.push('\n');
+        }
+
+        result
+    }
+
+    /// Generate a Mermaid graph representation
+    pub fn to_mermaid(&self) -> String {
+        let mut result = String::from("graph TD\n");
+
+        // Root node (expertise)
+        result.push_str(&format!("    ROOT[\"Expertise: {}\"]\n", self.id));
+
+        // Add tag nodes if present
+        if !self.tags.is_empty() {
+            result.push_str("    TAGS[\"Tags\"]\n");
+            result.push_str("    ROOT --> TAGS\n");
+            for (i, tag) in self.tags.iter().enumerate() {
+                let tag_id = format!("TAG{}", i);
+                result.push_str(&format!("    {}[\"{}\"]\n", tag_id, tag));
+                result.push_str(&format!("    TAGS --> {}\n", tag_id));
+            }
+        }
+
+        // Add fragment nodes
+        for (i, weighted) in self.content.iter().enumerate() {
+            let node_id = format!("F{}", i);
+            let summary = weighted.fragment.summary();
+            let type_label = weighted.fragment.type_label();
+
+            // Node with priority styling
+            let style_class = match weighted.priority {
+                Priority::Critical => ":::critical",
+                Priority::High => ":::high",
+                Priority::Normal => ":::normal",
+                Priority::Low => ":::low",
+            };
+
+            result.push_str(&format!(
+                "    {}[\"{} [{}]: {}\"]{}\n",
+                node_id,
+                weighted.priority.label(),
+                type_label,
+                summary,
+                style_class
+            ));
+            result.push_str(&format!("    ROOT --> {}\n", node_id));
+
+            // Add context info if conditional
+            if let ContextProfile::Conditional {
+                task_types,
+                user_states,
+                task_health,
+            } = &weighted.context
+            {
+                let context_id = format!("C{}", i);
+                let mut context_parts = Vec::new();
+
+                if !task_types.is_empty() {
+                    context_parts.push(format!("Tasks: {}", task_types.join(", ")));
+                }
+                if !user_states.is_empty() {
+                    context_parts.push(format!("States: {}", user_states.join(", ")));
+                }
+                if let Some(health) = task_health {
+                    context_parts.push(format!("Health: {}", health.label()));
+                }
+
+                if !context_parts.is_empty() {
+                    result.push_str(&format!(
+                        "    {}[\"Context: {}\"]\n",
+                        context_id,
+                        context_parts.join("; ")
+                    ));
+                    result.push_str(&format!("    {} -.-> {}\n", node_id, context_id));
+                }
+            }
+        }
+
+        // Add styling
+        result.push_str("\n    classDef critical fill:#ff6b6b,stroke:#c92a2a,stroke-width:3px\n");
+        result.push_str("    classDef high fill:#ffd93d,stroke:#f08c00,stroke-width:2px\n");
+        result.push_str("    classDef normal fill:#a0e7e5,stroke:#4ecdc4,stroke-width:1px\n");
+        result.push_str("    classDef low fill:#e0e0e0,stroke:#999,stroke-width:1px\n");
+
+        result
+    }
+
+    /// Generate a simple tree representation
+    pub fn to_tree(&self) -> String {
+        let mut result = format!("Expertise: {} (v{})\n", self.id, self.version);
+
+        if !self.tags.is_empty() {
+            result.push_str(&format!("├─ Tags: {}\n", self.tags.join(", ")));
+        }
+
+        result.push_str("└─ Content:\n");
+
+        // Sort by priority
+        let mut sorted_fragments: Vec<_> = self.content.iter().collect();
+        sorted_fragments.sort_by(|a, b| b.priority.cmp(&a.priority));
+
+        for (i, weighted) in sorted_fragments.iter().enumerate() {
+            let is_last = i == sorted_fragments.len() - 1;
+            let prefix = if is_last { "   └─" } else { "   ├─" };
+
+            let summary = weighted.fragment.summary();
+            let type_label = weighted.fragment.type_label();
+
+            result.push_str(&format!(
+                "{} [{}] {}: {}\n",
+                prefix,
+                weighted.priority.label(),
+                type_label,
+                summary
+            ));
+
+            // Add context info
+            if let ContextProfile::Conditional {
+                task_types,
+                user_states,
+                task_health,
+            } = &weighted.context
+            {
+                let sub_prefix = if is_last { "      " } else { "   │  " };
+                if !task_types.is_empty() {
+                    result.push_str(&format!(
+                        "{} └─ Tasks: {}\n",
+                        sub_prefix,
+                        task_types.join(", ")
+                    ));
+                }
+                if !user_states.is_empty() {
+                    result.push_str(&format!(
+                        "{} └─ States: {}\n",
+                        sub_prefix,
+                        user_states.join(", ")
+                    ));
+                }
+                if let Some(health) = task_health {
+                    result.push_str(&format!(
+                        "{} └─ Health: {} {}\n",
+                        sub_prefix,
+                        health.emoji(),
+                        health.label()
+                    ));
+                }
+            }
+        }
+
+        result
+    }
+}
+
+/// WeightedFragment: Knowledge entity with metadata
+///
+/// Combines a knowledge fragment with its priority and activation context.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WeightedFragment {
+    /// Priority: Controls enforcement strength and ordering
+    #[serde(default)]
+    pub priority: Priority,
+
+    /// Context: Activation conditions
+    #[serde(default)]
+    pub context: ContextProfile,
+
+    /// Fragment: The actual knowledge content
+    pub fragment: KnowledgeFragment,
+}
+
+impl WeightedFragment {
+    /// Create a new weighted fragment with default priority and always-active context
+    pub fn new(fragment: KnowledgeFragment) -> Self {
+        Self {
+            priority: Priority::default(),
+            context: ContextProfile::default(),
+            fragment,
+        }
+    }
+
+    /// Set priority
+    pub fn with_priority(mut self, priority: Priority) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    /// Set context profile
+    pub fn with_context(mut self, context: ContextProfile) -> Self {
+        self.context = context;
+        self
+    }
+}
+
+// ============================================================================
+// Integration with llm-toolkit core traits
+// ============================================================================
+
+impl ToPrompt for Expertise {
+    fn to_prompt_parts(&self) -> Vec<PromptPart> {
+        // Delegate to our own to_prompt() method and wrap in a Text PromptPart
+        let prompt_text = Expertise::to_prompt(self);
+        vec![PromptPart::Text(prompt_text)]
+    }
+
+    fn to_prompt(&self) -> String {
+        // Delegate to our own to_prompt() method directly
+        Expertise::to_prompt(self)
+    }
+}
+
+impl ToExpertise for Expertise {
+    fn description(&self) -> &str {
+        // If explicit description exists, return it
+        if let Some(desc) = &self.description {
+            return desc;
+        }
+
+        // Fallback to id if no description is set
+        // Note: For richer auto-generation, users should call get_description() explicitly
+        // or set description via with_description()
+        &self.id
+    }
+
+    fn capabilities(&self) -> Vec<Capability> {
+        // Extract tool names from ToolDefinition fragments and convert to Capability
+        self.extract_tool_names()
+            .into_iter()
+            .map(Capability::new)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_expertise_builder() {
+        let expertise = Expertise::new("test", "1.0")
+            .with_description("Test description")
+            .with_tag("test-tag")
+            .with_fragment(WeightedFragment::new(KnowledgeFragment::Text(
+                "Test content".to_string(),
+            )));
+
+        assert_eq!(expertise.id, "test");
+        assert_eq!(expertise.version, "1.0");
+        assert_eq!(expertise.description, Some("Test description".to_string()));
+        assert_eq!(expertise.tags.len(), 1);
+        assert_eq!(expertise.content.len(), 1);
+    }
+
+    #[test]
+    fn test_to_prompt_ordering() {
+        let expertise = Expertise::new("test", "1.0")
+            .with_fragment(
+                WeightedFragment::new(KnowledgeFragment::Text("Low priority".to_string()))
+                    .with_priority(Priority::Low),
+            )
+            .with_fragment(
+                WeightedFragment::new(KnowledgeFragment::Text("Critical priority".to_string()))
+                    .with_priority(Priority::Critical),
+            )
+            .with_fragment(
+                WeightedFragment::new(KnowledgeFragment::Text("Normal priority".to_string()))
+                    .with_priority(Priority::Normal),
+            );
+
+        let prompt = expertise.to_prompt();
+
+        // Critical should appear before Normal, Normal before Low
+        let critical_pos = prompt.find("Critical priority").unwrap();
+        let normal_pos = prompt.find("Normal priority").unwrap();
+        let low_pos = prompt.find("Low priority").unwrap();
+
+        assert!(critical_pos < normal_pos);
+        assert!(normal_pos < low_pos);
+    }
+
+    #[test]
+    fn test_context_filtering() {
+        let expertise = Expertise::new("test", "1.0")
+            .with_fragment(
+                WeightedFragment::new(KnowledgeFragment::Text("Always visible".to_string()))
+                    .with_context(ContextProfile::Always),
+            )
+            .with_fragment(
+                WeightedFragment::new(KnowledgeFragment::Text("Debug only".to_string()))
+                    .with_context(ContextProfile::Conditional {
+                        task_types: vec!["Debug".to_string()],
+                        user_states: vec![],
+                        task_health: None,
+                    }),
+            );
+
+        // Without debug context
+        let prompt1 = expertise.to_prompt_with_context(&ContextMatcher::new());
+        assert!(prompt1.contains("Always visible"));
+        assert!(!prompt1.contains("Debug only"));
+
+        // With debug context
+        let prompt2 =
+            expertise.to_prompt_with_context(&ContextMatcher::new().with_task_type("Debug"));
+        assert!(prompt2.contains("Always visible"));
+        assert!(prompt2.contains("Debug only"));
+    }
+
+    #[test]
+    fn test_to_tree() {
+        let expertise = Expertise::new("test", "1.0")
+            .with_tag("test-tag")
+            .with_fragment(WeightedFragment::new(KnowledgeFragment::Text(
+                "Test content".to_string(),
+            )));
+
+        let tree = expertise.to_tree();
+        assert!(tree.contains("Expertise: test"));
+        assert!(tree.contains("test-tag"));
+        assert!(tree.contains("Test content"));
+    }
+
+    #[test]
+    fn test_to_mermaid() {
+        let expertise = Expertise::new("test", "1.0").with_fragment(WeightedFragment::new(
+            KnowledgeFragment::Text("Test content".to_string()),
+        ));
+
+        let mermaid = expertise.to_mermaid();
+        assert!(mermaid.contains("graph TD"));
+        assert!(mermaid.contains("Expertise: test"));
+        assert!(mermaid.contains("Test content"));
+    }
+
+    #[test]
+    fn test_to_prompt_trait() {
+        let expertise = Expertise::new("test", "1.0").with_fragment(WeightedFragment::new(
+            KnowledgeFragment::Text("Test content".to_string()),
+        ));
+
+        let result = ToPrompt::to_prompt(&expertise);
+        assert!(result.contains("Expertise: test"));
+        assert!(result.contains("Test content"));
+    }
+
+    #[test]
+    fn test_to_prompt_parts() {
+        let expertise = Expertise::new("test", "1.0").with_fragment(WeightedFragment::new(
+            KnowledgeFragment::Text("Test content".to_string()),
+        ));
+
+        let parts = ToPrompt::to_prompt_parts(&expertise);
+        assert_eq!(parts.len(), 1);
+        match &parts[0] {
+            PromptPart::Text(text) => {
+                assert!(text.contains("Expertise: test"));
+                assert!(text.contains("Test content"));
+            }
+            _ => panic!("Expected Text PromptPart"),
+        }
+    }
+
+    #[test]
+    fn test_auto_description() {
+        // No explicit description - should fallback to id
+        let expertise = Expertise::new("test-agent", "1.0");
+        assert_eq!(expertise.description(), "test-agent");
+
+        // With explicit description
+        let expertise_with_desc =
+            Expertise::new("test-agent", "1.0").with_description("A test agent");
+        assert_eq!(expertise_with_desc.description(), "A test agent");
+
+        // get_description() auto-generates from first fragment
+        let expertise_with_fragment = Expertise::new("test-agent", "1.0")
+            .with_fragment(WeightedFragment::new(
+                KnowledgeFragment::Text("You are a helpful assistant specialized in Rust programming. You provide clear, concise, and accurate answers.".to_string()),
+            ));
+        let auto_desc = expertise_with_fragment.get_description();
+        assert!(auto_desc.starts_with("You are a helpful assistant"));
+        assert!(auto_desc.len() <= 103); // ~100 chars + "..."
+    }
+}

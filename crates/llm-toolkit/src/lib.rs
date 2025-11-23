@@ -146,6 +146,11 @@ pub use agent::persona::{ContextConfig, Persona, PersonaAgent};
 pub use agent::retrieval::RetrievalAwareAgent;
 
 #[cfg(feature = "agent")]
+pub use agent::expertise::{
+    Anchor, ContextualPrompt, Expertise, KnowledgeFragment, RenderContext, WeightedFragment,
+};
+
+#[cfg(feature = "agent")]
 pub use orchestrator::{
     BlueprintWorkflow, Orchestrator, OrchestratorError, StrategyMap, TypeMarker,
 };
