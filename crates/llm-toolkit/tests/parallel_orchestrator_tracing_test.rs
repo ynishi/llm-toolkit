@@ -77,9 +77,11 @@ impl SimpleAgent {
 #[async_trait::async_trait]
 impl Agent for SimpleAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Simple test agent"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Simple test agent";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -93,7 +95,7 @@ impl DynamicAgent for SimpleAgent {
         self.name.clone()
     }
 
-    fn expertise(&self) -> &str {
+    fn description(&self) -> &str {
         "Simple test agent"
     }
 
@@ -371,9 +373,11 @@ async fn test_failure_events() {
     #[async_trait::async_trait]
     impl Agent for FailingAgent {
         type Output = JsonValue;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Failing agent"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &str = "Failing agent";
+            &EXPERTISE
         }
 
         async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -389,7 +393,7 @@ async fn test_failure_events() {
             "FailingAgent".to_string()
         }
 
-        fn expertise(&self) -> &str {
+        fn description(&self) -> &str {
             "Failing agent"
         }
 

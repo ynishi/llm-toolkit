@@ -51,9 +51,11 @@ impl MockAgent {
 #[async_trait::async_trait]
 impl Agent for MockAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock agent for testing"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Mock agent for testing";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -74,7 +76,7 @@ impl DynamicAgent for MockAgent {
         self.agent_name.clone()
     }
 
-    fn expertise(&self) -> &str {
+    fn description(&self) -> &str {
         "Mock agent for testing"
     }
 
@@ -107,9 +109,11 @@ impl FailingAgent {
 #[async_trait::async_trait]
 impl Agent for FailingAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Failing agent for testing"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Failing agent for testing";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -128,7 +132,7 @@ impl DynamicAgent for FailingAgent {
         self.agent_name.clone()
     }
 
-    fn expertise(&self) -> &str {
+    fn description(&self) -> &str {
         "Failing agent for testing"
     }
 
@@ -163,9 +167,11 @@ impl SuccessAgent {
 #[async_trait::async_trait]
 impl Agent for SuccessAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Success agent for testing"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Success agent for testing";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -180,7 +186,7 @@ impl DynamicAgent for SuccessAgent {
         self.agent_name.clone()
     }
 
-    fn expertise(&self) -> &str {
+    fn description(&self) -> &str {
         "Success agent for testing"
     }
 
@@ -211,9 +217,11 @@ impl RedesignDecisionAgent {
 #[async_trait::async_trait]
 impl Agent for RedesignDecisionAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock redesign decision agent"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Mock redesign decision agent";
+        &EXPERTISE
     }
 
     async fn execute(&self, input: Payload) -> Result<Self::Output, AgentError> {
@@ -227,6 +235,22 @@ impl Agent for RedesignDecisionAgent {
         } else {
             Ok("FAIL".to_string())
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl DynamicAgent for RedesignDecisionAgent {
+    fn name(&self) -> String {
+        "RedesignDecisionAgent".to_string()
+    }
+
+    fn description(&self) -> &str {
+        "Mock redesign decision agent"
+    }
+
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(serde_json::to_value(output)?))
     }
 }
 
@@ -251,9 +275,11 @@ impl StrategyGeneratorAgent {
 #[async_trait::async_trait]
 impl Agent for StrategyGeneratorAgent {
     type Output = StrategyMap;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock strategy generator agent"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Mock strategy generator agent";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -289,6 +315,22 @@ impl Agent for StrategyGeneratorAgent {
     }
 }
 
+#[async_trait::async_trait]
+impl DynamicAgent for StrategyGeneratorAgent {
+    fn name(&self) -> String {
+        "StrategyGeneratorAgent".to_string()
+    }
+
+    fn description(&self) -> &str {
+        "Mock strategy generator agent"
+    }
+
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(serde_json::to_value(output)?))
+    }
+}
+
 /// Mock redesign decision agent that always returns "FAIL" (no redesign)
 /// This is useful for tests that want to preserve the old behavior without self-remediation
 #[derive(Clone)]
@@ -303,13 +345,31 @@ impl NoRedesignAgent {
 #[async_trait::async_trait]
 impl Agent for NoRedesignAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock agent that never triggers redesign"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Mock agent that never triggers redesign";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
         Ok("FAIL".to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl DynamicAgent for NoRedesignAgent {
+    fn name(&self) -> String {
+        "NoRedesignAgent".to_string()
+    }
+
+    fn description(&self) -> &str {
+        "Mock agent that never triggers redesign"
+    }
+
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(serde_json::to_value(output)?))
     }
 }
 
@@ -326,13 +386,31 @@ impl DummyStrategyGenerator {
 #[async_trait::async_trait]
 impl Agent for DummyStrategyGenerator {
     type Output = StrategyMap;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Dummy strategy generator (should not be called)"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Dummy strategy generator (should not be called)";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
         panic!("DummyStrategyGenerator should never be called");
+    }
+}
+
+#[async_trait::async_trait]
+impl DynamicAgent for DummyStrategyGenerator {
+    fn name(&self) -> String {
+        "DummyStrategyGenerator".to_string()
+    }
+
+    fn description(&self) -> &str {
+        "Dummy strategy generator (should not be called)"
+    }
+
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(serde_json::to_value(output)?))
     }
 }
 
@@ -907,9 +985,11 @@ async fn test_thread_safe_agent_with_shared_state() {
     #[async_trait::async_trait]
     impl Agent for CountingAgent {
         type Output = JsonValue;
+        type Expertise = &'static str;
 
-        fn expertise(&self) -> &str {
-            "Counting agent with shared state"
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &str = "Counting agent with shared state";
+            &EXPERTISE
         }
 
         async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -926,7 +1006,7 @@ async fn test_thread_safe_agent_with_shared_state() {
             "CountingAgent".to_string()
         }
 
-        fn expertise(&self) -> &str {
+        fn description(&self) -> &str {
             "Counting agent with shared state"
         }
 

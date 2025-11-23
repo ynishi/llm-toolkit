@@ -43,7 +43,7 @@ impl Agent for MockConversationAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock conversational agent";
+        const EXPERTISE: &str = "Mock conversational agent";
         &EXPERTISE
     }
 

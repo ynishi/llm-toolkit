@@ -114,7 +114,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Test agent that fails a configurable number of times";
+            const EXPERTISE: &str = "Test agent that fails a configurable number of times";
             &EXPERTISE
         }
 
@@ -218,7 +218,8 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Test agent that simulates rate limiting with retry_after";
+            const EXPERTISE: &str =
+                "Test agent that simulates rate limiting with retry_after";
             &EXPERTISE
         }
 
@@ -265,7 +266,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Test agent that simulates 429 without retry_after";
+            const EXPERTISE: &str = "Test agent that simulates 429 without retry_after";
             &EXPERTISE
         }
 

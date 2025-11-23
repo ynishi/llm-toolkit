@@ -14,7 +14,7 @@ impl Agent for SimpleAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Simple agent";
+        const EXPERTISE: &str = "Simple agent";
         &EXPERTISE
     }
 

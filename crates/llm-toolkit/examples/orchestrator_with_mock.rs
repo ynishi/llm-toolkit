@@ -63,7 +63,7 @@ impl Agent for MockJsonAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock strategy generator for testing";
+        const EXPERTISE: &str = "Mock strategy generator for testing";
         &EXPERTISE
     }
 

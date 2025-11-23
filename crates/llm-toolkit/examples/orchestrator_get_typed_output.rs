@@ -101,7 +101,7 @@ impl Agent for MockStrategyAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock strategy generator";
+        const EXPERTISE: &str = "Mock strategy generator";
         &EXPERTISE
     }
 
@@ -134,7 +134,7 @@ impl Agent for MockInternalAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock internal agent";
+        const EXPERTISE: &str = "Mock internal agent";
         &EXPERTISE
     }
 
@@ -159,11 +159,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Create orchestrator with mock internal agents
-    let mut orchestrator = Orchestrator::with_internal_agents(
-        blueprint,
-        MockInternalAgent,
-        MockStrategyAgent,
-    );
+    let mut orchestrator =
+        Orchestrator::with_internal_agents(blueprint, MockInternalAgent, MockStrategyAgent);
 
     // Add the typed agent
     orchestrator.add_agent(MockTypedAgent::new(

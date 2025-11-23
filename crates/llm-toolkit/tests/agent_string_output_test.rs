@@ -18,9 +18,11 @@ impl MockPlainAgent {
 #[async_trait::async_trait]
 impl Agent for MockPlainAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "mock"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "mock";
+        &EXPERTISE
     }
 
     async fn execute(&self, _: Payload) -> Result<String, AgentError> {

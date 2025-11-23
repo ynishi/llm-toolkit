@@ -38,7 +38,7 @@ impl Agent for OlamaAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "General purpose Olama agent";
+        const EXPERTISE: &str = "General purpose Olama agent";
         &EXPERTISE
     }
 

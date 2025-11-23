@@ -35,9 +35,11 @@ impl FastAgent {
 #[async_trait::async_trait]
 impl Agent for FastAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Fast test agent"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Fast test agent";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -51,7 +53,7 @@ impl DynamicAgent for FastAgent {
         self.name.clone()
     }
 
-    fn expertise(&self) -> &str {
+    fn description(&self) -> &str {
         "Fast test agent"
     }
 
@@ -79,9 +81,11 @@ impl SlowAgent {
 #[async_trait::async_trait]
 impl Agent for SlowAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Slow test agent"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Slow test agent";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -96,7 +100,7 @@ impl DynamicAgent for SlowAgent {
         self.name.clone()
     }
 
-    fn expertise(&self) -> &str {
+    fn description(&self) -> &str {
         "Slow test agent"
     }
 

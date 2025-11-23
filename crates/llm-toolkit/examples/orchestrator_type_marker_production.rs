@@ -60,7 +60,7 @@ impl llm_toolkit::agent::Agent for SimpleStrategyAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Strategy generator";
+        const EXPERTISE: &str = "Strategy generator";
         &EXPERTISE
     }
 

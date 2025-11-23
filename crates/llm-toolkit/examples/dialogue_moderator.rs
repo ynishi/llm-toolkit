@@ -32,7 +32,7 @@ impl Agent for KeywordModerator {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Decides execution strategy based on conversation context";
+        const EXPERTISE: &str = "Decides execution strategy based on conversation context";
         &EXPERTISE
     }
 
@@ -107,7 +107,7 @@ impl Agent for MockAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock agent for demonstration";
+        const EXPERTISE: &str = "Mock agent for demonstration";
         &EXPERTISE
     }
 

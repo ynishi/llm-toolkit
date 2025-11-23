@@ -37,7 +37,7 @@ impl ToExpertise for Expertise {
         // Extract tool names from ToolDefinition fragments and convert to Capability
         self.extract_tool_names()
             .into_iter()
-            .map(|name| Capability::new(name))
+            .map(Capability::new)
             .collect()
     }
 }
@@ -82,8 +82,8 @@ mod tests {
         assert_eq!(expertise.description(), "test-agent");
 
         // With explicit description
-        let expertise_with_desc = Expertise::new("test-agent", "1.0")
-            .with_description("A test agent");
+        let expertise_with_desc =
+            Expertise::new("test-agent", "1.0").with_description("A test agent");
         assert_eq!(expertise_with_desc.description(), "A test agent");
 
         // get_description() auto-generates from first fragment

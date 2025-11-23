@@ -30,9 +30,11 @@ impl MockAgent {
 #[async_trait]
 impl Agent for MockAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock agent for testing"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Mock agent for testing";
+        &EXPERTISE
     }
 
     fn name(&self) -> String {

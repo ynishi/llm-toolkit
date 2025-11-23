@@ -2382,7 +2382,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Mock agent for testing";
+            const EXPERTISE: &str = "Mock agent for testing";
             &EXPERTISE
         }
 
@@ -2636,7 +2636,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Delayed agent";
+            const EXPERTISE: &str = "Delayed agent";
             &EXPERTISE
         }
 
@@ -2986,7 +2986,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Generator";
+                const EXPERTISE: &str = "Generator";
                 &EXPERTISE
             }
 
@@ -3574,7 +3574,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Echo agent";
+                const EXPERTISE: &str = "Echo agent";
                 &EXPERTISE
             }
 
@@ -3717,7 +3717,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Verbose echo agent";
+                const EXPERTISE: &str = "Verbose echo agent";
                 &EXPERTISE
             }
 
@@ -3978,7 +3978,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "History echo agent";
+                const EXPERTISE: &str = "History echo agent";
                 &EXPERTISE
             }
 
@@ -4079,7 +4079,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Echo agent";
+                const EXPERTISE: &str = "Echo agent";
                 &EXPERTISE
             }
 
@@ -4207,7 +4207,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Simple agent";
+                const EXPERTISE: &str = "Simple agent";
                 &EXPERTISE
             }
 
@@ -4312,7 +4312,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Tracking agent";
+                const EXPERTISE: &str = "Tracking agent";
                 &EXPERTISE
             }
 
@@ -4488,7 +4488,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Tracking agent";
+                const EXPERTISE: &str = "Tracking agent";
                 &EXPERTISE
             }
 
@@ -4660,7 +4660,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Tracking agent";
+                const EXPERTISE: &str = "Tracking agent";
                 &EXPERTISE
             }
 
@@ -4857,7 +4857,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Tracking agent";
+                const EXPERTISE: &str = "Tracking agent";
                 &EXPERTISE
             }
 
@@ -5072,7 +5072,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Context tracking agent";
+                const EXPERTISE: &str = "Context tracking agent";
                 &EXPERTISE
             }
 
@@ -5173,7 +5173,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Order recording agent";
+                const EXPERTISE: &str = "Order recording agent";
                 &EXPERTISE
             }
 
@@ -5256,7 +5256,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Passthrough";
+                const EXPERTISE: &str = "Passthrough";
                 &EXPERTISE
             }
 
@@ -5317,7 +5317,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Tracking agent";
+                const EXPERTISE: &str = "Tracking agent";
                 &EXPERTISE
             }
 
@@ -6217,7 +6217,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Recording agent for testing";
+            const EXPERTISE: &str = "Recording agent for testing";
             &EXPERTISE
         }
 
@@ -6767,7 +6767,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Mock moderator for testing";
+                const EXPERTISE: &str = "Mock moderator for testing";
                 &EXPERTISE
             }
 
@@ -6862,7 +6862,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Bad moderator";
+                const EXPERTISE: &str = "Bad moderator";
                 &EXPERTISE
             }
 

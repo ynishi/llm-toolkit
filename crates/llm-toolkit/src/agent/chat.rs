@@ -153,9 +153,9 @@ impl<A: Agent> Chat<A> {
     {
         if self.with_history {
             match self.identity {
-                Some((name, role)) => {
-                    crate::agent::AnyAgent::boxed(HistoryAwareAgent::new_with_identity(self.agent, name, role))
-                }
+                Some((name, role)) => crate::agent::AnyAgent::boxed(
+                    HistoryAwareAgent::new_with_identity(self.agent, name, role),
+                ),
                 None => crate::agent::AnyAgent::boxed(HistoryAwareAgent::new(self.agent)),
             }
         } else {
@@ -242,7 +242,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Test agent for Chat builder";
+            const EXPERTISE: &str = "Test agent for Chat builder";
             &EXPERTISE
         }
 

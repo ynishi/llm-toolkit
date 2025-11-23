@@ -264,7 +264,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Test recording agent";
+            const EXPERTISE: &str = "Test recording agent";
             &EXPERTISE
         }
 

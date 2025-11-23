@@ -825,7 +825,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Test agent";
+            const EXPERTISE: &str = "Test agent";
             &EXPERTISE
         }
 
@@ -1394,7 +1394,7 @@ Please review the code
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Mock agent for testing";
+            const EXPERTISE: &str = "Mock agent for testing";
             &EXPERTISE
         }
 

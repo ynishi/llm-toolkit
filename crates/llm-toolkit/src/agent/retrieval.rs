@@ -206,7 +206,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Mock retriever for testing";
+            const EXPERTISE: &str = "Mock retriever for testing";
             &EXPERTISE
         }
 
@@ -245,7 +245,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Mock inner agent for testing";
+            const EXPERTISE: &str = "Mock inner agent for testing";
             &EXPERTISE
         }
 
@@ -313,7 +313,7 @@ mod tests {
             type Expertise = &'static str;
 
             fn expertise(&self) -> &&'static str {
-                const EXPERTISE: &'static str = "Failing retriever";
+                const EXPERTISE: &str = "Failing retriever";
                 &EXPERTISE
             }
 

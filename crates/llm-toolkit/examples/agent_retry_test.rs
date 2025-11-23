@@ -41,7 +41,7 @@ impl AgentTrait for FailingMockAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock agent for testing retry behavior";
+        const EXPERTISE: &str = "Mock agent for testing retry behavior";
         &EXPERTISE
     }
 

@@ -36,7 +36,7 @@ impl Agent for MockAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock agent for lifecycle testing";
+        const EXPERTISE: &str = "Mock agent for lifecycle testing";
         &EXPERTISE
     }
 
@@ -51,8 +51,8 @@ impl DynamicAgent for MockAgent {
         self.name.clone()
     }
 
-    fn expertise(&self) -> &str {
-        Agent::expertise(self)
+    fn description(&self) -> &str {
+        "Mock agent for lifecycle testing"
     }
 
     async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
@@ -79,12 +79,28 @@ impl Agent for MockStrategyGenerator {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock strategy generator";
+        const EXPERTISE: &str = "Mock strategy generator";
         &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
         Ok(self.strategy.clone())
+    }
+}
+
+#[async_trait::async_trait]
+impl DynamicAgent for MockStrategyGenerator {
+    fn name(&self) -> String {
+        "MockStrategyGenerator".to_string()
+    }
+
+    fn description(&self) -> &str {
+        "Mock strategy generator"
+    }
+
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(serde_json::to_value(output)?))
     }
 }
 
@@ -104,12 +120,28 @@ impl Agent for MockStringAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock string agent";
+        const EXPERTISE: &str = "Mock string agent";
         &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
         Ok("FAIL".to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl DynamicAgent for MockStringAgent {
+    fn name(&self) -> String {
+        "MockStringAgent".to_string()
+    }
+
+    fn description(&self) -> &str {
+        "Mock string agent"
+    }
+
+    async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
+        let output = self.execute(input).await?;
+        Ok(AgentOutput::Success(serde_json::to_value(output)?))
     }
 }
 

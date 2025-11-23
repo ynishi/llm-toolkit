@@ -39,7 +39,7 @@ impl Agent for MockRetrieverAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock document retriever";
+        const EXPERTISE: &str = "Mock document retriever";
         &EXPERTISE
     }
 
@@ -78,7 +78,7 @@ where
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock inner agent";
+        const EXPERTISE: &str = "Mock inner agent";
         &EXPERTISE
     }
 
@@ -164,7 +164,7 @@ async fn test_retrieval_aware_agent_propagates_retriever_error() {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Failing retriever";
+            const EXPERTISE: &str = "Failing retriever";
             &EXPERTISE
         }
 
@@ -217,7 +217,7 @@ async fn test_retrieval_aware_agent_expertise_delegation() {
     let rag_agent = RetrievalAwareAgent::new(retriever, inner_agent);
 
     // Expertise should be inherited from inner agent
-    assert_eq!(rag_agent.expertise(), "Mock inner agent");
+    assert_eq!(*rag_agent.expertise(), "Mock inner agent");
 }
 
 #[tokio::test]

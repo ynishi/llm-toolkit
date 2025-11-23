@@ -40,13 +40,17 @@ impl Agent for ApprovalAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock agent that requests human approval";
+        const EXPERTISE: &str = "Mock agent that requests human approval";
         &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
         // This should never be called directly - execute_dynamic is used instead
         unreachable!("ApprovalAgent should use execute_dynamic")
+    }
+
+    fn name(&self) -> String {
+        "ApprovalAgent".to_string()
     }
 }
 
@@ -58,10 +62,6 @@ impl DynamicAgent for ApprovalAgent {
 
     fn description(&self) -> &str {
         "Mock agent that requests human approval"
-    }
-
-    fn expertise(&self) -> &str {
-        self.description()
     }
 
     async fn execute_dynamic(&self, _input: Payload) -> Result<AgentOutput, AgentError> {
@@ -94,12 +94,16 @@ impl Agent for MockAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock agent for testing";
+        const EXPERTISE: &str = "Mock agent for testing";
         &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
         Ok(self.output.clone())
+    }
+
+    fn name(&self) -> String {
+        self.agent_name.clone()
     }
 }
 
@@ -111,10 +115,6 @@ impl DynamicAgent for MockAgent {
 
     fn description(&self) -> &str {
         "Mock agent for testing"
-    }
-
-    fn expertise(&self) -> &str {
-        self.description()
     }
 
     async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {

@@ -51,7 +51,7 @@ impl Agent for VectorStoreAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Semantic search over programming language documentation";
+        const EXPERTISE: &str = "Semantic search over programming language documentation";
         &EXPERTISE
     }
 
@@ -107,7 +107,7 @@ impl Agent for MockLLMAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Answering questions about programming languages";
+        const EXPERTISE: &str = "Answering questions about programming languages";
         &EXPERTISE
     }
 

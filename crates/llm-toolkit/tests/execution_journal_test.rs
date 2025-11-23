@@ -37,7 +37,7 @@ impl Agent for MockSuccessAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock success agent for journal testing";
+        const EXPERTISE: &str = "Mock success agent for journal testing";
         &EXPERTISE
     }
 
@@ -52,8 +52,8 @@ impl DynamicAgent for MockSuccessAgent {
         self.name.clone()
     }
 
-    fn expertise(&self) -> &str {
-        Agent::expertise(self)
+    fn description(&self) -> &str {
+        "Mock success agent for journal testing"
     }
 
     async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
@@ -79,7 +79,7 @@ impl Agent for MockFailingAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock failing agent for journal testing";
+        const EXPERTISE: &str = "Mock failing agent for journal testing";
         &EXPERTISE
     }
 
@@ -96,8 +96,8 @@ impl DynamicAgent for MockFailingAgent {
         self.name.clone()
     }
 
-    fn expertise(&self) -> &str {
-        Agent::expertise(self)
+    fn description(&self) -> &str {
+        "Mock failing agent for journal testing"
     }
 
     async fn execute_dynamic(&self, input: Payload) -> Result<AgentOutput, AgentError> {
@@ -235,7 +235,7 @@ impl Agent for NoRedesignAgent {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Mock agent that never triggers redesign";
+        const EXPERTISE: &str = "Mock agent that never triggers redesign";
         &EXPERTISE
     }
 
@@ -253,7 +253,7 @@ impl Agent for DummyStrategyGenerator {
     type Expertise = &'static str;
 
     fn expertise(&self) -> &&'static str {
-        const EXPERTISE: &'static str = "Dummy strategy generator (should not be called)";
+        const EXPERTISE: &str = "Dummy strategy generator (should not be called)";
         &EXPERTISE
     }
 

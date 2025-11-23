@@ -210,8 +210,14 @@ impl Orchestrator {
         let mut orchestrator = Self {
             blueprint,
             agents: HashMap::new(),
-            internal_json_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(ClaudeCodeJsonAgent::new(), 3)),
-            internal_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(ClaudeCodeAgent::new(), 3)),
+            internal_json_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(
+                ClaudeCodeJsonAgent::new(),
+                3,
+            )),
+            internal_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(
+                ClaudeCodeAgent::new(),
+                3,
+            )),
             strategy_map: None,
             context: HashMap::new(),
             execution_journal: None,
@@ -2684,7 +2690,7 @@ mod tests {
         type Expertise = &'static str;
 
         fn expertise(&self) -> &&'static str {
-            const EXPERTISE: &'static str = "Test agent";
+            const EXPERTISE: &str = "Test agent";
             &EXPERTISE
         }
 

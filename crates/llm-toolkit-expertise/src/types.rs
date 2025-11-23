@@ -131,9 +131,10 @@ impl Expertise {
                 KnowledgeFragment::Text(text) => text.clone(),
                 KnowledgeFragment::Logic { instruction, .. } => instruction.clone(),
                 KnowledgeFragment::Guideline { rule, .. } => rule.clone(),
-                KnowledgeFragment::QualityStandard { criteria, .. } => {
-                    criteria.first().cloned().unwrap_or_else(|| format!("{} v{}", self.id, self.version))
-                }
+                KnowledgeFragment::QualityStandard { criteria, .. } => criteria
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| format!("{} v{}", self.id, self.version)),
                 _ => {
                     // For ToolDefinition and other types, look for next usable fragment
                     self.content
@@ -141,7 +142,9 @@ impl Expertise {
                         .skip(1)
                         .find_map(|wf| match &wf.fragment {
                             KnowledgeFragment::Text(t) => Some(t.clone()),
-                            KnowledgeFragment::Logic { instruction, .. } => Some(instruction.clone()),
+                            KnowledgeFragment::Logic { instruction, .. } => {
+                                Some(instruction.clone())
+                            }
                             KnowledgeFragment::Guideline { rule, .. } => Some(rule.clone()),
                             _ => None,
                         })

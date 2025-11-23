@@ -241,8 +241,14 @@ impl ParallelOrchestrator {
         Self {
             blueprint,
             agents: HashMap::new(),
-            internal_json_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(ClaudeCodeJsonAgent::new(), 3)),
-            internal_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(ClaudeCodeAgent::new(), 3)),
+            internal_json_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(
+                ClaudeCodeJsonAgent::new(),
+                3,
+            )),
+            internal_agent: crate::agent::AnyAgent::boxed(RetryAgent::new(
+                ClaudeCodeAgent::new(),
+                3,
+            )),
             strategy: None,
             config: ParallelOrchestratorConfig::default(),
             execution_journal: None,

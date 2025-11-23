@@ -265,10 +265,10 @@ pub use payload_message::{
     participant_relation,
 };
 
+use crate::prompt::ToPrompt;
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
-use crate::prompt::ToPrompt;
 
 /// A trait for types that can serve as agent expertise.
 ///
@@ -503,11 +503,7 @@ pub trait Agent: Send + Sync {
     /// ```
     fn capabilities(&self) -> Option<Vec<Capability>> {
         let caps = self.expertise().capabilities();
-        if caps.is_empty() {
-            None
-        } else {
-            Some(caps)
-        }
+        if caps.is_empty() { None } else { Some(caps) }
     }
 }
 
@@ -596,7 +592,10 @@ impl<T: Serialize + DeserializeOwned> Agent for AnyAgent<T> {
 ///
 /// This type alias requires specifying the Expertise type, which is
 /// inconvenient for dynamic dispatch. Use `Box<AnyAgent<T>>` instead.
-#[deprecated(since = "0.56.0", note = "Use Box<AnyAgent<T>> or Arc<AnyAgent<T>> instead")]
+#[deprecated(
+    since = "0.56.0",
+    note = "Use Box<AnyAgent<T>> or Arc<AnyAgent<T>> instead"
+)]
 pub type BoxedAgent<T, E = String> = Box<dyn Agent<Output = T, Expertise = E>>;
 
 /// Normalize raw LLM responses for agents that output plain `String` values.
