@@ -5,13 +5,13 @@
 
 #![cfg(feature = "integration")]
 
+use llm_toolkit::ToPrompt;
 use llm_toolkit_expertise::{
     context::{ContextProfile, Priority, TaskHealth},
     fragment::KnowledgeFragment,
     render::{ContextualPrompt, RenderContext},
     types::{Expertise, WeightedFragment},
 };
-use llm_toolkit::ToPrompt;
 use serde::Serialize;
 
 // ============================================================================
@@ -33,7 +33,7 @@ use serde::Serialize;
 User Level: {{user_level}}
 "#)]
 struct AgentRequestDto {
-    expertise: String,  // We'll use ContextualPrompt.to_prompt() result
+    expertise: String, // We'll use ContextualPrompt.to_prompt() result
     task: String,
     user_level: String,
 }
@@ -72,7 +72,8 @@ fn test_dto_with_contextual_prompt() {
 
     // Beginner context
     let beginner_context = RenderContext::new().with_user_state("beginner");
-    let beginner_expertise = ContextualPrompt::from_expertise(&expertise, beginner_context).to_prompt();
+    let beginner_expertise =
+        ContextualPrompt::from_expertise(&expertise, beginner_context).to_prompt();
 
     let beginner_dto = AgentRequestDto {
         expertise: beginner_expertise,
@@ -150,8 +151,10 @@ fn test_multi_agent_dto_with_different_contexts() {
 
     // Secondary agent: Code formatter (always OnTrack)
     let formatter_expert = Expertise::new("formatter", "1.0").with_fragment(
-        WeightedFragment::new(KnowledgeFragment::Text("Format code consistently".to_string()))
-            .with_context(ContextProfile::Always),
+        WeightedFragment::new(KnowledgeFragment::Text(
+            "Format code consistently".to_string(),
+        ))
+        .with_context(ContextProfile::Always),
     );
 
     // Different contexts for each agent
@@ -221,16 +224,22 @@ fn test_adaptive_debugging_assistant() {
         );
 
     // Scenario 1: OnTrack - normal debugging
-    let on_track = ContextualPrompt::from_expertise(&debugger, RenderContext::new().with_task_health(TaskHealth::OnTrack))
-        .to_prompt();
+    let on_track = ContextualPrompt::from_expertise(
+        &debugger,
+        RenderContext::new().with_task_health(TaskHealth::OnTrack),
+    )
+    .to_prompt();
 
     assert!(on_track.contains("Standard debugging procedure"));
     assert!(!on_track.contains("SLOW DOWN"));
     assert!(!on_track.contains("STOP"));
 
     // Scenario 2: AtRisk - cautious mode
-    let at_risk = ContextualPrompt::from_expertise(&debugger, RenderContext::new().with_task_health(TaskHealth::AtRisk))
-        .to_prompt();
+    let at_risk = ContextualPrompt::from_expertise(
+        &debugger,
+        RenderContext::new().with_task_health(TaskHealth::AtRisk),
+    )
+    .to_prompt();
 
     assert!(at_risk.contains("Standard debugging procedure"));
     assert!(at_risk.contains("SLOW DOWN"));
@@ -293,8 +302,7 @@ fn test_context_aware_code_reviewer() {
         .with_task_type("security-review")
         .with_user_state("beginner");
 
-    let combined_prompt =
-        ContextualPrompt::from_expertise(&reviewer, combined_context).to_prompt();
+    let combined_prompt = ContextualPrompt::from_expertise(&reviewer, combined_context).to_prompt();
 
     // Should have all three fragments
     assert!(combined_prompt.contains("Review code for correctness"));
@@ -319,10 +327,8 @@ fn test_priority_ordering_in_critical_situations() {
                 .with_priority(Priority::High),
         )
         .with_fragment(
-            WeightedFragment::new(KnowledgeFragment::Text(
-                "MUST DO FIRST".to_string(),
-            ))
-            .with_priority(Priority::Critical),
+            WeightedFragment::new(KnowledgeFragment::Text("MUST DO FIRST".to_string()))
+                .with_priority(Priority::Critical),
         );
 
     let prompt = ContextualPrompt::from_expertise(&expert, RenderContext::new()).to_prompt();
@@ -336,8 +342,5 @@ fn test_priority_ordering_in_critical_situations() {
     // Verify correct ordering
     assert!(critical_pos < high_pos, "Critical should come before High");
     assert!(high_pos < normal_pos, "High should come before Normal");
-    assert!(
-        normal_pos < low_pos,
-        "Normal should come before Low"
-    );
+    assert!(normal_pos < low_pos, "Normal should come before Low");
 }

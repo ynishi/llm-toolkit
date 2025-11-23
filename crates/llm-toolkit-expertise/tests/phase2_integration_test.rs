@@ -105,24 +105,25 @@ fn test_context_filtering_by_task_health() {
         );
 
     // OnTrack: Only standard fragment
-    let on_track_prompt =
-        expertise.to_prompt_with_render_context(&RenderContext::new().with_task_health(TaskHealth::OnTrack));
+    let on_track_prompt = expertise
+        .to_prompt_with_render_context(&RenderContext::new().with_task_health(TaskHealth::OnTrack));
 
     assert!(on_track_prompt.contains("Standard debugging steps"));
     assert!(!on_track_prompt.contains("SLOW DOWN"));
     assert!(!on_track_prompt.contains("STOP"));
 
     // AtRisk: Standard + AtRisk fragment
-    let at_risk_prompt =
-        expertise.to_prompt_with_render_context(&RenderContext::new().with_task_health(TaskHealth::AtRisk));
+    let at_risk_prompt = expertise
+        .to_prompt_with_render_context(&RenderContext::new().with_task_health(TaskHealth::AtRisk));
 
     assert!(at_risk_prompt.contains("Standard debugging steps"));
     assert!(at_risk_prompt.contains("SLOW DOWN"));
     assert!(!at_risk_prompt.contains("STOP"));
 
     // OffTrack: Standard + OffTrack fragment
-    let off_track_prompt = expertise
-        .to_prompt_with_render_context(&RenderContext::new().with_task_health(TaskHealth::OffTrack));
+    let off_track_prompt = expertise.to_prompt_with_render_context(
+        &RenderContext::new().with_task_health(TaskHealth::OffTrack),
+    );
 
     assert!(off_track_prompt.contains("Standard debugging steps"));
     assert!(!off_track_prompt.contains("SLOW DOWN"));
@@ -158,8 +159,8 @@ fn test_context_filtering_by_user_state() {
         );
 
     // Beginner context
-    let beginner_prompt = expertise
-        .to_prompt_with_render_context(&RenderContext::new().with_user_state("beginner"));
+    let beginner_prompt =
+        expertise.to_prompt_with_render_context(&RenderContext::new().with_user_state("beginner"));
 
     assert!(beginner_prompt.contains("Basic concepts"));
     assert!(beginner_prompt.contains("Detailed explanations"));
@@ -177,14 +178,12 @@ fn test_context_filtering_by_user_state() {
 #[test]
 fn test_multiple_user_states() {
     let expertise = Expertise::new("helper", "1.0").with_fragment(
-        WeightedFragment::new(KnowledgeFragment::Text(
-            "Provide extra help".to_string(),
-        ))
-        .with_context(ContextProfile::Conditional {
-            task_types: vec![],
-            user_states: vec!["beginner".to_string(), "confused".to_string()],
-            task_health: None,
-        }),
+        WeightedFragment::new(KnowledgeFragment::Text("Provide extra help".to_string()))
+            .with_context(ContextProfile::Conditional {
+                task_types: vec![],
+                user_states: vec!["beginner".to_string(), "confused".to_string()],
+                task_health: None,
+            }),
     );
 
     // Should match if ANY user_state matches
@@ -301,12 +300,13 @@ fn test_priority_headers_in_output() {
 #[test]
 fn test_contextual_prompt_builder_pattern() {
     let expertise = Expertise::new("test", "1.0").with_fragment(
-        WeightedFragment::new(KnowledgeFragment::Text("Content".to_string()))
-            .with_context(ContextProfile::Conditional {
+        WeightedFragment::new(KnowledgeFragment::Text("Content".to_string())).with_context(
+            ContextProfile::Conditional {
                 task_types: vec!["review".to_string()],
                 user_states: vec!["beginner".to_string()],
                 task_health: Some(TaskHealth::AtRisk),
-            }),
+            },
+        ),
     );
 
     // Build context using fluent API
@@ -321,10 +321,9 @@ fn test_contextual_prompt_builder_pattern() {
 
 #[test]
 fn test_contextual_prompt_direct_usage() {
-    let expertise = Expertise::new("direct-test", "1.0")
-        .with_fragment(WeightedFragment::new(KnowledgeFragment::Text(
-            "Test content".to_string(),
-        )));
+    let expertise = Expertise::new("direct-test", "1.0").with_fragment(WeightedFragment::new(
+        KnowledgeFragment::Text("Test content".to_string()),
+    ));
 
     let context = RenderContext::new()
         .with_task_type("test")
@@ -349,12 +348,13 @@ fn test_empty_context_matches_always_only() {
                 .with_context(ContextProfile::Always),
         )
         .with_fragment(
-            WeightedFragment::new(KnowledgeFragment::Text("Conditional".to_string()))
-                .with_context(ContextProfile::Conditional {
+            WeightedFragment::new(KnowledgeFragment::Text("Conditional".to_string())).with_context(
+                ContextProfile::Conditional {
                     task_types: vec!["specific".to_string()],
                     user_states: vec![],
                     task_health: None,
-                }),
+                },
+            ),
         );
 
     let empty_context = RenderContext::new();
@@ -385,10 +385,9 @@ fn test_no_matching_fragments() {
 
 #[test]
 fn test_backward_compatibility_with_legacy_to_prompt() {
-    let expertise = Expertise::new("legacy-test", "1.0")
-        .with_fragment(WeightedFragment::new(KnowledgeFragment::Text(
-            "Content".to_string(),
-        )));
+    let expertise = Expertise::new("legacy-test", "1.0").with_fragment(WeightedFragment::new(
+        KnowledgeFragment::Text("Content".to_string()),
+    ));
 
     // Old API should still work
     let old_prompt = expertise.to_prompt();

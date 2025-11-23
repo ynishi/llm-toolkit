@@ -105,6 +105,7 @@ pub use llm_toolkit_macros::agent;
 pub use llm_toolkit_macros::{TypeMarker, type_marker};
 
 pub mod attachment;
+pub mod context;
 pub mod extract;
 pub mod intent;
 pub mod multimodal;
@@ -121,6 +122,7 @@ pub mod agent;
 pub mod orchestrator;
 
 pub use attachment::{Attachment, AttachmentSchema, ToAttachments};
+pub use context::{ContextMatcher, ContextProfile, Priority, TaskHealth};
 pub use extract::{FlexibleExtractor, MarkdownCodeBlockExtractor};
 #[cfg(feature = "agent")]
 pub use intent::expandable::{

@@ -13,6 +13,7 @@ repository.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+schemars = "0.8"
 thiserror.workspace = true
 regex.workspace = true
 log = { workspace = true, features = ["std"] }
