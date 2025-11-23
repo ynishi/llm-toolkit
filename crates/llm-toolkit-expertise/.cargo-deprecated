@@ -1,0 +1,8 @@
+This crate has been archived and integrated into llm-toolkit core.
+
+Migration: Use llm-toolkit::agent::expertise instead.
+
+All functionality is now available in the main llm-toolkit crate under the agent feature.
+This crate will not receive further updates.
+
+Deprecated since: v0.2.0

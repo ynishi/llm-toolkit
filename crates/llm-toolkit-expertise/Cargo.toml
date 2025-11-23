@@ -1,6 +1,6 @@
 [package]
 name = "llm-toolkit-expertise"
-version = "0.2.0"
+version = "0.2.1"
 description = "⚠️ DEPRECATED: Use llm-toolkit::agent::expertise instead. This crate is archived and will not receive updates."
 keywords = ["llm", "ai", "agent", "expertise", "composition"]
 categories = ["text-processing"]
