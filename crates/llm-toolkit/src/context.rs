@@ -124,8 +124,6 @@ pub enum ContextProfile {
     },
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +142,4 @@ mod tests {
         assert_eq!(Priority::Normal.weight(), 2);
         assert_eq!(Priority::Low.weight(), 1);
     }
-
 }

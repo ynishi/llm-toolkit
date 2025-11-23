@@ -1,4 +1,20 @@
-//! # llm-toolkit-expertise
+//! # ⚠️ DEPRECATED - llm-toolkit-expertise
+//!
+//! **This crate has been archived and integrated into `llm-toolkit` core.**
+//!
+//! **Migration Path:**
+//! - Replace `llm_toolkit_expertise::*` with `llm_toolkit::agent::expertise::*`
+//! - Context types are now in `llm_toolkit::context::{Priority, TaskHealth, ContextProfile}`
+//! - All APIs remain the same, only the import paths have changed
+//!
+//! **Version Support:**
+//! - v0.2.0: Final release with deprecation notice
+//! - v0.1.0: Original release
+//! - No further updates will be published
+//!
+//! ---
+//!
+//! # llm-toolkit-expertise (Archived)
 //!
 //! Agent as Code v2: Graph-based composition system for LLM agent capabilities.
 //!

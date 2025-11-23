@@ -152,7 +152,6 @@ impl RenderContext {
             }
         }
     }
-
 }
 
 /// Context-aware prompt renderer (Phase 2)

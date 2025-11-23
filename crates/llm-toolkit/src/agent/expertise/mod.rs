@@ -98,9 +98,9 @@ pub mod render;
 pub use fragment::{Anchor, KnowledgeFragment};
 pub use render::{ContextualPrompt, RenderContext};
 
+use crate::agent::{Capability, ToExpertise};
 use crate::context::{ContextProfile, Priority};
 use crate::prompt::{PromptPart, ToPrompt};
-use crate::agent::{Capability, ToExpertise};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

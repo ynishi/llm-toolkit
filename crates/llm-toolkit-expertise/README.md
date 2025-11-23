@@ -1,4 +1,15 @@
-# llm-toolkit-expertise
+# ⚠️ DEPRECATED - llm-toolkit-expertise
+
+> **This crate has been archived and integrated into `llm-toolkit` core.**
+>
+> **Migration:** Use `llm-toolkit::agent::expertise` instead.
+>
+> All functionality is now available in the main `llm-toolkit` crate under the `agent` feature.
+> This crate will not receive further updates.
+
+---
+
+# llm-toolkit-expertise (Archived)
 
 **Agent as Code**: Graph-based composition system for LLM agent capabilities.
 
@@ -6,7 +17,20 @@
 [![Documentation](https://docs.rs/llm-toolkit-expertise/badge.svg)](https://docs.rs/llm-toolkit-expertise)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Overview
+## Migration Guide
+
+Replace imports:
+
+```diff
+- use llm_toolkit_expertise::{Expertise, WeightedFragment, KnowledgeFragment};
+- use llm_toolkit_expertise::{Priority, TaskHealth, ContextProfile};
++ use llm_toolkit::agent::expertise::{Expertise, WeightedFragment, KnowledgeFragment};
++ use llm_toolkit::context::{Priority, TaskHealth, ContextProfile};
+```
+
+All APIs remain identical - only import paths have changed.
+
+## Overview (Historical)
 
 `llm-toolkit-expertise` provides a flexible, composition-based approach to defining LLM agent expertise through **weighted knowledge fragments**. Instead of rigid inheritance hierarchies, expertise is built by composing independent fragments with priorities and contextual activation rules.
 
