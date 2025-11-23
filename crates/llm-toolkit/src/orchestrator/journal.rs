@@ -29,7 +29,7 @@ impl ExecutionJournal {
 }
 
 /// Execution status for a strategy step.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StepStatus {
     Pending,
     Running,

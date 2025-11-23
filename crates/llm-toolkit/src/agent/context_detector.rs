@@ -77,12 +77,18 @@ pub trait DetectContextExt: Sized {
     ///
     /// If the payload already has a `DetectedContext`, the new detection
     /// is merged using `DetectedContext::merge()`.
-    async fn detect_with<D: ContextDetector>(self, detector: &D) -> Result<Self, AgentError>;
+    async fn detect_with<D: ContextDetector + ?Sized>(
+        self,
+        detector: &D,
+    ) -> Result<Self, AgentError>;
 }
 
 #[async_trait]
 impl DetectContextExt for Payload {
-    async fn detect_with<D: ContextDetector>(self, detector: &D) -> Result<Self, AgentError> {
+    async fn detect_with<D: ContextDetector + ?Sized>(
+        self,
+        detector: &D,
+    ) -> Result<Self, AgentError> {
         let detected = detector.detect(&self).await?;
         Ok(self.merge_detected_context(detected))
     }

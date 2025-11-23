@@ -444,6 +444,85 @@ impl Orchestrator {
         &self.internal_agent
     }
 
+    /// Enriches payload with EnvContext and runs detector if enabled.
+    ///
+    /// This is called before every agent execution to inject:
+    /// 1. EnvContext: Raw runtime info (redesign_count, journal, step_info)
+    /// 2. DetectedContext: Inferred info (task_type, task_health, user_states)
+    ///
+    /// # Arguments
+    ///
+    /// * `payload` - Base payload from intent generation
+    /// * `step_id` - Current step ID
+    /// * `step_description` - Step description for context
+    ///
+    /// # Returns
+    ///
+    /// Enriched payload with context timeline
+    #[cfg(feature = "agent")]
+    async fn enrich_payload_with_context(
+        &self,
+        payload: crate::agent::Payload,
+        step_id: &str,
+        step_description: &str,
+    ) -> Result<crate::agent::Payload, OrchestratorError> {
+        use crate::agent::{DetectContextExt, EnvContext, JournalSummary, StepInfo};
+
+        // Skip if detection is disabled
+        if self.config.detection_mode == DetectionMode::None {
+            return Ok(payload);
+        }
+
+        // Build EnvContext from current orchestration state
+        let mut env_context = EnvContext::new().with_step_info(StepInfo::new(
+            step_id.to_string(),
+            step_description.to_string(),
+            "Orchestrator".to_string(),
+        ));
+
+        // Add journal summary if available
+        if let Some(journal) = &self.execution_journal {
+            // Calculate stats from journal
+            let total = journal.steps.len();
+            let successful = journal
+                .steps
+                .iter()
+                .filter(|s| s.status == StepStatus::Completed)
+                .count();
+
+            // Count consecutive failures from the end
+            let mut consecutive_failures = 0;
+            for step in journal.steps.iter().rev() {
+                if step.status == StepStatus::Failed {
+                    consecutive_failures += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let journal_summary = JournalSummary::new(total, successful)
+                .with_consecutive_failures(consecutive_failures);
+            env_context = env_context.with_journal_summary(journal_summary);
+
+            // Use redesign count from journal if available
+            // Note: ExecutionJournal doesn't track redesign_count directly,
+            // we would need to add a field or calculate from failed steps
+            // For now, we'll leave it at 0
+        }
+
+        // Inject EnvContext
+        let mut payload = payload.with_env_context(env_context);
+
+        // Run detector if enabled
+        if let Some(detector) = &self.detector {
+            payload = payload.detect_with(detector.as_ref()).await.map_err(|e| {
+                OrchestratorError::ExecutionFailed(format!("Context detection failed: {}", e))
+            })?;
+        }
+
+        Ok(payload)
+    }
+
     /// Sets a predefined execution strategy, bypassing automatic strategy generation.
     ///
     /// When a strategy is set using this method, `execute()` will skip the strategy
@@ -1396,7 +1475,16 @@ impl Orchestrator {
                 .get(&step.assigned_agent)
                 .ok_or_else(|| OrchestratorError::AgentNotFound(step.assigned_agent.clone()))?;
 
-            match agent.execute_dynamic(intent.into()).await {
+            // Enrich payload with context if detection is enabled
+            #[cfg(feature = "agent")]
+            let payload = self
+                .enrich_payload_with_context(intent.into(), &step.step_id, &step.description)
+                .await?;
+
+            #[cfg(not(feature = "agent"))]
+            let payload = intent.into();
+
+            match agent.execute_dynamic(payload).await {
                 Ok(agent_output) => {
                     // Unwrap AgentOutput to get the JsonValue
                     let output = match agent_output {
@@ -1750,9 +1838,22 @@ impl Orchestrator {
                         OrchestratorError::AgentNotFound(step.assigned_agent.clone())
                     })?;
 
+                    // Enrich payload with context if detection is enabled
+                    #[cfg(feature = "agent")]
+                    let payload = self
+                        .enrich_payload_with_context(
+                            intent.into(),
+                            &step.step_id,
+                            &step.description,
+                        )
+                        .await?;
+
+                    #[cfg(not(feature = "agent"))]
+                    let payload = intent.into();
+
                     // Note: Error handling for agent execution will be integrated later
                     // For now, we convert the error directly
-                    let agent_output = match agent.execute_dynamic(intent.into()).await {
+                    let agent_output = match agent.execute_dynamic(payload).await {
                         Ok(result) => result,
                         Err(err) => {
                             self.record_step_outcome(
