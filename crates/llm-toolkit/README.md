@@ -1281,7 +1281,11 @@ use async_trait::async_trait;
 # #[async_trait]
 # impl Agent for MockLLMAgent {
 #     type Output = String;
-#     fn expertise(&self) -> &str { "mock" }
+#     type Expertise = &'static str;
+#     fn expertise(&self) -> &&'static str {
+#         const EXPERTISE: &str = "mock";
+#         &EXPERTISE
+#     }
 #     async fn execute(&self, intent: Payload) -> Result<Self::Output, AgentError> {
 #         let last_line = intent.to_text().lines().last().unwrap_or("").to_string();
 #         Ok(format!("[{}] processed: '{}'", self.agent_type, last_line))
@@ -2053,10 +2057,38 @@ This structured format helps agents:
 ### Agent API: Capability and Intent Separation
 
 The Agent API follows the principle of **capability and intent separation**:
-- **Capability**: An agent declares what it can do (`expertise`) and what it produces (`Output`)
+- **Capability**: An agent declares what it can do via two associated types:
+  - `type Output`: The structured output type this agent produces
+  - `type Expertise`: The expertise definition (typically `&'static str` or `Expertise` from `llm-toolkit-expertise`)
+  - `fn expertise(&self) -> &Self::Expertise`: Returns agent's expertise/capabilities
 - **Intent**: The orchestrator provides what needs to be done as a `Payload` (multi-modal content)
 
 This separation enables maximum reusability and flexibility.
+
+**Basic Agent Implementation:**
+
+```rust
+use llm_toolkit::agent::{Agent, AgentError, Payload};
+use async_trait::async_trait;
+
+struct MyAgent;
+
+#[async_trait]
+impl Agent for MyAgent {
+    type Output = String;
+    type Expertise = &'static str;
+
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Analyzes data and provides insights";
+        &EXPERTISE
+    }
+
+    async fn execute(&self, payload: Payload) -> Result<String, AgentError> {
+        // Implementation
+        Ok("analysis result".to_string())
+    }
+}
+```
 
 ### Multi-Modal Agent Communication with Payload
 
@@ -2658,7 +2690,11 @@ mod tests {
     #[async_trait::async_trait]
     impl Agent for MockAgent {
         type Output = String;
-        fn expertise(&self) -> &str { "mock" }
+        type Expertise = &'static str;
+        fn expertise(&self) -> &&'static str {
+            const EXPERTISE: &str = "mock";
+            &EXPERTISE
+        }
         async fn execute(&self, _: Payload) -> Result<String, AgentError> {
             *self.call_count.borrow_mut() += 1;
             Ok(self.response.clone())
@@ -2688,7 +2724,11 @@ mod tests {
         #[async_trait::async_trait]
         impl Agent for ErrorAgent {
             type Output = String;
-            fn expertise(&self) -> &str { "error mock" }
+            type Expertise = &'static str;
+            fn expertise(&self) -> &&'static str {
+                const EXPERTISE: &str = "error mock";
+                &EXPERTISE
+            }
             async fn execute(&self, _: Payload) -> Result<String, AgentError> {
                 Err(AgentError::ExecutionError("Simulated failure".to_string()))
             }
@@ -2722,7 +2762,11 @@ use llm_toolkit::agent::Payload;
 #[async_trait::async_trait]
 impl Agent for OlamaAgent {
     type Output = String;
-    fn expertise(&self) -> &str { "Olama agent" }
+    type Expertise = &'static str;
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Olama agent";
+        &EXPERTISE
+    }
     async fn execute(&self, intent: Payload) -> Result<String, AgentError> {
         // Call Olama API
     }
@@ -2754,6 +2798,69 @@ This pattern lets you:
 - ✅ Each agent has unique expertise
 - ✅ Share configuration or customize per-agent
 - ✅ Easy testing with mock backends
+
+**Using Structured Expertise with `llm-toolkit-expertise`:**
+
+Beyond simple string descriptions, you can use the `llm-toolkit-expertise` crate for composition-based, structured expertise definitions. The `expertise` parameter accepts any expression that implements `ToPrompt`:
+
+```rust
+use llm_toolkit_expertise::{Expertise, WeightedFragment, KnowledgeFragment, Priority};
+
+// Define reusable expertise
+fn rust_reviewer_expertise() -> Expertise {
+    Expertise::new("rust-reviewer", "1.0")
+        .with_tag("lang:rust")
+        .with_tag("role:reviewer")
+        .with_fragment(
+            WeightedFragment::new(KnowledgeFragment::Text(
+                "Always run cargo check before reviewing".to_string()
+            ))
+            .with_priority(Priority::Critical)
+        )
+        .with_fragment(
+            WeightedFragment::new(KnowledgeFragment::Logic {
+                instruction: "Check for security issues".to_string(),
+                steps: vec![
+                    "Scan for unsafe code".to_string(),
+                    "Verify input validation".to_string(),
+                ],
+            })
+            .with_priority(Priority::High)
+        )
+}
+
+// Use structured expertise in agent macro
+#[llm_toolkit_macros::agent(
+    expertise = rust_reviewer_expertise(),
+    output = "ReviewResult"
+)]
+struct RustCodeReviewerAgent;
+```
+
+**Note on `Expertise::description` (Optional Field):**
+
+When creating `Expertise` instances, the `description` field is optional. Use `Expertise::new(id, version)` for the basic two-argument constructor, and add an explicit description with `with_description()` if needed:
+
+```rust
+// Without explicit description - auto-generates from first fragment (~100 chars)
+let expertise = Expertise::new("rust-reviewer", "1.0")
+    .with_tag("lang:rust")
+    .with_fragment(/* ... */);
+
+// With explicit description
+let expertise = Expertise::new("rust-reviewer", "1.0")
+    .with_description("Expert Rust code reviewer with security focus")
+    .with_tag("lang:rust")
+    .with_fragment(/* ... */);
+```
+
+The structured approach enables:
+- ✅ **Composition over inheritance**: Build expertise from reusable fragments
+- ✅ **Priority-based prompts**: Control emphasis with Critical/High/Normal/Low weights
+- ✅ **Context-aware behavior**: Activate fragments based on task health and conditions
+- ✅ **Version control**: Track expertise evolution with semantic versioning
+
+See the [llm-toolkit-expertise documentation](https://docs.rs/llm-toolkit-expertise) for details.
 
 **Customizing Default Initialization with `init`:**
 
@@ -2931,9 +3038,11 @@ struct MockStrategyAgent;
 #[async_trait::async_trait]
 impl Agent for MockStrategyAgent {
     type Output = StrategyMap;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock strategy generator for testing"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Mock strategy generator for testing";
+        &EXPERTISE
     }
 
     async fn execute(&self, intent: Payload) -> Result<StrategyMap, AgentError> {
@@ -2949,9 +3058,11 @@ struct MockDecisionAgent;
 #[async_trait::async_trait]
 impl Agent for MockDecisionAgent {
     type Output = String;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Mock decision maker for testing"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Mock decision maker for testing";
+        &EXPERTISE
     }
 
     async fn execute(&self, intent: Payload) -> Result<String, AgentError> {
@@ -4451,9 +4562,11 @@ struct DeploymentAgent;
 #[async_trait::async_trait]
 impl Agent for DeploymentAgent {
     type Output = JsonValue;
+    type Expertise = &'static str;
 
-    fn expertise(&self) -> &str {
-        "Handles production deployments with human approval"
+    fn expertise(&self) -> &&'static str {
+        const EXPERTISE: &str = "Handles production deployments with human approval";
+        &EXPERTISE
     }
 
     async fn execute(&self, _input: Payload) -> Result<Self::Output, AgentError> {
@@ -4467,7 +4580,7 @@ impl DynamicAgent for DeploymentAgent {
         "DeploymentAgent".to_string()
     }
 
-    fn expertise(&self) -> &str {
+    fn description(&self) -> &str {
         "Handles production deployments with human approval"
     }
 
