@@ -71,7 +71,7 @@ use crate::agent::{Agent, AgentAdapter, AgentOutput, DynamicAgent};
 #[cfg(feature = "agent")]
 use async_trait::async_trait;
 pub use blueprint::BlueprintWorkflow;
-pub use config::OrchestratorConfig;
+pub use config::{DetectionMode, OrchestratorConfig};
 pub use error::OrchestratorError;
 pub use journal::{ExecutionJournal, StepRecord, StepStatus, current_timestamp_ms};
 #[cfg(feature = "agent")]
@@ -194,6 +194,15 @@ pub struct Orchestrator {
 
     /// Configuration for orchestrator execution behavior.
     config: OrchestratorConfig,
+
+    /// Context detector for automatic context enrichment.
+    ///
+    /// Instantiated based on `config.detection_mode`:
+    /// - `None`: detector is None
+    /// - `RuleBased`: RuleBasedDetector
+    /// - `AgentBased`: AgentBasedDetector with internal_agent
+    #[cfg(feature = "agent")]
+    detector: Option<Box<dyn crate::agent::ContextDetector>>,
 }
 
 impl Orchestrator {
@@ -223,6 +232,7 @@ impl Orchestrator {
             execution_journal: None,
             current_task: None,
             config: OrchestratorConfig::default(),
+            detector: None,
         };
 
         // Register InnerValidatorAgent as a standard agent
@@ -282,6 +292,7 @@ impl Orchestrator {
             execution_journal: None,
             current_task: None,
             config: OrchestratorConfig::default(),
+            detector: None,
         };
 
         // Register InnerValidatorAgent as a standard agent
@@ -330,6 +341,107 @@ impl Orchestrator {
     /// Returns a reference to the current configuration.
     pub fn config(&self) -> &OrchestratorConfig {
         &self.config
+    }
+
+    /// Sets the context detection mode (builder pattern).
+    ///
+    /// This configures automatic context enrichment for all step executions.
+    /// The orchestrator will inject EnvContext and run detectors to infer
+    /// task_type, task_health, and user_states.
+    ///
+    /// # Arguments
+    ///
+    /// * `mode` - Detection mode (None, RuleBased, or AgentBased)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::orchestrator::{Orchestrator, BlueprintWorkflow, DetectionMode};
+    ///
+    /// let blueprint = BlueprintWorkflow::new("Workflow".to_string());
+    /// let orc = Orchestrator::new(blueprint)
+    ///     .with_detection_mode(DetectionMode::RuleBased);
+    ///
+    /// // Now all step executions will have automatic context detection
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn with_detection_mode(mut self, mode: DetectionMode) -> Self {
+        use crate::agent::{AgentBasedDetector, RuleBasedDetector};
+        use crate::agent::impls::RetryAgent;
+
+        self.config.detection_mode = mode;
+
+        // Instantiate detector based on mode
+        self.detector = match mode {
+            DetectionMode::None => None,
+            DetectionMode::RuleBased => Some(Box::new(RuleBasedDetector::new())),
+            DetectionMode::AgentBased => {
+                // Create new agent instance for detector (same type as internal_agent)
+                let agent = RetryAgent::new(ClaudeCodeAgent::new(), 3);
+                Some(Box::new(AgentBasedDetector::new(agent)))
+            }
+        };
+
+        self
+    }
+
+    /// Sets the orchestrator configuration (builder pattern).
+    ///
+    /// This replaces the entire config, including detection_mode.
+    /// If you only want to set detection mode, use `with_detection_mode()`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::orchestrator::{Orchestrator, OrchestratorConfig, DetectionMode};
+    /// use std::time::Duration;
+    ///
+    /// let config = OrchestratorConfig {
+    ///     detection_mode: DetectionMode::RuleBased,
+    ///     min_step_interval: Duration::from_millis(500),
+    ///     ..Default::default()
+    /// };
+    ///
+    /// let orc = Orchestrator::new(blueprint)
+    ///     .with_config(config);
+    /// ```
+    pub fn with_config(mut self, config: OrchestratorConfig) -> Self {
+        #[cfg(feature = "agent")]
+        {
+            // Re-instantiate detector if detection_mode changed
+            use crate::agent::{AgentBasedDetector, RuleBasedDetector};
+            use crate::agent::impls::RetryAgent;
+
+            self.detector = match config.detection_mode {
+                DetectionMode::None => None,
+                DetectionMode::RuleBased => Some(Box::new(RuleBasedDetector::new())),
+                DetectionMode::AgentBased => {
+                    // Create new agent instance for detector (same type as internal_agent)
+                    let agent = RetryAgent::new(ClaudeCodeAgent::new(), 3);
+                    Some(Box::new(AgentBasedDetector::new(agent)))
+                }
+            };
+        }
+
+        self.config = config;
+        self
+    }
+
+    /// Returns a reference to the internal agent.
+    ///
+    /// Useful for creating custom detectors with the same agent.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::AgentBasedDetector;
+    ///
+    /// let orc = Orchestrator::new(blueprint);
+    /// let detector = AgentBasedDetector::new(orc.internal_agent().clone());
+    /// ```
+    #[cfg(feature = "agent")]
+    pub fn internal_agent(&self) -> &crate::agent::AnyAgent<String> {
+        &self.internal_agent
     }
 
     /// Sets a predefined execution strategy, bypassing automatic strategy generation.

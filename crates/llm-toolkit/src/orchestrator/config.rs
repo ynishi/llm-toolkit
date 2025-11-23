@@ -3,6 +3,58 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+/// Context detection mode for automatic context enrichment.
+///
+/// Determines how the orchestrator should detect and enrich context
+/// information (task_type, task_health, user_states) from execution state.
+///
+/// # Examples
+///
+/// ```ignore
+/// use llm_toolkit::orchestrator::DetectionMode;
+///
+/// // No detection (default for backward compatibility)
+/// let mode = DetectionMode::None;
+///
+/// // Rule-based only (fast, no LLM calls)
+/// let mode = DetectionMode::RuleBased;
+///
+/// // Agent-based (LLM-powered, semantic analysis)
+/// let mode = DetectionMode::AgentBased;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DetectionMode {
+    /// No automatic context detection (default).
+    ///
+    /// Context must be manually provided via Payload methods.
+    None,
+
+    /// Rule-based detection using hardcoded heuristics.
+    ///
+    /// - **Fast**: No LLM calls, pure logic
+    /// - **Deterministic**: Same input → same output
+    /// - **Layer 1**: Detects based on redesign count, journal stats, keywords
+    ///
+    /// Uses `RuleBasedDetector` internally.
+    RuleBased,
+
+    /// Agent-based detection using internal LLM.
+    ///
+    /// - **Semantic**: Uses LLM's language understanding
+    /// - **Flexible**: Detects nuanced patterns
+    /// - **Layer 2**: Enriches after rule-based detection
+    ///
+    /// Uses `AgentBasedDetector` with orchestrator's internal agent.
+    /// **Note**: This adds 1 extra LLM call per step execution.
+    AgentBased,
+}
+
+impl Default for DetectionMode {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 /// Configuration for orchestrator execution behavior.
 ///
 /// This struct centralizes all configuration parameters for the orchestrator,
@@ -164,6 +216,37 @@ pub struct OrchestratorConfig {
     /// **Default:** `true` (enabled for better reliability)
     #[serde(default = "default_true")]
     pub enable_validation: bool,
+
+    /// Context detection mode for automatic context enrichment.
+    ///
+    /// When enabled, the orchestrator will automatically:
+    /// 1. Inject `EnvContext` into payloads with runtime information
+    /// 2. Run context detectors to infer task_type, task_health, user_states
+    /// 3. Merge detected context for use by ExpertiseAgent
+    ///
+    /// **Performance impact:**
+    /// - `None`: No overhead (default)
+    /// - `RuleBased`: Negligible (~1ms per step)
+    /// - `AgentBased`: 1 additional LLM call per step (1-2s)
+    ///
+    /// **Use cases:**
+    /// - `None`: Manual context control, testing
+    /// - `RuleBased`: Production with fast detection
+    /// - `AgentBased`: When semantic understanding is critical
+    ///
+    /// **Example:**
+    /// ```ignore
+    /// use llm_toolkit::orchestrator::{OrchestratorConfig, DetectionMode};
+    ///
+    /// let config = OrchestratorConfig {
+    ///     detection_mode: DetectionMode::RuleBased, // Fast detection
+    ///     ..Default::default()
+    /// };
+    /// ```
+    ///
+    /// **Default:** `DetectionMode::None` (disabled for backward compatibility)
+    #[serde(default)]
+    pub detection_mode: DetectionMode,
 }
 
 /// Helper function for serde default value of `true`.
@@ -180,6 +263,7 @@ impl Default for OrchestratorConfig {
             enable_fast_path_intent_generation: false,
             max_total_loop_iterations: 50,
             enable_validation: true,
+            detection_mode: DetectionMode::None,
         }
     }
 }
