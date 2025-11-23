@@ -4409,6 +4409,8 @@ enum ExpertiseValue {
 /// Attribute parameters for #[agent(...)]
 struct AgentAttrs {
     expertise: Option<ExpertiseValue>,
+    description: Option<String>,
+    capabilities: Option<Vec<String>>,
     output: Option<syn::Type>,
     backend: Option<String>,
     model: Option<String>,
@@ -4424,6 +4426,8 @@ struct AgentAttrs {
 impl Parse for AgentAttrs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut expertise = None;
+        let mut description = None;
+        let mut capabilities = None;
         let mut output = None;
         let mut backend = None;
         let mut model = None;
@@ -4450,6 +4454,30 @@ impl Parse for AgentAttrs {
                     } else {
                         // Otherwise, treat it as an expression (const, function call, etc.)
                         expertise = Some(ExpertiseValue::Expr(nv.value.clone()));
+                    }
+                }
+                Meta::NameValue(nv) if nv.path.is_ident("description") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = &nv.value
+                    {
+                        description = Some(lit_str.value());
+                    }
+                }
+                Meta::NameValue(nv) if nv.path.is_ident("capabilities") => {
+                    if let syn::Expr::Array(array) = &nv.value {
+                        let mut caps = Vec::new();
+                        for elem in &array.elems {
+                            if let syn::Expr::Lit(syn::ExprLit {
+                                lit: syn::Lit::Str(lit_str),
+                                ..
+                            }) = elem
+                            {
+                                caps.push(lit_str.value());
+                            }
+                        }
+                        capabilities = Some(caps);
                     }
                 }
                 Meta::NameValue(nv) if nv.path.is_ident("output") => {
@@ -4557,6 +4585,8 @@ impl Parse for AgentAttrs {
 
         Ok(AgentAttrs {
             expertise,
+            description,
+            capabilities,
             output,
             backend,
             model,
@@ -4581,6 +4611,8 @@ fn parse_agent_attrs(attrs: &[syn::Attribute]) -> syn::Result<AgentAttrs> {
 
     Ok(AgentAttrs {
         expertise: None,
+        description: None,
+        capabilities: None,
         output: None,
         backend: None,
         model: None,
@@ -5095,6 +5127,8 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
         let struct_def = quote! {
             #vis struct #struct_name<#inner_generic_ident: #crate_path::agent::Agent + Send + Sync = #default_agent_type> {
                 inner: #wrapped_type,
+                description: String,
+                capabilities: Option<Vec<#crate_path::agent::Capability>>,
             }
         };
         (struct_def, wrapped_type, true)
@@ -5103,9 +5137,51 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
         let struct_def = quote! {
             #vis struct #struct_name<#inner_generic_ident = #default_agent_type> {
                 inner: #inner_generic_ident,
+                description: String,
+                capabilities: Option<Vec<#crate_path::agent::Capability>>,
             }
         };
         (struct_def, quote! { #inner_generic_ident }, false)
+    };
+
+    // Generate description value (either from attribute or auto-generated from expertise)
+    let description_value = if let Some(desc) = agent_attrs.description {
+        // Explicit description provided
+        quote! { String::from(#desc) }
+    } else {
+        // Auto-generate from expertise using Expertise::auto_description_from_text()
+        match &expertise {
+            ExpertiseValue::String(expertise_str) => {
+                quote! {
+                    #crate_path::agent::expertise::Expertise::auto_description_from_text(#expertise_str)
+                }
+            }
+            ExpertiseValue::Expr(expertise_expr) => {
+                // For expressions, call to_prompt() and then auto_description_from_text()
+                quote! {
+                    {
+                        use #crate_path::prompt::ToPrompt;
+                        let prompt_text = (#expertise_expr).to_prompt();
+                        #crate_path::agent::expertise::Expertise::auto_description_from_text(&prompt_text)
+                    }
+                }
+            }
+        }
+    };
+
+    // Generate capabilities value (either from attribute or None for auto-extraction from Expertise)
+    let capabilities_value = if let Some(caps) = &agent_attrs.capabilities {
+        // Explicit capabilities provided
+        let cap_strings = caps.iter().map(|c| c.as_str()).collect::<Vec<_>>();
+        quote! {
+            Some(vec![
+                #(#crate_path::agent::Capability::new(#cap_strings)),*
+            ])
+        }
+    } else {
+        // No explicit capabilities
+        // TODO: Extract from Expertise when Expertise type is supported
+        quote! { None }
     };
 
     // Generate basic constructor - wrap with PersonaAgent if needed
@@ -5118,7 +5194,11 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                         inner,
                         #persona_path.clone()
                     );
-                    Self { inner: persona_agent }
+                    Self {
+                        inner: persona_agent,
+                        description: #description_value,
+                        capabilities: #capabilities_value
+                    }
                 }
             }
         }
@@ -5127,7 +5207,11 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
             impl<#inner_generic_ident> #struct_name<#inner_generic_ident> {
                 /// Create a new agent with a custom inner agent implementation
                 pub fn new(inner: #inner_generic_ident) -> Self {
-                    Self { inner }
+                    Self {
+                        inner,
+                        description: #description_value,
+                        capabilities: #capabilities_value
+                    }
                 }
             }
         }
@@ -5283,6 +5367,8 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                 fn default() -> Self {
                     Self {
                         inner: #default_inner_expr,
+                        description: #description_value,
+                        capabilities: #capabilities_value
                     }
                 }
             }
@@ -5418,6 +5504,14 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
                     self.inner.expertise()
                 }
 
+                fn description(&self) -> &str {
+                    &self.description
+                }
+
+                fn capabilities(&self) -> Option<Vec<#crate_path::agent::Capability>> {
+                    self.capabilities.clone()
+                }
+
                 async fn execute(&self, intent: #crate_path::agent::Payload) -> Result<Self::Output, #crate_path::agent::AgentError> {
                     self.inner.execute(intent).await
                 }
@@ -5439,6 +5533,14 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
 
                 fn expertise(&self) -> &String {
                     #enhanced_expertise
+                }
+
+                fn description(&self) -> &str {
+                    &self.description
+                }
+
+                fn capabilities(&self) -> Option<Vec<#crate_path::agent::Capability>> {
+                    self.capabilities.clone()
                 }
 
                 #[#crate_path::tracing::instrument(name = "agent.execute", skip_all, fields(agent.name = #struct_name_str, agent.description = self.description()))]
@@ -5466,6 +5568,14 @@ pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
 
                 fn expertise(&self) -> &String {
                     #enhanced_expertise
+                }
+
+                fn description(&self) -> &str {
+                    &self.description
+                }
+
+                fn capabilities(&self) -> Option<Vec<#crate_path::agent::Capability>> {
+                    self.capabilities.clone()
                 }
 
                 #[#crate_path::tracing::instrument(name = "agent.execute", skip_all, fields(agent.name = #struct_name_str, agent.description = self.description()))]

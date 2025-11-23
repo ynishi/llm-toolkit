@@ -261,6 +261,40 @@ impl Expertise {
         }
     }
 
+    /// Auto-generate a concise description from a text string.
+    ///
+    /// This is a helper function used by macros and other code generators to create
+    /// lightweight catalog descriptions from longer expertise texts. It extracts the
+    /// first ~100 characters with ellipsis if truncated.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - The source text (typically an expertise string or first fragment)
+    ///
+    /// # Returns
+    ///
+    /// A string containing up to 100 characters from the input, with "..." appended
+    /// if the original text was longer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use llm_toolkit::agent::expertise::Expertise;
+    ///
+    /// let desc = Expertise::auto_description_from_text(
+    ///     "You are a senior Rust developer with expertise in systems programming..."
+    /// );
+    /// assert!(desc.len() <= 103); // 100 chars + "..."
+    /// ```
+    pub fn auto_description_from_text(text: &str) -> String {
+        let truncated = text.chars().take(100).collect::<String>();
+        if truncated.len() < text.len() {
+            format!("{}...", truncated.trim_end())
+        } else {
+            truncated
+        }
+    }
+
     /// Extract tool definitions as capability names
     ///
     /// This method scans all fragments and extracts tool names from `ToolDefinition` fragments.

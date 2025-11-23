@@ -549,7 +549,7 @@ impl Orchestrator {
     pub fn format_agent_list(&self) -> String {
         self.agents
             .iter()
-            .map(|(name, agent)| format!("- {}: {}", name, agent.expertise()))
+            .map(|(name, agent)| format!("- {}: {}", name, agent.description()))
             .collect::<Vec<_>>()
             .join("\n")
     }

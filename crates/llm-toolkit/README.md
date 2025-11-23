@@ -33,6 +33,7 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **Type-Safe Intent Definition** | Generate prompt builders and extractors from a single enum definition. | `#[define_intent]` macro | Implemented |
 | **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentFrame`, `IntentExtractor`) | Implemented |
 | **Agent API** | Define reusable AI agents with expertise and structured outputs. | `Agent` trait, `#[derive(Agent)]` macro | Implemented |
+| **Agent Description & Capabilities** | Lightweight agent metadata for orchestrator routing with auto-generated descriptions and explicit capability declarations. | `description` attribute, `capabilities` attribute, `Expertise::auto_description_from_text()` | Implemented (v0.57.0) |
 | **Auto-JSON Enforcement** | Automatically add JSON schema instructions to agent prompts for better LLM compliance. | `#[derive(Agent)]` with `ToPrompt::prompt_schema()` integration | Implemented |
 | **Built-in Retry** | Intelligent retry with 3-priority delay system: server retry_after (Priority 1), 429 exponential backoff (Priority 2), linear backoff (Priority 3). Includes RetryAgent decorator and Full Jitter. | `max_retries` attribute, `RetryAgent`, `retry_after` field | Implemented |
 | **Multi-Modal Payload** | Pass text and images to agents and dialogues through a unified `Payload` interface with backward compatibility. | `Payload`, `PayloadContent` types, `impl Into<Payload>` | Implemented |
@@ -2251,6 +2252,37 @@ The `expertise` field should describe the agent's capabilities in **natural lang
 **Why this works:** The orchestrator's strategy generation LLM reads this natural language description and automatically creates appropriate intent templates like `"Process the following strategy: {{ strategy_data }}"`. The LLM understands what inputs the agent needs and generates the correct placeholders in the strategy's `intent_template` field.
 
 **Key principle:** The `expertise` describes capabilities; the orchestrator creates the actual intent templates dynamically based on those capabilities.
+
+**Description and Capabilities Attributes:**
+
+The `#[agent]` macro supports two additional optional attributes for better orchestrator integration:
+
+```rust
+#[derive(Agent)]
+#[agent(
+    expertise = "You are a file operations specialist with expertise in reading, writing, and managing files...",
+    description = "File operations specialist",  // Optional: lightweight routing summary
+    capabilities = ["read_file", "write_file", "delete_file"],  // Optional: explicit capabilities
+    output = "FileOperationResult"
+)]
+struct FileAgent;
+```
+
+- **`description`** (Optional): A lightweight 1-2 sentence summary used by orchestrators for agent selection
+  - If omitted, automatically generated from the first 100 characters of `expertise`
+  - Orchestrators use this for routing decisions instead of reading the full expertise text
+  - Example: `"File operations specialist"` vs. full expertise paragraph
+
+- **`capabilities`** (Optional): Explicit list of capabilities the agent provides
+  - Declared as string array: `capabilities = ["tool1", "tool2"]`
+  - If omitted, `capabilities()` returns `None` (no capabilities displayed)
+  - Orchestrators can filter agents based on required capabilities
+  - Priority: Explicit declaration > (Future: Expertise type auto-extraction) > None
+
+**Behavior:**
+- `agent.description()` → Returns lightweight summary (for orchestrator routing)
+- `agent.expertise()` → Returns full expertise text (for LLM execution)
+- `agent.capabilities()` → Returns `Option<Vec<Capability>>` (for capability-based selection)
 
 **Features:**
 - ✅ Simplest possible interface
