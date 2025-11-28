@@ -170,7 +170,7 @@ pub enum AgentError {
     )]
     ExecutionFailedRich {
         message: String,
-        metadata: ErrorMetadata,
+        metadata: Box<ErrorMetadata>,
     },
 
     /// Rich parse error with full contextual metadata.
@@ -181,7 +181,7 @@ pub enum AgentError {
     ParseErrorRich {
         message: String,
         reason: ParseErrorReason,
-        metadata: ErrorMetadata,
+        metadata: Box<ErrorMetadata>,
     },
 
     /// Rich process error with full contextual metadata.
@@ -196,7 +196,7 @@ pub enum AgentError {
         message: String,
         is_retryable: bool,
         retry_after: Option<Duration>,
-        metadata: ErrorMetadata,
+        metadata: Box<ErrorMetadata>,
     },
 }
 
@@ -451,12 +451,12 @@ impl AgentError {
         match self {
             AgentError::ExecutionFailed(msg) => AgentError::ExecutionFailedRich {
                 message: msg,
-                metadata,
+                metadata: Box::new(metadata),
             },
             AgentError::ParseError { message, reason } => AgentError::ParseErrorRich {
                 message,
                 reason,
-                metadata,
+                metadata: Box::new(metadata),
             },
             AgentError::ProcessError {
                 status_code,
@@ -468,18 +468,19 @@ impl AgentError {
                 message,
                 is_retryable,
                 retry_after,
-                metadata,
+                metadata: Box::new(metadata),
             },
             // Already rich - replace metadata
-            AgentError::ExecutionFailedRich { message, .. } => {
-                AgentError::ExecutionFailedRich { message, metadata }
-            }
+            AgentError::ExecutionFailedRich { message, .. } => AgentError::ExecutionFailedRich {
+                message,
+                metadata: Box::new(metadata),
+            },
             AgentError::ParseErrorRich {
                 message, reason, ..
             } => AgentError::ParseErrorRich {
                 message,
                 reason,
-                metadata,
+                metadata: Box::new(metadata),
             },
             AgentError::ProcessErrorRich {
                 status_code,
@@ -492,7 +493,7 @@ impl AgentError {
                 message,
                 is_retryable,
                 retry_after,
-                metadata,
+                metadata: Box::new(metadata),
             },
             // Other variants remain unchanged
             other => other,
@@ -718,7 +719,7 @@ impl RichErrorBuilder {
     pub fn build(self) -> AgentError {
         AgentError::ExecutionFailedRich {
             message: self.message,
-            metadata: self.metadata,
+            metadata: Box::new(self.metadata),
         }
     }
 }
@@ -1091,7 +1092,7 @@ mod tests {
         let err = AgentError::ParseErrorRich {
             message: "EOF".to_string(),
             reason: ParseErrorReason::UnexpectedEof,
-            metadata: ErrorMetadata::new(),
+            metadata: Box::new(ErrorMetadata::new()),
         };
         assert!(err.is_retryable());
 
@@ -1101,7 +1102,7 @@ mod tests {
             message: "Rate limited".to_string(),
             is_retryable: false, // Even if false, 429 should be retryable
             retry_after: None,
-            metadata: ErrorMetadata::new(),
+            metadata: Box::new(ErrorMetadata::new()),
         };
         assert!(err.is_retryable());
     }
@@ -1114,7 +1115,7 @@ mod tests {
             message: "Rate limited".to_string(),
             is_retryable: true,
             retry_after: Some(Duration::from_secs(90)),
-            metadata: ErrorMetadata::new(),
+            metadata: Box::new(ErrorMetadata::new()),
         };
 
         let delay = err.retry_delay(1);
@@ -1126,7 +1127,7 @@ mod tests {
             message: "Rate limited".to_string(),
             is_retryable: true,
             retry_after: None,
-            metadata: ErrorMetadata::new(),
+            metadata: Box::new(ErrorMetadata::new()),
         };
 
         let delay1 = err.retry_delay(1);

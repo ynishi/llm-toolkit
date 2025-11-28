@@ -78,11 +78,13 @@ fn main() {
     let parse_err = AgentError::ParseErrorRich {
         message: "Failed to parse JSON response".to_string(),
         reason: ParseErrorReason::InvalidJson,
-        metadata: ErrorMetadata::new()
-            .with_agent("ClaudeCodeAgent")
-            .with_operation("parse_json_output")
-            .with_context("expected_schema", json!("ReviewResult"))
-            .with_context("actual_output_preview", json!("Not a JSON...")),
+        metadata: Box::new(
+            ErrorMetadata::new()
+                .with_agent("ClaudeCodeAgent")
+                .with_operation("parse_json_output")
+                .with_context("expected_schema", json!("ReviewResult"))
+                .with_context("actual_output_preview", json!("Not a JSON...")),
+        ),
     };
 
     println!("   {}", parse_err);
@@ -97,11 +99,13 @@ fn main() {
         message: "Rate limit exceeded".to_string(),
         is_retryable: true,
         retry_after: Some(std::time::Duration::from_secs(60)),
-        metadata: ErrorMetadata::new()
-            .with_agent("GeminiAgent")
-            .with_operation("api_request")
-            .with_context("endpoint", json!("/v1/models/generate"))
-            .with_context("requests_today", json!(1000)),
+        metadata: Box::new(
+            ErrorMetadata::new()
+                .with_agent("GeminiAgent")
+                .with_operation("api_request")
+                .with_context("endpoint", json!("/v1/models/generate"))
+                .with_context("requests_today", json!(1000)),
+        ),
     };
 
     println!("   {}", process_err);
