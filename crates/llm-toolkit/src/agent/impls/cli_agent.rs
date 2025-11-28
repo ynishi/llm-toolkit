@@ -3,6 +3,8 @@
 //! This module provides shared functionality for agents that wrap external
 //! command-line tools like `gemini` and `claude`.
 
+#![allow(clippy::result_large_err)]
+
 use crate::agent::{AgentError, ExecutionProfile, Payload};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

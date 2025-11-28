@@ -298,7 +298,7 @@ mod tests {
         let messages = create_test_messages(10);
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
-        let strategy = JoiningStrategy::custom(3, Some(7));
+        let strategy = JoiningStrategy::range(3, Some(7));
         let filtered = strategy.filter_messages(&msg_refs, 10);
 
         // Should return turns 3, 4, 5, 6 (7 is exclusive)
@@ -376,7 +376,7 @@ mod tests {
             JoiningStrategy::recent(),
             JoiningStrategy::fresh(),
             JoiningStrategy::full(),
-            JoiningStrategy::custom(3, Some(7)),
+            JoiningStrategy::range(3, Some(7)),
         ];
 
         for strategy in strategies {

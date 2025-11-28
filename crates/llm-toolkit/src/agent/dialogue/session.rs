@@ -222,20 +222,32 @@ impl<'a> DialogueSession<'a> {
                     let joining_strategy = participant.joining_strategy;
                     let participant_name = participant.name().to_string();
 
+                    let mut joining_message_ids = Vec::new();
                     if is_initial_join {
-                        response_payload = self.dialogue.apply_joining_strategy(
+                        let (updated_payload, message_ids) = Dialogue::apply_joining_strategy(
+                            &self.dialogue.message_store,
+                            self.dialogue.context.as_ref(),
                             joining_strategy,
                             turn,
                             response_payload,
                             participants_info,
                             &participant_name,
                         );
+                        response_payload = updated_payload;
+                        joining_message_ids = message_ids;
                     }
 
                     let response_result = {
                         let participant = &self.dialogue.participants[participant_idx];
                         participant.agent.execute(response_payload).await
                     };
+
+                    // Mark joining strategy messages as sent (if any)
+                    if !joining_message_ids.is_empty() {
+                        self.dialogue
+                            .message_store
+                            .mark_all_as_sent(&joining_message_ids);
+                    }
 
                     return match response_result {
                         Ok(content) => {
