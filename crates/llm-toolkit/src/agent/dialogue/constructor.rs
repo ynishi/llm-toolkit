@@ -206,9 +206,9 @@ impl Dialogue {
     /// // All three respond in parallel, but results are ordered: Jordan, Alex, Sam
     /// ```
     pub fn ordered_broadcast(order: Vec<String>) -> Self {
-        Self::new(ExecutionModel::OrderedBroadcast(
-            BroadcastOrder::Explicit(order),
-        ))
+        Self::new(ExecutionModel::OrderedBroadcast(BroadcastOrder::Explicit(
+            order,
+        )))
     }
 
     /// Sets initial conversation history for session resumption.
