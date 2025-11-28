@@ -1492,56 +1492,13 @@ impl Dialogue {
 
             // Handle initial join if this participant hasn't sent a message yet
             if is_initial_join {
-                if let Some(strategy) = joining_strategy {
-                    // Apply joining strategy: filter history messages
-                    let all_messages: Vec<&DialogueMessage> = self.message_store.all_messages();
-                    let message_refs: Vec<&DialogueMessage> =
-                        all_messages.iter().copied().collect();
-                    let filtered_history =
-                        strategy.filter_messages(&message_refs, current_turn + 1);
-
-                    // Collect message IDs before filtering (for marking as sent)
-                    let all_past_message_ids: Vec<_> = all_messages
-                        .iter()
-                        .filter(|msg| msg.turn < current_turn)
-                        .map(|msg| msg.id)
-                        .collect();
-
-                    // Convert filtered history to PayloadMessage
-                    let history_messages: Vec<PayloadMessage> = filtered_history
-                        .into_iter()
-                        .map(|msg| PayloadMessage::from(msg.clone()))
-                        .collect();
-
-                    let filtered_count = history_messages.len();
-
-                    // Mark ALL past messages as sent to this participant
-                    // (not just the ones shown by the strategy)
-                    self.message_store.mark_all_as_sent(&all_past_message_ids);
-
-                    // Prepend filtered history to the payload
-                    if !history_messages.is_empty() {
-                        // Prepend history to existing messages
-                        let mut all_messages_for_payload = history_messages;
-                        all_messages_for_payload.extend(input_payload.to_messages());
-                        input_payload = Payload::from_messages(all_messages_for_payload);
-
-                        // Re-apply context and participants
-                        if let Some(ref context) = self.context {
-                            input_payload = input_payload.with_context(context.to_prompt());
-                        }
-                        input_payload = input_payload.with_participants(participants_info.clone());
-                    }
-
-                    trace!(
-                        target = "llm_toolkit::dialogue",
-                        participant = agent_name,
-                        strategy = ?strategy,
-                        filtered_count = filtered_count,
-                        marked_sent_count = all_past_message_ids.len(),
-                        "Applied joining strategy for initial join (sequential mode)"
-                    );
-                }
+                input_payload = self.apply_joining_strategy(
+                    joining_strategy,
+                    current_turn,
+                    input_payload,
+                    &participants_info,
+                    &agent_name,
+                );
             }
 
             // Execute agent
@@ -1880,6 +1837,84 @@ impl Dialogue {
         }
     }
 
+    /// Applies JoiningStrategy to a participant's initial join.
+    ///
+    /// This helper consolidates the common logic for handling first-time participation
+    /// across all execution modes (Broadcast, Mentioned, Sequential).
+    ///
+    /// # Arguments
+    /// * `joining_strategy` - The strategy to apply (if any)
+    /// * `current_turn` - The current turn number
+    /// * `input_payload` - The payload to be sent to the participant
+    /// * `participants_info` - Participant metadata for re-application
+    /// * `participant_name` - Name of the joining participant (for logging)
+    ///
+    /// # Returns
+    /// Modified payload with filtered history prepended (if strategy is set)
+    ///
+    /// # Side Effects
+    /// - Marks all past messages as sent in MessageStore
+    /// - Logs trace information about applied strategy
+    fn apply_joining_strategy(
+        &mut self,
+        joining_strategy: Option<JoiningStrategy>,
+        current_turn: usize,
+        mut input_payload: Payload,
+        participants_info: &[ParticipantInfo],
+        participant_name: &str,
+    ) -> Payload {
+        if let Some(strategy) = joining_strategy {
+            // Apply joining strategy: filter history messages
+            let all_messages = self.message_store.all_messages();
+            let message_refs: Vec<&DialogueMessage> = all_messages.iter().copied().collect();
+            let filtered_history = strategy.filter_messages(&message_refs, current_turn + 1);
+
+            // Collect message IDs before filtering (for marking as sent)
+            let all_past_message_ids: Vec<_> = all_messages
+                .iter()
+                .filter(|msg| msg.turn < current_turn)
+                .map(|msg| msg.id)
+                .collect();
+
+            // Convert filtered history to PayloadMessage
+            let history_messages: Vec<PayloadMessage> = filtered_history
+                .into_iter()
+                .map(|msg| PayloadMessage::from(msg.clone()))
+                .collect();
+
+            let filtered_count = history_messages.len();
+
+            // Mark ALL past messages as sent to this participant
+            // (not just the ones shown by the strategy)
+            self.message_store.mark_all_as_sent(&all_past_message_ids);
+
+            // Prepend filtered history to the payload
+            if !history_messages.is_empty() {
+                // Prepend history to existing messages
+                let mut all_messages_for_payload = history_messages;
+                all_messages_for_payload.extend(input_payload.to_messages());
+                input_payload = Payload::from_messages(all_messages_for_payload);
+
+                // Re-apply context and participants
+                if let Some(ref context) = self.context {
+                    input_payload = input_payload.with_context(context.to_prompt());
+                }
+                input_payload = input_payload.with_participants(participants_info.to_vec());
+            }
+
+            trace!(
+                target = "llm_toolkit::dialogue",
+                participant = participant_name,
+                strategy = ?strategy,
+                filtered_count = filtered_count,
+                marked_sent_count = all_past_message_ids.len(),
+                "Applied joining strategy for initial join"
+            );
+        }
+
+        input_payload
+    }
+
     /// Helper method to spawn broadcast tasks for all participants.
     ///
     /// Returns a JoinSet with pending agent executions.
@@ -1969,56 +2004,13 @@ impl Dialogue {
 
             // Handle initial join if this participant hasn't sent a message yet
             if is_initial_join {
-                if let Some(strategy) = joining_strategy {
-                    // Apply joining strategy: filter history messages
-                    let all_messages: Vec<&DialogueMessage> = self.message_store.all_messages();
-                    let message_refs: Vec<&DialogueMessage> =
-                        all_messages.iter().copied().collect();
-                    let filtered_history =
-                        strategy.filter_messages(&message_refs, current_turn + 1);
-
-                    // Collect message IDs before filtering (for marking as sent)
-                    let all_past_message_ids: Vec<_> = all_messages
-                        .iter()
-                        .filter(|msg| msg.turn <= current_turn)
-                        .map(|msg| msg.id)
-                        .collect();
-
-                    // Convert filtered history to PayloadMessage
-                    let history_messages: Vec<PayloadMessage> = filtered_history
-                        .into_iter()
-                        .map(|msg| PayloadMessage::from(msg.clone()))
-                        .collect();
-
-                    let filtered_count = history_messages.len();
-
-                    // Mark ALL past messages as sent to this participant
-                    // (not just the ones shown by the strategy)
-                    self.message_store.mark_all_as_sent(&all_past_message_ids);
-
-                    // Prepend filtered history to the payload
-                    if !history_messages.is_empty() {
-                        // Prepend history to existing messages
-                        let mut all_messages_for_payload = history_messages;
-                        all_messages_for_payload.extend(input_payload.to_messages());
-                        input_payload = Payload::from_messages(all_messages_for_payload);
-
-                        // Re-apply context and participants
-                        if let Some(ref context) = self.context {
-                            input_payload = input_payload.with_context(context.to_prompt());
-                        }
-                        input_payload = input_payload.with_participants(participants_info.clone());
-                    }
-
-                    trace!(
-                        target = "llm_toolkit::dialogue",
-                        participant = name,
-                        strategy = ?strategy,
-                        filtered_count = filtered_count,
-                        marked_sent_count = all_past_message_ids.len(),
-                        "Applied joining strategy for initial join"
-                    );
-                }
+                input_payload = self.apply_joining_strategy(
+                    joining_strategy,
+                    current_turn,
+                    input_payload,
+                    &participants_info,
+                    &name,
+                );
 
                 // Mark participant as having sent once
                 participant.has_sent_once = true;
@@ -2238,56 +2230,13 @@ impl Dialogue {
 
             // Handle initial join if this participant hasn't sent a message yet
             if is_initial_join {
-                if let Some(strategy) = joining_strategy {
-                    // Apply joining strategy: filter history messages
-                    let all_messages: Vec<&DialogueMessage> = self.message_store.all_messages();
-                    let message_refs: Vec<&DialogueMessage> =
-                        all_messages.iter().copied().collect();
-                    let filtered_history =
-                        strategy.filter_messages(&message_refs, current_turn + 1);
-
-                    // Collect message IDs before filtering (for marking as sent)
-                    let all_past_message_ids: Vec<_> = all_messages
-                        .iter()
-                        .filter(|msg| msg.turn <= current_turn)
-                        .map(|msg| msg.id)
-                        .collect();
-
-                    // Convert filtered history to PayloadMessage
-                    let history_messages: Vec<PayloadMessage> = filtered_history
-                        .into_iter()
-                        .map(|msg| PayloadMessage::from(msg.clone()))
-                        .collect();
-
-                    let filtered_count = history_messages.len();
-
-                    // Mark ALL past messages as sent to this participant
-                    // (not just the ones shown by the strategy)
-                    self.message_store.mark_all_as_sent(&all_past_message_ids);
-
-                    // Prepend filtered history to the payload
-                    if !history_messages.is_empty() {
-                        // Prepend history to existing messages
-                        let mut all_messages_for_payload = history_messages;
-                        all_messages_for_payload.extend(input_payload.to_messages());
-                        input_payload = Payload::from_messages(all_messages_for_payload);
-
-                        // Re-apply context and participants
-                        if let Some(ref context) = self.context {
-                            input_payload = input_payload.with_context(context.to_prompt());
-                        }
-                        input_payload = input_payload.with_participants(participants_info.clone());
-                    }
-
-                    trace!(
-                        target = "llm_toolkit::dialogue",
-                        participant = name,
-                        strategy = ?strategy,
-                        filtered_count = filtered_count,
-                        marked_sent_count = all_past_message_ids.len(),
-                        "Applied joining strategy for initial join (mentioned mode)"
-                    );
-                }
+                input_payload = self.apply_joining_strategy(
+                    joining_strategy,
+                    current_turn,
+                    input_payload,
+                    &participants_info,
+                    &name,
+                );
 
                 // Mark participant as having sent once
                 participant.has_sent_once = true;
