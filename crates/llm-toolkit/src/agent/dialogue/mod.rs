@@ -1388,6 +1388,10 @@ impl Dialogue {
             let agent = &participant.agent;
             let agent_name = participant.name().to_string();
 
+            // Check if this is the participant's first message
+            let is_initial_join = !participant.has_sent_once;
+            let joining_strategy = participant.joining_strategy;
+
             // Determine input messages based on position in sequence
             let (current_messages, messages_with_metadata, message_ids_to_mark) = if sequence_idx
                 == 0
@@ -1486,6 +1490,60 @@ impl Dialogue {
             // Add participants info
             input_payload = input_payload.with_participants(participants_info.clone());
 
+            // Handle initial join if this participant hasn't sent a message yet
+            if is_initial_join {
+                if let Some(strategy) = joining_strategy {
+                    // Apply joining strategy: filter history messages
+                    let all_messages: Vec<&DialogueMessage> = self.message_store.all_messages();
+                    let message_refs: Vec<&DialogueMessage> =
+                        all_messages.iter().copied().collect();
+                    let filtered_history =
+                        strategy.filter_messages(&message_refs, current_turn + 1);
+
+                    // Collect message IDs before filtering (for marking as sent)
+                    let all_past_message_ids: Vec<_> = all_messages
+                        .iter()
+                        .filter(|msg| msg.turn < current_turn)
+                        .map(|msg| msg.id)
+                        .collect();
+
+                    // Convert filtered history to PayloadMessage
+                    let history_messages: Vec<PayloadMessage> = filtered_history
+                        .into_iter()
+                        .map(|msg| PayloadMessage::from(msg.clone()))
+                        .collect();
+
+                    let filtered_count = history_messages.len();
+
+                    // Mark ALL past messages as sent to this participant
+                    // (not just the ones shown by the strategy)
+                    self.message_store.mark_all_as_sent(&all_past_message_ids);
+
+                    // Prepend filtered history to the payload
+                    if !history_messages.is_empty() {
+                        // Prepend history to existing messages
+                        let mut all_messages_for_payload = history_messages;
+                        all_messages_for_payload.extend(input_payload.to_messages());
+                        input_payload = Payload::from_messages(all_messages_for_payload);
+
+                        // Re-apply context and participants
+                        if let Some(ref context) = self.context {
+                            input_payload = input_payload.with_context(context.to_prompt());
+                        }
+                        input_payload = input_payload.with_participants(participants_info.clone());
+                    }
+
+                    trace!(
+                        target = "llm_toolkit::dialogue",
+                        participant = agent_name,
+                        strategy = ?strategy,
+                        filtered_count = filtered_count,
+                        marked_sent_count = all_past_message_ids.len(),
+                        "Applied joining strategy for initial join (sequential mode)"
+                    );
+                }
+            }
+
             // Execute agent
             let response = agent.execute(input_payload).await?;
 
@@ -1511,6 +1569,11 @@ impl Dialogue {
                     message_ids_to_mark.len(),
                     agent_name
                 );
+            }
+
+            // Mark participant as having sent once (after successful execution)
+            if is_initial_join {
+                self.participants[participant_idx].has_sent_once = true;
             }
 
             // Keep track of final turn
@@ -7646,6 +7709,157 @@ mod tests {
         assert!(
             !has_alice_turn1,
             "Carol should NOT see Alice's Turn 1 response in Turn 4 (marked as sent)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_join_in_progress_sequential_mode_with_fresh_strategy() {
+        use crate::agent::dialogue::joining_strategy::JoiningStrategy;
+        use crate::agent::persona::Persona;
+
+        // Create initial participants for sequential processing
+        let alice = Persona {
+            name: "Alice".to_string(),
+            role: "Analyzer".to_string(),
+            background: "Data analyst".to_string(),
+            communication_style: "Analytical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let bob = Persona {
+            name: "Bob".to_string(),
+            role: "Reviewer".to_string(),
+            background: "Code reviewer".to_string(),
+            communication_style: "Critical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_alice = MockAgent::new("Alice", vec![
+            "Alice analyzed: turn 1".to_string(),
+            "Alice analyzed: turn 2".to_string(),
+            "Alice analyzed: turn 3".to_string(),
+        ]);
+        let agent_bob = MockAgent::new("Bob", vec![
+            "Bob reviewed: turn 1".to_string(),
+            "Bob reviewed: turn 2".to_string(),
+            "Bob reviewed: turn 3".to_string(),
+        ]);
+        let alice_clone = agent_alice.clone();
+        let bob_clone = agent_bob.clone();
+
+        let mut dialogue = Dialogue::sequential();
+        dialogue.add_participant(alice, agent_alice);
+        dialogue.add_participant(bob, agent_bob);
+
+        // Turn 1: Alice → Bob (sequential)
+        let _turn1 = dialogue.run("Analyze this data").await.unwrap();
+
+        // Turn 2: Alice → Bob (sequential)
+        let _turn2 = dialogue.run("Continue analysis").await.unwrap();
+
+        // Verify Alice and Bob were called twice each
+        assert_eq!(alice_clone.get_call_count(), 2, "Alice should be called twice");
+        assert_eq!(bob_clone.get_call_count(), 2, "Bob should be called twice");
+
+        // Add Carol mid-dialogue with Fresh strategy
+        let carol = Persona {
+            name: "Carol".to_string(),
+            role: "Summarizer".to_string(),
+            background: "Summary specialist".to_string(),
+            communication_style: "Concise".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_carol = MockAgent::new("Carol", vec!["Carol summarized".to_string(), "Carol summary 2".to_string()]);
+        let carol_clone = agent_carol.clone();
+
+        // Carol joins with Fresh strategy (joins at end of sequence)
+        dialogue.join_in_progress(carol, agent_carol, JoiningStrategy::Fresh);
+
+        // Turn 3: Alice → Bob → Carol (sequential, Carol is now at the end)
+        let turn3 = dialogue.run("Final analysis").await.unwrap();
+
+        // In sequential mode, only the last agent's output is returned
+        assert_eq!(turn3.len(), 1, "Sequential mode returns only last agent's output");
+        assert_eq!(turn3[0].speaker.name(), "Carol", "Last agent should be Carol");
+
+        // Verify all agents were called
+        assert_eq!(alice_clone.get_call_count(), 3, "Alice should be called 3 times");
+        assert_eq!(bob_clone.get_call_count(), 3, "Bob should be called 3 times");
+        assert_eq!(carol_clone.get_call_count(), 1, "Carol should be called once");
+
+        // Verify Carol received NO historical messages (Fresh strategy)
+        let carol_payloads = carol_clone.get_payloads();
+        assert_eq!(carol_payloads.len(), 1, "Carol should receive 1 payload");
+
+        let carol_first_payload = &carol_payloads[0];
+        let messages = carol_first_payload.to_messages();
+
+        // Carol should NOT see Turn 1 or Turn 2 messages from Alice or Bob
+        let turn1_turn2_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| {
+                let content = msg.content.as_str();
+                (msg.speaker.name() == "Alice" || msg.speaker.name() == "Bob")
+                    && (content.contains("turn 1") || content.contains("turn 2"))
+            })
+            .collect();
+
+        assert_eq!(
+            turn1_turn2_messages.len(),
+            0,
+            "Fresh strategy in sequential mode: Carol should not see Turn 1 or Turn 2 historical messages"
+        );
+
+        // Carol SHOULD see Bob's Turn 3 output (immediate predecessor in the chain)
+        let bob_turn3_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 3"))
+            .collect();
+
+        assert_eq!(
+            bob_turn3_messages.len(),
+            1,
+            "Carol should see Bob's Turn 3 output (her immediate input in sequential chain)"
+        );
+
+        // Turn 4: Verify Carol receives only differential updates
+        let turn4 = dialogue.run("Continue").await.unwrap();
+
+        assert_eq!(carol_clone.get_call_count(), 2, "Carol should be called twice");
+
+        let carol_second_payload = &carol_clone.get_payloads()[1];
+        let turn4_messages = carol_second_payload.to_messages();
+
+        // Carol should see Bob's Turn 4 output (current chain input)
+        // but NOT Turn 1, 2, or 3 historical messages
+        let bob_historical: Vec<_> = turn4_messages
+            .iter()
+            .filter(|msg| {
+                msg.speaker.name() == "Bob"
+                    && (msg.content.contains("turn 1") || msg.content.contains("turn 2"))
+            })
+            .collect();
+
+        assert_eq!(
+            bob_historical.len(),
+            0,
+            "In Turn 4, Carol should NOT see Bob's Turn 1 or Turn 2 (marked as sent)"
+        );
+
+        // Carol should see Bob's Turn 4 output (new message in the chain)
+        let bob_turn4: Vec<_> = turn4_messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 3"))
+            .collect();
+
+        assert_eq!(
+            bob_turn4.len(),
+            1,
+            "In Turn 4, Carol should see Bob's Turn 4 output (new chain input)"
         );
     }
 }
