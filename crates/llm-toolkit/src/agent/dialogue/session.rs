@@ -216,6 +216,65 @@ impl<'a> DialogueSession<'a> {
                         response_payload = response_payload.with_context(context.to_prompt());
                     }
 
+                    // Handle initial join if this participant hasn't sent a message yet
+                    let participant = &self.dialogue.participants[participant_idx];
+                    let is_initial_join = !participant.has_sent_once;
+                    let joining_strategy = participant.joining_strategy;
+
+                    if is_initial_join {
+                        if let Some(strategy) = joining_strategy {
+                            // Apply joining strategy: filter history messages
+                            let all_messages = self.dialogue.message_store.all_messages();
+                            let message_refs: Vec<&DialogueMessage> =
+                                all_messages.iter().copied().collect();
+                            let filtered_history = strategy.filter_messages(&message_refs, turn + 1);
+
+                            // Collect message IDs (for marking as sent)
+                            let all_past_message_ids: Vec<_> = all_messages
+                                .iter()
+                                .filter(|msg| msg.turn < turn)
+                                .map(|msg| msg.id)
+                                .collect();
+
+                            // Convert filtered history to PayloadMessage
+                            let history_messages: Vec<PayloadMessage> = filtered_history
+                                .into_iter()
+                                .map(|msg| PayloadMessage::from(msg.clone()))
+                                .collect();
+
+                            let filtered_count = history_messages.len();
+
+                            // Mark ALL past messages as sent to this participant
+                            self.dialogue
+                                .message_store
+                                .mark_all_as_sent(&all_past_message_ids);
+
+                            // Prepend filtered history to the payload
+                            if !history_messages.is_empty() {
+                                let mut all_messages_for_payload = history_messages;
+                                all_messages_for_payload.extend(response_payload.to_messages());
+                                response_payload = Payload::from_messages(all_messages_for_payload);
+
+                                // Re-apply context and participants
+                                if let Some(ref context) = self.dialogue.context {
+                                    response_payload =
+                                        response_payload.with_context(context.to_prompt());
+                                }
+                                response_payload =
+                                    response_payload.with_participants(participants_info.to_vec());
+                            }
+
+                            tracing::trace!(
+                                target = "llm_toolkit::dialogue",
+                                participant = participant.name(),
+                                strategy = ?strategy,
+                                filtered_count = filtered_count,
+                                marked_sent_count = all_past_message_ids.len(),
+                                "Applied joining strategy for initial join (sequential partial_session)"
+                            );
+                        }
+                    }
+
                     let response_result = {
                         let participant = &self.dialogue.participants[participant_idx];
                         participant.agent.execute(response_payload).await
@@ -240,6 +299,11 @@ impl<'a> DialogueSession<'a> {
 
                             current_turn_outputs
                                 .push(PayloadMessage::new(speaker.clone(), content.clone()));
+
+                            // Mark participant as having sent once (after successful execution)
+                            if is_initial_join {
+                                self.dialogue.participants[participant_idx].has_sent_once = true;
+                            }
 
                             let turn = DialogueTurn { speaker, content };
                             info!(
