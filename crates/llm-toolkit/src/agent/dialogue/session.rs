@@ -86,6 +86,7 @@ impl<'a> DialogueSession<'a> {
                                     continue;
                                 }
                                 BroadcastOrder::ParticipantOrder => {
+
                                     match &result {
                                         Ok(_) => {
                                             info!(
@@ -203,10 +204,19 @@ impl<'a> DialogueSession<'a> {
                     let step_number = sequence_position + 1;
                     let step_total = sequence.len();
 
+                    // Check if this is initial join before building payload
+                    let participant = &self.dialogue.participants[participant_idx];
+                    let is_initial_join = !participant.has_sent_once;
+                    let joining_strategy = participant.joining_strategy;
+
                     let mut response_payload = build_sequential_payload(
                         payload,
-                        prev_agent_outputs.as_slice(),
-                        current_turn_outputs.as_slice(),
+                        if is_initial_join && joining_strategy.is_some() {
+                            &[]
+                        } else {
+                            prev_agent_outputs.as_slice()
+                        },
+                        current_turn_outputs.as_slice(), // Always include current turn outputs (sequential chain requirement)
                         participants_info.as_slice(),
                         sequence_position,
                     );
@@ -217,9 +227,6 @@ impl<'a> DialogueSession<'a> {
                     }
 
                     // Handle initial join if this participant hasn't sent a message yet
-                    let participant = &self.dialogue.participants[participant_idx];
-                    let is_initial_join = !participant.has_sent_once;
-                    let joining_strategy = participant.joining_strategy;
                     let participant_name = participant.name().to_string();
 
                     let mut joining_message_ids = Vec::new();

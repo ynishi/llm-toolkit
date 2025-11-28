@@ -12,6 +12,7 @@ use crate::{
         persona::{PersonaTeam, PersonaTeamGenerationRequest},
     },
 };
+use std::collections::HashMap;
 
 impl Dialogue {
     /// Creates a new dialogue with the specified execution model.
@@ -25,6 +26,7 @@ impl Dialogue {
             context: None,
             reaction_strategy: ReactionStrategy::default(),
             moderator: None,
+            pending_participants: HashMap::new(),
         }
     }
 

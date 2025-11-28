@@ -107,7 +107,10 @@ use crate::agent::{Agent, AgentError, Payload, PayloadMessage};
 use async_trait::async_trait;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::task::JoinSet;
 use tracing::{debug, error, trace};
 
@@ -498,6 +501,26 @@ impl Default for ReactionStrategy {
     }
 }
 
+/// Represents a participant waiting to join the dialogue (pending state).
+///
+/// When a participant joins mid-dialogue via `join_in_progress()`, they are
+/// first placed in this pending state ("waiting at the entrance"). On their
+/// first turn, they receive a specially constructed payload based on their
+/// JoiningStrategy, after which they transition to regular participant status.
+#[derive(Debug, Clone)]
+pub(super) struct PendingParticipant {
+    /// Index of the participant in the participants vector
+    #[allow(dead_code)]
+    pub participant_index: usize,
+
+    /// JoiningStrategy determining how much history they receive
+    pub joining_strategy: JoiningStrategy,
+
+    /// The turn number when this participant joined
+    #[allow(dead_code)]
+    pub joined_at_turn: usize,
+}
+
 /// Internal representation of a dialogue participant.
 ///
 /// Wraps a persona and its associated agent implementation.
@@ -619,6 +642,13 @@ pub struct Dialogue {
     /// When execution_model is Moderator, this agent is consulted to determine
     /// the execution strategy for each turn.
     pub(super) moderator: Option<Arc<crate::agent::AnyAgent<ExecutionModel>>>,
+
+    /// Pool of participants waiting to join ("waiting at the entrance").
+    ///
+    /// Maps participant name to their pending state. When a participant joins
+    /// mid-dialogue via `join_in_progress()`, they are placed here until their
+    /// first turn completes, after which they transition to regular participant status.
+    pub(super) pending_participants: HashMap<String, PendingParticipant>,
 }
 
 impl Dialogue {
@@ -825,11 +855,23 @@ impl Dialogue {
     where
         T: Agent<Output = String> + 'static,
     {
+        let participant_name = persona.name.clone();
+        let participant_index = self.participants.len();
+
+        // Add as regular participant (no joining_strategy set on Participant)
         self.participants.push(Self::create_participant(
-            persona,
-            llm_agent,
-            Some(joining_strategy),
+            persona, llm_agent, None, // joining_strategy managed by PendingParticipant
         ));
+
+        // Place in pending pool ("waiting at the entrance")
+        self.pending_participants.insert(
+            participant_name,
+            PendingParticipant {
+                participant_index,
+                joining_strategy,
+                joined_at_turn: self.message_store.current_turn(),
+            },
+        );
 
         self
     }
@@ -1402,8 +1444,8 @@ impl Dialogue {
                 let mut messages = Vec::new();
                 let mut metadata_messages = Vec::new();
 
-                // Add previous turn's agent messages if in multi-turn scenario
-                if current_turn > 1 {
+                // Add previous turn's agent messages if in multi-turn scenario (skip if initial join with joining_strategy)
+                if current_turn > 1 && !(is_initial_join && joining_strategy.is_some()) {
                     let prev_turn_messages: Vec<PayloadMessage> = self
                         .message_store
                         .messages_for_turn(current_turn - 1)
@@ -1436,6 +1478,8 @@ impl Dialogue {
             } else {
                 // Subsequent agents: get ALL previous agents' messages from current turn
                 // (not just unsent, as they may have been marked sent by earlier agents in the chain)
+                // Note: In sequential mode, current turn's agent messages are REQUIRED for the chain,
+                // so we always include them regardless of joining_strategy
                 let prev_agent_messages: Vec<PayloadMessage> = self
                     .message_store
                     .messages_for_turn(current_turn)
@@ -1881,7 +1925,7 @@ impl Dialogue {
             // Apply joining strategy: filter history messages
             let all_messages = message_store.all_messages();
             let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
-            let filtered_history = strategy.filter_messages(&message_refs, current_turn + 1);
+            let filtered_history = strategy.filter_messages(&message_refs, current_turn);
 
             // Collect message IDs before filtering (for marking as sent)
             let all_past_message_ids: Vec<_> = all_messages
@@ -1928,6 +1972,92 @@ impl Dialogue {
         (input_payload, message_ids_to_mark)
     }
 
+    /// Builds payload for a pending participant (waiting to join).
+    ///
+    /// Pending participants do not use unsent_messages_from_agent. Instead,
+    /// they receive history directly from MessageStore based on their JoiningStrategy.
+    ///
+    /// # Arguments
+    /// * `pending` - The pending participant state
+    /// * `base_payload` - The current turn's input payload
+    /// * `participants_info` - Information about all participants
+    /// * `current_turn` - The current turn number
+    ///
+    /// # Returns
+    /// Constructed payload with filtered history prepended
+    fn build_pending_participant_payload(
+        &self,
+        pending: &PendingParticipant,
+        base_payload: &Payload,
+        participants_info: &[ParticipantInfo],
+        current_turn: usize,
+    ) -> Payload {
+        // Apply JoiningStrategy to filter history from MessageStore
+        let all_messages = self.message_store.all_messages();
+        let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
+        let filtered_history = pending
+            .joining_strategy
+            .filter_messages(&message_refs, current_turn);
+
+        // Convert to PayloadMessage
+        let history_messages: Vec<PayloadMessage> = filtered_history
+            .into_iter()
+            .map(PayloadMessage::from)
+            .collect();
+
+        // Build payload: history + base_payload
+        let mut payload = if history_messages.is_empty() {
+            base_payload.clone()
+        } else {
+            Payload::from_messages(history_messages).merge(base_payload.clone())
+        };
+
+        // Apply context if exists
+        if let Some(ref context) = self.context {
+            payload = payload.with_context(context.to_prompt());
+        }
+
+        // Add participants info
+        payload.with_participants(participants_info.to_vec())
+    }
+
+    /// Builds payload for a regular participant (already joined).
+    ///
+    /// Regular participants use the standard unsent_messages_from_agent mechanism.
+    ///
+    /// # Arguments
+    /// * `base_payload` - The current turn's input payload
+    /// * `unsent_messages_from_agent` - Unsent messages from previous turn
+    /// * `participant_name` - Name of the participant
+    /// * `participants_info` - Information about all participants
+    ///
+    /// # Returns
+    /// Constructed payload with unsent messages from other participants
+    #[allow(dead_code)]
+    fn build_regular_participant_payload(
+        base_payload: &Payload,
+        unsent_messages_from_agent: &[PayloadMessage],
+        participant_name: &str,
+        participants_info: &[ParticipantInfo],
+    ) -> Payload {
+        // Filter out self from unsent messages
+        let current_messages: Vec<PayloadMessage> = unsent_messages_from_agent
+            .iter()
+            .filter(|msg| msg.speaker.name() != participant_name)
+            .cloned()
+            .collect();
+
+        // Build payload
+        let payload = if current_messages.is_empty() {
+            base_payload.clone()
+        } else {
+            Payload::from_messages(current_messages).merge(base_payload.clone())
+        };
+
+        // Add participants info
+        payload.with_participants(participants_info.to_vec())
+    }
+
     /// Helper method to spawn broadcast tasks for all participants.
     ///
     /// Returns a JoinSet with pending agent executions.
@@ -1937,7 +2067,7 @@ impl Dialogue {
         // Build participant list
         let participants_info = self.get_participants_info();
 
-        // Get unsent agent-generated messages from MessageStore
+        // Get unsent agent-generated messages from MessageStore (for regular participants)
         let unsent_messages_from_agent: Vec<PayloadMessage> = self
             .message_store
             .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
@@ -1971,81 +2101,64 @@ impl Dialogue {
         let mut pending = JoinSet::new();
         let current_turn = self.message_store.current_turn();
 
-        // Collect joining strategy message IDs to mark as sent later
-        let mut all_joining_message_ids = Vec::new();
-
-        for (idx, participant) in self.participants.iter_mut().enumerate() {
+        for (idx, participant) in self.participants.iter().enumerate() {
             let agent = Arc::clone(&participant.agent);
-            let name = participant.name().to_string();
+            let participant_name = participant.name().to_string();
 
-            // Check if this is the participant's first message
-            let is_initial_join = !participant.has_sent_once;
-            let joining_strategy = participant.joining_strategy;
+            // Entry point: Check if pending participant
+            let input_payload =
+                if let Some(pending) = self.pending_participants.get(&participant_name) {
+                    // Pending participant: use JoiningStrategy, skip unsent_messages
+                    // Only include incoming payload (current turn's user input)
+                    let base_payload = Payload::from_messages(unsent_messages_incoming.clone());
 
-            // Combine: [unsent messages (excluding self)] + [new intent]
-            let mut current_messages = unsent_messages_from_agent
-                .iter()
-                .filter(|msg| msg.speaker.name() != name)
-                .cloned()
-                .collect::<Vec<_>>();
+                    let payload = self.build_pending_participant_payload(
+                        pending,
+                        &base_payload,
+                        &participants_info,
+                        current_turn,
+                    );
 
-            current_messages.extend(unsent_messages_incoming.clone());
-            let messages_with_metadata = current_messages.clone();
+                    // Remove from pending immediately after payload construction
+                    // (before agent execution, so next turn sees them as regular)
+                    self.pending_participants.remove(&participant_name);
 
-            // current_messages now contains everything needed for this agent's turn:
-            // 1. Previous turn agent outputs (excluding self)
-            // 2. Unsent messages (excluding self)
-            // 3. Current Payload content (Messages + Text as System message)
-            let turn_input = TurnInput::with_messages_and_context(
-                current_messages,
-                vec![], // context is now integrated into current_messages
-                participants_info.clone(),
-                name.clone(),
-            );
+                    payload
+                } else {
+                    // Regular participant: use unsent_messages_from_agent
+                    let mut current_messages: Vec<PayloadMessage> = unsent_messages_from_agent
+                        .iter()
+                        .filter(|msg| msg.speaker.name() != participant_name)
+                        .cloned()
+                        .collect();
 
-            // Create payload with Messages (for structured dialogue history)
-            let messages = turn_input.to_messages();
-            let mut input_payload = Payload::from_messages(messages);
+                    current_messages.extend(unsent_messages_incoming.clone());
+                    let messages_with_metadata = current_messages.clone();
 
-            // Attach context if exists
-            if let Some(ref context) = self.context {
-                input_payload = input_payload.with_context(context.to_prompt());
-            }
+                    // Create payload with turn input formatting
+                    let turn_input = TurnInput::with_messages_and_context(
+                        current_messages,
+                        vec![],
+                        participants_info.clone(),
+                        participant_name.clone(),
+                    );
 
-            input_payload =
-                Self::apply_metadata_attachments(input_payload, &messages_with_metadata);
+                    let messages = turn_input.to_messages();
+                    let mut payload = Payload::from_messages(messages);
 
-            // Add Participants metadata
-            input_payload = input_payload.with_participants(participants_info.clone());
+                    // Attach context if exists
+                    if let Some(ref context) = self.context {
+                        payload = payload.with_context(context.to_prompt());
+                    }
 
-            // Handle initial join if this participant hasn't sent a message yet
-            if is_initial_join {
-                let (updated_payload, message_ids) = Self::apply_joining_strategy(
-                    &self.message_store,
-                    self.context.as_ref(),
-                    joining_strategy,
-                    current_turn,
-                    input_payload,
-                    &participants_info,
-                    &name,
-                );
-                input_payload = updated_payload;
-                all_joining_message_ids.extend(message_ids);
-
-                // Mark participant as having sent once
-                participant.has_sent_once = true;
-            }
+                    payload = Self::apply_metadata_attachments(payload, &messages_with_metadata);
+                    payload.with_participants(participants_info.clone())
+                };
 
             pending.spawn(async move {
                 let result = agent.execute(input_payload).await;
-                (idx, name, result)
+                (idx, participant_name, result)
             });
-        }
-
-        // Mark joining strategy messages as sent (if any)
-        if !all_joining_message_ids.is_empty() {
-            self.message_store
-                .mark_all_as_sent(&all_joining_message_ids);
         }
 
         // Mark unsent messages as sent to agents
@@ -2228,11 +2341,16 @@ impl Dialogue {
             let name = name.to_string();
 
             // Combine: [unsent agent messages (excluding self)] + [incoming messages]
-            let mut current_messages = unsent_messages_from_agent
-                .iter()
-                .filter(|msg| msg.speaker.name() != name)
-                .cloned()
-                .collect::<Vec<_>>();
+            // For initial join with joining_strategy, skip unsent_messages_from_agent (they will be handled by joining_strategy)
+            let mut current_messages = if is_initial_join && joining_strategy.is_some() {
+                Vec::new()
+            } else {
+                unsent_messages_from_agent
+                    .iter()
+                    .filter(|msg| msg.speaker.name() != name)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
 
             current_messages.extend(unsent_messages_incoming.clone());
             let messages_with_metadata = current_messages.clone();
@@ -7790,6 +7908,7 @@ mod tests {
                 "Alice analyzed: turn 1".to_string(),
                 "Alice analyzed: turn 2".to_string(),
                 "Alice analyzed: turn 3".to_string(),
+                "Alice analyzed: turn 4".to_string(),
             ],
         );
         let agent_bob = MockAgent::new(
@@ -7798,6 +7917,7 @@ mod tests {
                 "Bob reviewed: turn 1".to_string(),
                 "Bob reviewed: turn 2".to_string(),
                 "Bob reviewed: turn 3".to_string(),
+                "Bob reviewed: turn 4".to_string(),
             ],
         );
         let alice_clone = agent_alice.clone();
@@ -7981,6 +8101,7 @@ mod tests {
                 "Alice analyzed: turn 1".to_string(),
                 "Alice analyzed: turn 2".to_string(),
                 "Alice analyzed: turn 3".to_string(),
+                "Alice analyzed: turn 4".to_string(),
             ],
         );
         let agent_bob = MockAgent::new(
@@ -7989,6 +8110,7 @@ mod tests {
                 "Bob reviewed: turn 1".to_string(),
                 "Bob reviewed: turn 2".to_string(),
                 "Bob reviewed: turn 3".to_string(),
+                "Bob reviewed: turn 4".to_string(),
             ],
         );
         let alice_clone = agent_alice.clone();
