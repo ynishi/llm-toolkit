@@ -2116,7 +2116,7 @@ impl Dialogue {
         let mut pending = JoinSet::new();
 
         // Only spawn tasks for mentioned participants (or all if no mentions)
-        for (idx, participant) in self.participants.iter().enumerate() {
+        for (idx, participant) in self.participants.iter_mut().enumerate() {
             let name = participant.name();
 
             // Skip if this participant was not mentioned
@@ -2129,6 +2129,10 @@ impl Dialogue {
                 );
                 continue;
             }
+
+            // Check if this is the participant's first message
+            let is_initial_join = !participant.has_sent_once;
+            let joining_strategy = participant.joining_strategy;
 
             let agent = Arc::clone(&participant.agent);
             let name = name.to_string();
@@ -2168,6 +2172,63 @@ impl Dialogue {
 
             // Add Participants metadata
             input_payload = input_payload.with_participants(participants_info.clone());
+
+            // Handle initial join if this participant hasn't sent a message yet
+            if is_initial_join {
+                if let Some(strategy) = joining_strategy {
+                    // Apply joining strategy: filter history messages
+                    let all_messages: Vec<&DialogueMessage> = self.message_store.all_messages();
+                    let message_refs: Vec<&DialogueMessage> =
+                        all_messages.iter().copied().collect();
+                    let filtered_history =
+                        strategy.filter_messages(&message_refs, current_turn + 1);
+
+                    // Collect message IDs before filtering (for marking as sent)
+                    let all_past_message_ids: Vec<_> = all_messages
+                        .iter()
+                        .filter(|msg| msg.turn <= current_turn)
+                        .map(|msg| msg.id)
+                        .collect();
+
+                    // Convert filtered history to PayloadMessage
+                    let history_messages: Vec<PayloadMessage> = filtered_history
+                        .into_iter()
+                        .map(|msg| PayloadMessage::from(msg.clone()))
+                        .collect();
+
+                    let filtered_count = history_messages.len();
+
+                    // Mark ALL past messages as sent to this participant
+                    // (not just the ones shown by the strategy)
+                    self.message_store.mark_all_as_sent(&all_past_message_ids);
+
+                    // Prepend filtered history to the payload
+                    if !history_messages.is_empty() {
+                        // Prepend history to existing messages
+                        let mut all_messages_for_payload = history_messages;
+                        all_messages_for_payload.extend(input_payload.to_messages());
+                        input_payload = Payload::from_messages(all_messages_for_payload);
+
+                        // Re-apply context and participants
+                        if let Some(ref context) = self.context {
+                            input_payload = input_payload.with_context(context.to_prompt());
+                        }
+                        input_payload = input_payload.with_participants(participants_info.clone());
+                    }
+
+                    trace!(
+                        target = "llm_toolkit::dialogue",
+                        participant = name,
+                        strategy = ?strategy,
+                        filtered_count = filtered_count,
+                        marked_sent_count = all_past_message_ids.len(),
+                        "Applied joining strategy for initial join (mentioned mode)"
+                    );
+                }
+
+                // Mark participant as having sent once
+                participant.has_sent_once = true;
+            }
 
             trace!(
                 target = "llm_toolkit::dialogue",
@@ -7467,6 +7528,124 @@ mod tests {
             alice_turn7_messages[0].content,
             "Alice turn 6",
             "Bob should see Alice's Turn 6 response in Turn 7"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_join_in_progress_mentioned_mode_with_fresh_strategy() {
+        use crate::agent::dialogue::joining_strategy::JoiningStrategy;
+        use crate::agent::persona::Persona;
+
+        // Create initial participants
+        let alice = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let bob = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Creative".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_alice = MockAgent::new("Alice", vec!["Alice turn 1".to_string(), "Alice turn 2".to_string(), "Alice turn 3".to_string()]);
+        let agent_bob = MockAgent::new("Bob", vec!["Bob turn 1".to_string(), "Bob turn 2".to_string()]);
+        let alice_clone = agent_alice.clone();
+
+        let mut dialogue = Dialogue::mentioned();
+        dialogue.add_participant(alice, agent_alice);
+        dialogue.add_participant(bob, agent_bob);
+
+        // Turn 1: Mention Alice
+        let _turn1 = dialogue.run("@Alice what's the plan?").await.unwrap();
+
+        // Turn 2: Mention Bob
+        let _turn2 = dialogue.run("@Bob your thoughts?").await.unwrap();
+
+        // Verify Alice was called only once (Turn 1)
+        assert_eq!(alice_clone.get_call_count(), 1, "Alice should be called once (only Turn 1)");
+
+        // Now add Carol mid-dialogue with Fresh strategy
+        let carol = Persona {
+            name: "Carol".to_string(),
+            role: "Security Consultant".to_string(),
+            background: "Security expert".to_string(),
+            communication_style: "Analytical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_carol = MockAgent::new("Carol", vec!["Carol's fresh analysis".to_string(), "Carol turn 4".to_string()]);
+        let carol_clone = agent_carol.clone();
+
+        dialogue.join_in_progress(carol, agent_carol, JoiningStrategy::Fresh);
+
+        // Turn 3: Mention Carol (first time she participates)
+        let turn3 = dialogue.run("@Carol security review please").await.unwrap();
+
+        assert!(turn3.iter().any(|t| t.speaker.name() == "Carol"));
+
+        // Verify Carol was called once
+        assert_eq!(carol_clone.get_call_count(), 1, "Carol should be called once");
+
+        // Verify Carol received NO historical messages (Fresh strategy)
+        let carol_payloads = carol_clone.get_payloads();
+        assert_eq!(carol_payloads.len(), 1, "Carol should receive 1 payload");
+
+        let carol_first_payload = &carol_payloads[0];
+        let messages = carol_first_payload.to_messages();
+
+        // Carol should NOT see Alice or Bob's previous responses
+        let historical_agent_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| {
+                msg.speaker.name() == "Alice" || msg.speaker.name() == "Bob"
+            })
+            .collect();
+
+        assert_eq!(
+            historical_agent_messages.len(),
+            0,
+            "Fresh strategy in mentioned mode: Carol should not see historical messages"
+        );
+
+        // Turn 4: Mention both Carol and Alice
+        let turn4 = dialogue.run("@Carol and @Alice continue discussion").await.unwrap();
+
+        // Carol should be called twice now
+        assert_eq!(carol_clone.get_call_count(), 2, "Carol should be called twice");
+        // Alice should be called twice now (Turn 1 and Turn 4)
+        assert_eq!(alice_clone.get_call_count(), 2, "Alice should be called twice");
+
+        let carol_second_payload = &carol_clone.get_payloads()[1];
+        let turn4_messages = carol_second_payload.to_messages();
+
+        // Carol should now see Alice's Turn 4 response (new message)
+        let alice_turn4_messages: Vec<_> = turn4_messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Alice")
+            .collect();
+
+        assert!(
+            !alice_turn4_messages.is_empty(),
+            "In Turn 4, Carol should see Alice's Turn 4 response (new message)"
+        );
+
+        // Verify Carol does NOT see Alice's Turn 1 response (historical)
+        let has_alice_turn1 = turn4_messages
+            .iter()
+            .any(|msg| msg.speaker.name() == "Alice" && msg.content.contains("turn 1"));
+
+        assert!(
+            !has_alice_turn1,
+            "Carol should NOT see Alice's Turn 1 response in Turn 4 (marked as sent)"
         );
     }
 }
