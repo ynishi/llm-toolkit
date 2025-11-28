@@ -407,7 +407,7 @@ impl Dialogue {
         };
 
         // Build participants from personas
-        dialogue.participants = Self::create_participants(personas, dialogue_agent);
+        dialogue.participants = Self::create_participants(personas, dialogue_agent, None);
 
         Ok(dialogue)
     }
@@ -451,7 +451,7 @@ impl Dialogue {
         let mut dialogue = Self::new(execution_model);
 
         // Build participants from personas
-        dialogue.participants = Self::create_participants(team.personas, llm_agent);
+        dialogue.participants = Self::create_participants(team.personas, llm_agent, None);
 
         Ok(dialogue)
     }

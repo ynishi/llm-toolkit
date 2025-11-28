@@ -1,4 +1,5 @@
 use super::Agent;
+use crate::agent::dialogue::joining_strategy::JoiningStrategy;
 use crate::agent::history::HistoryAwareAgent;
 use crate::agent::persona::{Persona, PersonaAgent};
 
@@ -46,6 +47,7 @@ pub struct Chat<A: Agent> {
     with_history: bool,
     /// Identity information for history attribution (if persona is set)
     identity: Option<(String, String)>, // (name, role)
+    joining_strategy: Option<JoiningStrategy>,
 }
 
 impl<A: Agent> Chat<A> {
@@ -67,6 +69,7 @@ impl<A: Agent> Chat<A> {
             agent,
             with_history: true,
             identity: None,
+            joining_strategy: None,
         }
     }
 
@@ -101,6 +104,7 @@ impl<A: Agent> Chat<A> {
             agent: PersonaAgent::new(self.agent, persona),
             with_history: self.with_history,
             identity,
+            joining_strategy: self.joining_strategy,
         }
     }
 
@@ -122,6 +126,52 @@ impl<A: Agent> Chat<A> {
     /// ```
     pub fn with_history(mut self, enabled: bool) -> Self {
         self.with_history = enabled;
+        self
+    }
+
+    /// Sets a custom joining strategy for this chat agent.
+    ///
+    /// This method configures how much conversation history the agent receives
+    /// when responding. It's primarily used for mid-dialogue participation scenarios
+    /// through [`Dialogue::join_in_progress`], but can also be set directly for
+    /// standalone chat agents with specific history requirements.
+    ///
+    /// # Arguments
+    ///
+    /// * `joining_strategy` - Optional strategy for filtering conversation history.
+    ///   `None` means default behavior (all history if history is enabled).
+    ///
+    /// # Use Cases
+    ///
+    /// - **Mid-dialogue join**: Participant joining ongoing conversation needs
+    ///   controlled history context
+    /// - **Memory optimization**: Limit history for agents with token constraints
+    /// - **Fresh perspective**: Remove historical bias for specific analysis tasks
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Create an agent that only sees recent 10 turns
+    /// let chat = Chat::new(agent)
+    ///     .with_history(true)
+    ///     .with_joining_strategy(Some(JoiningStrategy::recent_with_turns(10)))
+    ///     .build();
+    ///
+    /// // Create an agent with no history (fresh perspective)
+    /// let chat = Chat::new(agent)
+    ///     .with_history(true)
+    ///     .with_joining_strategy(Some(JoiningStrategy::fresh()))
+    ///     .build();
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// This setting only takes effect when `with_history(true)` is set.
+    /// If history is disabled, this strategy is ignored.
+    ///
+    /// [`Dialogue::join_in_progress`]: crate::agent::dialogue::Dialogue::join_in_progress
+    pub fn with_joining_strategy(mut self, joining_strategy: Option<JoiningStrategy>) -> Self {
+        self.joining_strategy = joining_strategy;
         self
     }
 

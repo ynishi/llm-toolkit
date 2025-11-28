@@ -90,6 +90,7 @@
 
 pub mod constructor;
 pub mod context;
+pub mod joining_strategy;
 pub mod message;
 pub mod session;
 pub mod state;
@@ -98,6 +99,7 @@ pub mod turn_input;
 
 use crate::ToPrompt;
 use crate::agent::chat::Chat;
+use crate::agent::dialogue::joining_strategy::JoiningStrategy;
 use crate::agent::persona::Persona;
 use crate::agent::{Agent, AgentError, Payload, PayloadMessage};
 use async_trait::async_trait;
@@ -616,13 +618,18 @@ impl Dialogue {
     ///
     /// This is a private helper that encapsulates the standard participant
     /// creation pattern used throughout the module.
-    fn create_participant<T>(persona: Persona, llm_agent: T) -> Participant
+    fn create_participant<T>(
+        persona: Persona,
+        llm_agent: T,
+        joining_strategy: Option<JoiningStrategy>,
+    ) -> Participant
     where
         T: Agent<Output = String> + 'static,
     {
         let chat_agent = Chat::new(llm_agent)
             .with_persona(persona.clone())
             .with_history(true)
+            .with_joining_strategy(joining_strategy)
             .build();
 
         Participant {
@@ -635,13 +642,17 @@ impl Dialogue {
     ///
     /// This helper converts a Vec<Persona> into Vec<Participant> by
     /// creating a Chat agent for each persona with the provided base agent.
-    fn create_participants<T>(personas: Vec<Persona>, llm_agent: T) -> Vec<Participant>
+    fn create_participants<T>(
+        personas: Vec<Persona>,
+        llm_agent: T,
+        joining_strategy: Option<JoiningStrategy>,
+    ) -> Vec<Participant>
     where
         T: Agent<Output = String> + Clone + 'static,
     {
         personas
             .into_iter()
-            .map(|persona| Self::create_participant(persona, llm_agent.clone()))
+            .map(|persona| Self::create_participant(persona, llm_agent.clone(), joining_strategy))
             .collect()
     }
 
@@ -728,7 +739,85 @@ impl Dialogue {
         T: Agent<Output = String> + 'static,
     {
         self.participants
-            .push(Self::create_participant(persona, llm_agent));
+            .push(Self::create_participant(persona, llm_agent, None));
+
+        self
+    }
+
+    /// Adds a participant to an ongoing dialogue with custom joining strategy.
+    ///
+    /// This method is designed for mid-dialogue participation scenarios where
+    /// a new agent joins an already-running conversation. Unlike [`add_participant`],
+    /// which assumes initial setup before dialogue starts, this method requires
+    /// explicit specification of how much conversation history the new participant
+    /// should receive.
+    ///
+    /// # Use Cases
+    ///
+    /// - **Expert Consultation**: Bring in a specialist mid-conversation with fresh
+    ///   perspective ([`JoiningStrategy::Fresh`])
+    /// - **New Team Member**: Onboard someone who needs full context to contribute
+    ///   meaningfully ([`JoiningStrategy::Full`])
+    /// - **Focused Review**: Add a reviewer who only needs recent context
+    ///   ([`JoiningStrategy::Recent`])
+    ///
+    /// # Arguments
+    ///
+    /// * `persona` - The identity and role of the joining participant
+    /// * `llm_agent` - The underlying LLM agent implementation
+    /// * `joining_strategy` - How much conversation history to provide
+    ///
+    /// # Returns
+    ///
+    /// Mutable reference to self for method chaining
+    ///
+    /// # Design Rationale
+    ///
+    /// This is a separate method from [`add_participant`] because:
+    /// - Initial participants assume empty history (dialogue hasn't started)
+    /// - Mid-dialogue joiners require explicit history handling decisions
+    /// - Type system enforces that joining mid-dialogue requires a strategy
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Add expert with no historical bias
+    /// dialogue.join_in_progress(
+    ///     security_expert,
+    ///     llm_agent.clone(),
+    ///     JoiningStrategy::Fresh
+    /// );
+    ///
+    /// // Add new team member with full context
+    /// dialogue.join_in_progress(
+    ///     new_developer,
+    ///     llm_agent.clone(),
+    ///     JoiningStrategy::Full
+    /// );
+    ///
+    /// // Add reviewer needing only recent messages
+    /// dialogue.join_in_progress(
+    ///     code_reviewer,
+    ///     llm_agent.clone(),
+    ///     JoiningStrategy::recent_with_turns(10)
+    /// );
+    /// ```
+    ///
+    /// [`add_participant`]: Self::add_participant
+    pub fn join_in_progress<T>(
+        &mut self,
+        persona: Persona,
+        llm_agent: T,
+        joining_strategy: JoiningStrategy,
+    ) -> &mut Self
+    where
+        T: Agent<Output = String> + 'static,
+    {
+        self.participants.push(Self::create_participant(
+            persona,
+            llm_agent,
+            Some(joining_strategy),
+        ));
 
         self
     }
