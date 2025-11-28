@@ -449,12 +449,15 @@ impl AgentError {
     /// ```
     pub fn with_metadata(self, metadata: ErrorMetadata) -> Self {
         match self {
-            AgentError::ExecutionFailed(msg) => {
-                AgentError::ExecutionFailedRich { message: msg, metadata }
-            }
-            AgentError::ParseError { message, reason } => {
-                AgentError::ParseErrorRich { message, reason, metadata }
-            }
+            AgentError::ExecutionFailed(msg) => AgentError::ExecutionFailedRich {
+                message: msg,
+                metadata,
+            },
+            AgentError::ParseError { message, reason } => AgentError::ParseErrorRich {
+                message,
+                reason,
+                metadata,
+            },
             AgentError::ProcessError {
                 status_code,
                 message,
@@ -471,9 +474,13 @@ impl AgentError {
             AgentError::ExecutionFailedRich { message, .. } => {
                 AgentError::ExecutionFailedRich { message, metadata }
             }
-            AgentError::ParseErrorRich { message, reason, .. } => {
-                AgentError::ParseErrorRich { message, reason, metadata }
-            }
+            AgentError::ParseErrorRich {
+                message, reason, ..
+            } => AgentError::ParseErrorRich {
+                message,
+                reason,
+                metadata,
+            },
             AgentError::ProcessErrorRich {
                 status_code,
                 message,

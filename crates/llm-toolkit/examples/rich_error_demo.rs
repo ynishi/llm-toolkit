@@ -106,7 +106,10 @@ fn main() {
 
     println!("   {}", process_err);
     println!("   Is retryable: {}", process_err.is_retryable());
-    println!("   Retry delay (attempt 1): {:?}", process_err.retry_delay(1));
+    println!(
+        "   Retry delay (attempt 1): {:?}",
+        process_err.retry_delay(1)
+    );
     process_err.trace_error();
     println!();
 
