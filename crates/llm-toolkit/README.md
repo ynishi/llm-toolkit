@@ -1407,6 +1407,72 @@ let turn = dialogue.run("@Ayaka what do you think?").await?;
 // Matches "Ayaka Nakamura" by prefix "Ayaka"
 ```
 
+###### Mid-Dialogue Participation with JoiningStrategy
+
+Add participants to an ongoing dialogue with controlled history visibility using `join_in_progress()`:
+
+```rust
+use llm_toolkit::agent::dialogue::{Dialogue, JoiningStrategy};
+use llm_toolkit::agent::persona::Persona;
+
+let mut dialogue = Dialogue::broadcast();
+dialogue.add_participant(alice_persona, alice_agent);
+dialogue.add_participant(bob_persona, bob_agent);
+
+// Turn 1-2: Initial conversation
+dialogue.run("What's the plan?").await?;
+dialogue.run("Let's proceed").await?;
+
+// Add expert consultant mid-conversation with NO historical bias
+let consultant_persona = Persona {
+    name: "Carol".to_string(),
+    role: "Security Expert".to_string(),
+    background: "Security specialist".to_string(),
+    communication_style: "Analytical".to_string(),
+    visual_identity: None,
+    capabilities: None,
+};
+
+dialogue.join_in_progress(
+    consultant_persona,
+    consultant_agent,
+    JoiningStrategy::Fresh  // No history - fresh perspective
+);
+
+// Turn 3: Carol participates without historical context
+let turn3 = dialogue.run("Carol, security review please").await?;
+```
+
+**Available JoiningStrategy Options:**
+
+```rust
+// 1. Fresh: No history (ideal for unbiased expert consultation)
+JoiningStrategy::Fresh
+
+// 2. Full: Complete history (ideal for new team members needing context)
+JoiningStrategy::Full
+
+// 3. Recent: Only recent N turns (ideal for focused review)
+JoiningStrategy::recent_with_turns(5)  // Last 5 turns only
+
+// 4. Range: Custom turn range (advanced scenarios)
+JoiningStrategy::range(10, Some(20))  // Turns 10-20
+```
+
+**Use Cases:**
+
+- **Fresh**: External consultants, code reviewers, unbiased analysis
+- **Full**: New team members, context-dependent tasks, comprehensive review
+- **Recent**: Focused review, memory-constrained scenarios, quick catchup
+- **Range**: Testing, debugging, specific conversation segment analysis
+
+**Supported in All Modes:**
+- ✅ Broadcast: All participants respond in parallel
+- ✅ Mentioned: Only @mentioned participants respond
+- ✅ Sequential: Participants execute in chain order
+- ✅ Moderator: Delegates to above modes
+- ✅ Streaming API (`partial_session()`): All modes supported
+
 ###### Adding Pre-Configured Agents with Custom Settings
 
 When you need to configure PersonaAgent settings (like ContextConfig) before adding to a Dialogue, use `add_agent()`:
