@@ -3,6 +3,99 @@
 use std::time::Duration;
 use thiserror::Error;
 
+/// Rich contextual information for error debugging and observability.
+///
+/// This struct captures additional metadata about where and when an error occurred,
+/// enabling better debugging, tracing, and error analysis. It integrates seamlessly
+/// with the tracing infrastructure for observability.
+#[derive(Debug, Clone)]
+pub struct ErrorMetadata {
+    /// Agent that encountered the error (if applicable)
+    pub agent_name: Option<String>,
+
+    /// Agent expertise/role
+    pub agent_expertise: Option<String>,
+
+    /// Operation or phase where error occurred
+    pub operation: Option<String>,
+
+    /// Timestamp when error occurred
+    pub timestamp: Option<std::time::SystemTime>,
+
+    /// Span/trace ID for correlation with tracing logs
+    pub span_id: Option<String>,
+
+    /// Additional structured context (e.g., input size, model params)
+    pub context: Option<serde_json::Value>,
+
+    /// Chain of causation (for nested errors) - stored as string for simplicity
+    /// Use `caused_by_description` to store the Display representation of the cause
+    pub caused_by_description: Option<String>,
+}
+
+impl ErrorMetadata {
+    /// Creates a new ErrorMetadata with timestamp initialized to now.
+    pub fn new() -> Self {
+        Self {
+            agent_name: None,
+            agent_expertise: None,
+            operation: None,
+            timestamp: Some(std::time::SystemTime::now()),
+            span_id: None,
+            context: None,
+            caused_by_description: None,
+        }
+    }
+
+    /// Sets the agent name.
+    pub fn with_agent(mut self, name: impl Into<String>) -> Self {
+        self.agent_name = Some(name.into());
+        self
+    }
+
+    /// Sets the agent expertise/role.
+    pub fn with_expertise(mut self, expertise: impl Into<String>) -> Self {
+        self.agent_expertise = Some(expertise.into());
+        self
+    }
+
+    /// Sets the operation where the error occurred.
+    pub fn with_operation(mut self, operation: impl Into<String>) -> Self {
+        self.operation = Some(operation.into());
+        self
+    }
+
+    /// Sets the span/trace ID for correlation.
+    pub fn with_span_id(mut self, span_id: impl Into<String>) -> Self {
+        self.span_id = Some(span_id.into());
+        self
+    }
+
+    /// Adds a key-value pair to the structured context.
+    pub fn with_context(mut self, key: &str, value: serde_json::Value) -> Self {
+        let mut ctx = self.context.unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = ctx.as_object_mut() {
+            obj.insert(key.to_string(), value);
+        }
+        self.context = Some(ctx);
+        self
+    }
+
+    /// Sets the cause of this error (for error chaining).
+    ///
+    /// The error is converted to its string representation for storage.
+    pub fn with_cause(mut self, cause: &AgentError) -> Self {
+        self.caused_by_description = Some(format!("{}", cause));
+        self
+    }
+}
+
+impl Default for ErrorMetadata {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Reason for parse errors, used to determine retry strategy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseErrorReason {
@@ -65,6 +158,46 @@ pub enum AgentError {
     /// A generic error for other cases.
     #[error("Agent error: {0}")]
     Other(String),
+
+    // ========== Rich Variants (with ErrorMetadata) ==========
+    /// Rich execution error with full contextual metadata.
+    ///
+    /// This variant provides enhanced debugging and observability by including
+    /// agent information, timestamps, operation context, and error chaining.
+    #[error("Agent execution failed: {message} [agent: {}, operation: {}]",
+        metadata.agent_name.as_deref().unwrap_or("unknown"),
+        metadata.operation.as_deref().unwrap_or("unknown")
+    )]
+    ExecutionFailedRich {
+        message: String,
+        metadata: ErrorMetadata,
+    },
+
+    /// Rich parse error with full contextual metadata.
+    #[error("Failed to parse agent output: {message} (reason: {reason:?}) [agent: {}, operation: {}]",
+        metadata.agent_name.as_deref().unwrap_or("unknown"),
+        metadata.operation.as_deref().unwrap_or("unknown")
+    )]
+    ParseErrorRich {
+        message: String,
+        reason: ParseErrorReason,
+        metadata: ErrorMetadata,
+    },
+
+    /// Rich process error with full contextual metadata.
+    #[error("Process error: {message}{}{} [agent: {}, operation: {}]",
+        status_code.map(|c| format!(" (status: {})", c)).unwrap_or_default(),
+        retry_after.map(|d| format!(" (retry after: {}s)", d.as_secs())).unwrap_or_default(),
+        metadata.agent_name.as_deref().unwrap_or("unknown"),
+        metadata.operation.as_deref().unwrap_or("unknown")
+    )]
+    ProcessErrorRich {
+        status_code: Option<u16>,
+        message: String,
+        is_retryable: bool,
+        retry_after: Option<Duration>,
+        metadata: ErrorMetadata,
+    },
 }
 
 impl AgentError {
@@ -159,6 +292,17 @@ impl AgentError {
             ),
             // I/O errors are generally transient
             AgentError::IoError(_) => true,
+            // Rich variants: same logic as simple variants
+            AgentError::ProcessErrorRich {
+                is_retryable,
+                status_code,
+                ..
+            } => *is_retryable || matches!(status_code, Some(429) | Some(503) | Some(500)),
+            AgentError::ParseErrorRich { reason, .. } => matches!(
+                reason,
+                ParseErrorReason::UnexpectedEof | ParseErrorReason::MarkdownExtractionFailed
+            ),
+            AgentError::ExecutionFailedRich { .. } => false,
             // All other errors should not be retried
             _ => false,
         }
@@ -224,10 +368,21 @@ impl AgentError {
                 retry_after: Some(duration),
                 ..
             } => *duration,
+            AgentError::ProcessErrorRich {
+                retry_after: Some(duration),
+                ..
+            } => *duration,
 
             // Priority 2: Rate limiting (429) fallback - exponential backoff capped at 60s
             // LLM APIs typically require 60s+ waits for rate limiting
             AgentError::ProcessError {
+                status_code: Some(429),
+                ..
+            } => {
+                let exponential_delay = 2_u64.pow(attempt.saturating_sub(1));
+                Duration::from_secs(exponential_delay.min(60))
+            }
+            AgentError::ProcessErrorRich {
                 status_code: Some(429),
                 ..
             } => {
@@ -244,6 +399,174 @@ impl AgentError {
         use rand::Rng;
         let jitter_ms = rand::thread_rng().gen_range(0..=base_delay.as_millis() as u64);
         Duration::from_millis(jitter_ms)
+    }
+
+    /// Creates a rich execution error with a builder for adding metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::AgentError;
+    ///
+    /// let error = AgentError::execution_failed_rich("Task failed")
+    ///     .agent("MyAgent")
+    ///     .expertise("General-purpose AI")
+    ///     .operation("execute")
+    ///     .build();
+    /// ```
+    pub fn execution_failed_rich(message: impl Into<String>) -> RichErrorBuilder {
+        RichErrorBuilder::new(message.into())
+    }
+
+    /// Extracts metadata from this error, if it's a Rich variant.
+    ///
+    /// Returns `Some(&ErrorMetadata)` for Rich variants, `None` for simple variants.
+    pub fn metadata(&self) -> Option<&ErrorMetadata> {
+        match self {
+            AgentError::ExecutionFailedRich { metadata, .. } => Some(metadata),
+            AgentError::ParseErrorRich { metadata, .. } => Some(metadata),
+            AgentError::ProcessErrorRich { metadata, .. } => Some(metadata),
+            _ => None,
+        }
+    }
+
+    /// Converts a simple error variant to a Rich variant with metadata.
+    ///
+    /// For simple variants, this creates the corresponding Rich variant.
+    /// For Rich variants, this replaces the existing metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::{AgentError, ErrorMetadata};
+    ///
+    /// let simple_err = AgentError::ExecutionFailed("failed".to_string());
+    /// let rich_err = simple_err.with_metadata(
+    ///     ErrorMetadata::new()
+    ///         .with_agent("MyAgent")
+    ///         .with_operation("execute")
+    /// );
+    /// ```
+    pub fn with_metadata(self, metadata: ErrorMetadata) -> Self {
+        match self {
+            AgentError::ExecutionFailed(msg) => {
+                AgentError::ExecutionFailedRich { message: msg, metadata }
+            }
+            AgentError::ParseError { message, reason } => {
+                AgentError::ParseErrorRich { message, reason, metadata }
+            }
+            AgentError::ProcessError {
+                status_code,
+                message,
+                is_retryable,
+                retry_after,
+            } => AgentError::ProcessErrorRich {
+                status_code,
+                message,
+                is_retryable,
+                retry_after,
+                metadata,
+            },
+            // Already rich - replace metadata
+            AgentError::ExecutionFailedRich { message, .. } => {
+                AgentError::ExecutionFailedRich { message, metadata }
+            }
+            AgentError::ParseErrorRich { message, reason, .. } => {
+                AgentError::ParseErrorRich { message, reason, metadata }
+            }
+            AgentError::ProcessErrorRich {
+                status_code,
+                message,
+                is_retryable,
+                retry_after,
+                ..
+            } => AgentError::ProcessErrorRich {
+                status_code,
+                message,
+                is_retryable,
+                retry_after,
+                metadata,
+            },
+            // Other variants remain unchanged
+            other => other,
+        }
+    }
+}
+
+/// Builder for creating rich errors with metadata.
+///
+/// This provides an ergonomic API for building errors with contextual information.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use llm_toolkit::agent::AgentError;
+/// use serde_json::json;
+///
+/// let error = AgentError::execution_failed_rich("Model timeout")
+///     .agent("GeminiAgent")
+///     .expertise("Fast inference agent")
+///     .operation("execute")
+///     .context("model", json!("gemini-2.5-flash"))
+///     .context("timeout_ms", json!(30000))
+///     .build();
+/// ```
+pub struct RichErrorBuilder {
+    message: String,
+    metadata: ErrorMetadata,
+}
+
+impl RichErrorBuilder {
+    /// Creates a new builder with the given error message.
+    pub fn new(message: String) -> Self {
+        Self {
+            message,
+            metadata: ErrorMetadata::new(),
+        }
+    }
+
+    /// Sets the agent name.
+    pub fn agent(mut self, name: impl Into<String>) -> Self {
+        self.metadata = self.metadata.with_agent(name);
+        self
+    }
+
+    /// Sets the agent expertise/role.
+    pub fn expertise(mut self, expertise: impl Into<String>) -> Self {
+        self.metadata = self.metadata.with_expertise(expertise);
+        self
+    }
+
+    /// Sets the operation where the error occurred.
+    pub fn operation(mut self, op: impl Into<String>) -> Self {
+        self.metadata = self.metadata.with_operation(op);
+        self
+    }
+
+    /// Adds a key-value pair to the structured context.
+    pub fn context(mut self, key: &str, value: serde_json::Value) -> Self {
+        self.metadata = self.metadata.with_context(key, value);
+        self
+    }
+
+    /// Sets the span/trace ID for correlation.
+    pub fn span_id(mut self, span_id: impl Into<String>) -> Self {
+        self.metadata = self.metadata.with_span_id(span_id);
+        self
+    }
+
+    /// Sets the cause of this error (for error chaining).
+    pub fn caused_by(mut self, cause: &AgentError) -> Self {
+        self.metadata = self.metadata.with_cause(cause);
+        self
+    }
+
+    /// Builds the final rich error.
+    pub fn build(self) -> AgentError {
+        AgentError::ExecutionFailedRich {
+            message: self.message,
+            metadata: self.metadata,
+        }
     }
 }
 
@@ -526,5 +849,172 @@ mod tests {
         if let AgentError::ProcessError { retry_after, .. } = err {
             assert_eq!(retry_after, Some(Duration::from_secs(90)));
         }
+    }
+
+    // ========== Rich Error Tests ==========
+
+    #[test]
+    fn test_error_metadata_builder() {
+        let metadata = ErrorMetadata::new()
+            .with_agent("TestAgent")
+            .with_expertise("Test expertise")
+            .with_operation("test_op")
+            .with_span_id("span-123")
+            .with_context("key1", serde_json::json!("value1"))
+            .with_context("key2", serde_json::json!(42));
+
+        assert_eq!(metadata.agent_name, Some("TestAgent".to_string()));
+        assert_eq!(metadata.agent_expertise, Some("Test expertise".to_string()));
+        assert_eq!(metadata.operation, Some("test_op".to_string()));
+        assert_eq!(metadata.span_id, Some("span-123".to_string()));
+        assert!(metadata.context.is_some());
+        assert!(metadata.timestamp.is_some());
+    }
+
+    #[test]
+    fn test_rich_error_builder() {
+        let err = AgentError::execution_failed_rich("Test failure")
+            .agent("MyAgent")
+            .expertise("General AI")
+            .operation("execute")
+            .context("model", serde_json::json!("claude-sonnet-4.5"))
+            .build();
+
+        match err {
+            AgentError::ExecutionFailedRich { message, metadata } => {
+                assert_eq!(message, "Test failure");
+                assert_eq!(metadata.agent_name, Some("MyAgent".to_string()));
+                assert_eq!(metadata.agent_expertise, Some("General AI".to_string()));
+                assert_eq!(metadata.operation, Some("execute".to_string()));
+            }
+            _ => panic!("Expected ExecutionFailedRich variant"),
+        }
+    }
+
+    #[test]
+    fn test_with_metadata_conversion() {
+        let simple_err = AgentError::ExecutionFailed("simple error".to_string());
+        let metadata = ErrorMetadata::new()
+            .with_agent("ConvertedAgent")
+            .with_operation("conversion_test");
+
+        let rich_err = simple_err.with_metadata(metadata);
+
+        match rich_err {
+            AgentError::ExecutionFailedRich { message, metadata } => {
+                assert_eq!(message, "simple error");
+                assert_eq!(metadata.agent_name, Some("ConvertedAgent".to_string()));
+                assert_eq!(metadata.operation, Some("conversion_test".to_string()));
+            }
+            _ => panic!("Expected ExecutionFailedRich variant"),
+        }
+    }
+
+    #[test]
+    fn test_metadata_getter() {
+        let rich_err = AgentError::execution_failed_rich("test")
+            .agent("Agent1")
+            .build();
+
+        assert!(rich_err.metadata().is_some());
+        assert_eq!(
+            rich_err.metadata().unwrap().agent_name,
+            Some("Agent1".to_string())
+        );
+
+        let simple_err = AgentError::ExecutionFailed("test".to_string());
+        assert!(simple_err.metadata().is_none());
+    }
+
+    #[test]
+    fn test_rich_error_is_retryable() {
+        // ExecutionFailedRich should not be retryable
+        let err = AgentError::execution_failed_rich("test")
+            .agent("Agent1")
+            .build();
+        assert!(!err.is_retryable());
+
+        // ParseErrorRich with UnexpectedEof should be retryable
+        let err = AgentError::ParseErrorRich {
+            message: "EOF".to_string(),
+            reason: ParseErrorReason::UnexpectedEof,
+            metadata: ErrorMetadata::new(),
+        };
+        assert!(err.is_retryable());
+
+        // ProcessErrorRich with 429 should be retryable
+        let err = AgentError::ProcessErrorRich {
+            status_code: Some(429),
+            message: "Rate limited".to_string(),
+            is_retryable: false, // Even if false, 429 should be retryable
+            retry_after: None,
+            metadata: ErrorMetadata::new(),
+        };
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn test_rich_error_retry_delay() {
+        // ProcessErrorRich with retry_after
+        let err = AgentError::ProcessErrorRich {
+            status_code: Some(429),
+            message: "Rate limited".to_string(),
+            is_retryable: true,
+            retry_after: Some(Duration::from_secs(90)),
+            metadata: ErrorMetadata::new(),
+        };
+
+        let delay = err.retry_delay(1);
+        assert!(delay.as_secs() <= 90, "Delay should be <= 90 seconds");
+
+        // ProcessErrorRich with 429 but no retry_after (exponential backoff)
+        let err = AgentError::ProcessErrorRich {
+            status_code: Some(429),
+            message: "Rate limited".to_string(),
+            is_retryable: true,
+            retry_after: None,
+            metadata: ErrorMetadata::new(),
+        };
+
+        let delay1 = err.retry_delay(1);
+        assert!(delay1.as_secs() <= 2, "Attempt 1: delay <= 2s");
+
+        let delay6 = err.retry_delay(6);
+        assert!(delay6.as_secs() <= 60, "Attempt 6: delay <= 60s (capped)");
+    }
+
+    #[test]
+    fn test_error_chaining() {
+        let inner_err = AgentError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "file not found",
+        ));
+
+        let outer_err = AgentError::execution_failed_rich("Failed to load config")
+            .agent("ConfigLoader")
+            .caused_by(&inner_err)
+            .build();
+
+        match outer_err {
+            AgentError::ExecutionFailedRich { metadata, .. } => {
+                assert!(metadata.caused_by_description.is_some());
+                let cause_desc = metadata.caused_by_description.unwrap();
+                assert!(cause_desc.contains("I/O error"));
+            }
+            _ => panic!("Expected ExecutionFailedRich"),
+        }
+    }
+
+    #[test]
+    fn test_rich_error_display() {
+        let err = AgentError::execution_failed_rich("Something went wrong")
+            .agent("DisplayTestAgent")
+            .operation("test_display")
+            .build();
+
+        let display_string = format!("{}", err);
+        assert!(display_string.contains("Something went wrong"));
+        assert!(display_string.contains("DisplayTestAgent"));
+        assert!(display_string.contains("test_display"));
     }
 }
