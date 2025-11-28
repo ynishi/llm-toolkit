@@ -7862,4 +7862,147 @@ mod tests {
             "In Turn 4, Carol should see Bob's Turn 4 output (new chain input)"
         );
     }
+
+    #[tokio::test]
+    async fn test_join_in_progress_partial_session_sequential_with_fresh_strategy() {
+        use crate::agent::dialogue::joining_strategy::JoiningStrategy;
+        use crate::agent::persona::Persona;
+
+        // Create initial participants
+        let alice = Persona {
+            name: "Alice".to_string(),
+            role: "Analyzer".to_string(),
+            background: "Data analyst".to_string(),
+            communication_style: "Analytical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let bob = Persona {
+            name: "Bob".to_string(),
+            role: "Reviewer".to_string(),
+            background: "Code reviewer".to_string(),
+            communication_style: "Critical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_alice = MockAgent::new("Alice", vec![
+            "Alice analyzed: turn 1".to_string(),
+            "Alice analyzed: turn 2".to_string(),
+            "Alice analyzed: turn 3".to_string(),
+        ]);
+        let agent_bob = MockAgent::new("Bob", vec![
+            "Bob reviewed: turn 1".to_string(),
+            "Bob reviewed: turn 2".to_string(),
+            "Bob reviewed: turn 3".to_string(),
+        ]);
+        let alice_clone = agent_alice.clone();
+
+        let mut dialogue = Dialogue::sequential();
+        dialogue.add_participant(alice, agent_alice);
+        dialogue.add_participant(bob, agent_bob);
+
+        // Turn 1: Use partial_session (streaming API)
+        let mut session1 = dialogue.partial_session("Analyze this");
+        while let Some(turn) = session1.next_turn().await {
+            turn.unwrap();
+        }
+
+        // Turn 2: Continue with partial_session
+        let mut session2 = dialogue.partial_session("Continue analysis");
+        while let Some(turn) = session2.next_turn().await {
+            turn.unwrap();
+        }
+
+        assert_eq!(alice_clone.get_call_count(), 2, "Alice called twice via partial_session");
+
+        // Add Carol with Fresh strategy
+        let carol = Persona {
+            name: "Carol".to_string(),
+            role: "Summarizer".to_string(),
+            background: "Summary specialist".to_string(),
+            communication_style: "Concise".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_carol = MockAgent::new("Carol", vec!["Carol summarized".to_string(), "Carol summary 2".to_string()]);
+        let carol_clone = agent_carol.clone();
+
+        dialogue.join_in_progress(carol, agent_carol, JoiningStrategy::Fresh);
+
+        // Turn 3: Use partial_session with Carol
+        let mut session3 = dialogue.partial_session("Final summary");
+        let mut turn_count = 0;
+        while let Some(turn) = session3.next_turn().await {
+            turn.unwrap();
+            turn_count += 1;
+        }
+
+        // Sequential mode executes all participants (Alice → Bob → Carol)
+        assert_eq!(turn_count, 3, "Should have 3 turns in sequential partial_session");
+        assert_eq!(carol_clone.get_call_count(), 1, "Carol called once");
+
+        // Verify Carol received NO historical messages (Fresh strategy)
+        let carol_payloads = carol_clone.get_payloads();
+        assert_eq!(carol_payloads.len(), 1, "Carol should receive 1 payload");
+
+        let carol_first_payload = &carol_payloads[0];
+        let messages = carol_first_payload.to_messages();
+
+        // Carol should NOT see Turn 1 or Turn 2 historical messages
+        let historical_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| {
+                let content = msg.content.as_str();
+                (msg.speaker.name() == "Alice" || msg.speaker.name() == "Bob")
+                    && (content.contains("turn 1") || content.contains("turn 2"))
+            })
+            .collect();
+
+        assert_eq!(
+            historical_messages.len(),
+            0,
+            "Fresh strategy in partial_session sequential: Carol should not see Turn 1 or Turn 2"
+        );
+
+        // Carol SHOULD see Bob's Turn 3 output (immediate predecessor in chain)
+        let bob_turn3: Vec<_> = messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 3"))
+            .collect();
+
+        assert_eq!(
+            bob_turn3.len(),
+            1,
+            "Carol should see Bob's Turn 3 output via partial_session"
+        );
+
+        // Turn 4: Verify differential updates via partial_session
+        let mut session4 = dialogue.partial_session("Continue");
+        while let Some(turn) = session4.next_turn().await {
+            turn.unwrap();
+        }
+
+        assert_eq!(carol_clone.get_call_count(), 2, "Carol called twice");
+
+        let carol_second_payload = &carol_clone.get_payloads()[1];
+        let turn4_messages = carol_second_payload.to_messages();
+
+        // Carol should NOT see Turn 1, 2 historical messages
+        let historical_turn4: Vec<_> = turn4_messages
+            .iter()
+            .filter(|msg| {
+                msg.speaker.name() == "Bob"
+                    && (msg.content.contains("turn 1") || msg.content.contains("turn 2"))
+            })
+            .collect();
+
+        assert_eq!(
+            historical_turn4.len(),
+            0,
+            "In Turn 4 via partial_session, Carol should NOT see Turn 1 or Turn 2 (marked as sent)"
+        );
+    }
 }
