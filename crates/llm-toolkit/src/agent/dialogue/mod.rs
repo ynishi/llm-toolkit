@@ -2315,108 +2315,80 @@ impl Dialogue {
 
         let mut pending = JoinSet::new();
 
-        // Collect joining strategy message IDs to mark as sent later
-        let mut all_joining_message_ids = Vec::new();
-
         // Only spawn tasks for mentioned participants (or all if no mentions)
-        for (idx, participant) in self.participants.iter_mut().enumerate() {
-            let name = participant.name();
+        for (idx, participant) in self.participants.iter().enumerate() {
+            let participant_name = participant.name().to_string();
 
             // Skip if this participant was not mentioned
-            if !target_participants.contains(&name) {
+            if !target_participants.contains(&participant_name.as_str()) {
                 trace!(
                     target = "llm_toolkit::dialogue",
-                    participant = name,
+                    participant = %participant_name,
                     reason = "not_mentioned",
                     "Skipping participant"
                 );
                 continue;
             }
 
-            // Check if this is the participant's first message
-            let is_initial_join = !participant.has_sent_once;
-            let joining_strategy = participant.joining_strategy;
-
             let agent = Arc::clone(&participant.agent);
-            let name = name.to_string();
 
-            // Combine: [unsent agent messages (excluding self)] + [incoming messages]
-            // For initial join with joining_strategy, skip unsent_messages_from_agent (they will be handled by joining_strategy)
-            let mut current_messages = if is_initial_join && joining_strategy.is_some() {
-                Vec::new()
-            } else {
-                unsent_messages_from_agent
-                    .iter()
-                    .filter(|msg| msg.speaker.name() != name)
-                    .cloned()
-                    .collect::<Vec<_>>()
-            };
+            // Entry point: Check if pending participant
+            let input_payload =
+                if let Some(pending_info) = self.pending_participants.get(&participant_name) {
+                    // Pending participant: use JoiningStrategy, skip unsent_messages
+                    let base_payload = Payload::from_messages(unsent_messages_incoming.clone());
 
-            current_messages.extend(unsent_messages_incoming.clone());
-            let messages_with_metadata = current_messages.clone();
+                    let payload = self.build_pending_participant_payload(
+                        pending_info,
+                        &base_payload,
+                        &participants_info,
+                        current_turn,
+                    );
 
-            // current_messages now contains everything needed for this agent's turn:
-            // 1. Unsent agent messages (excluding self)
-            // 2. Incoming messages from MessageStore
-            let turn_input = TurnInput::with_messages_and_context(
-                current_messages.clone(),
-                vec![], // context is now integrated into current_messages
-                participants_info.clone(),
-                name.clone(),
-            );
+                    // Remove from pending immediately after payload construction
+                    self.pending_participants.remove(&participant_name);
 
-            // Create payload with Messages (for structured dialogue history)
-            let messages = turn_input.to_messages();
-            let mut input_payload = Payload::from_messages(messages);
+                    payload
+                } else {
+                    // Regular participant: use unsent_messages_from_agent
+                    let mut current_messages: Vec<PayloadMessage> = unsent_messages_from_agent
+                        .iter()
+                        .filter(|msg| msg.speaker.name() != participant_name)
+                        .cloned()
+                        .collect();
 
-            // Attach context if exists
-            if let Some(ref context) = self.context {
-                input_payload = input_payload.with_context(context.to_prompt());
-            }
+                    current_messages.extend(unsent_messages_incoming.clone());
+                    let messages_with_metadata = current_messages.clone();
 
-            // Apply metadata attachments
-            input_payload =
-                Self::apply_metadata_attachments(input_payload, &messages_with_metadata);
+                    let turn_input = TurnInput::with_messages_and_context(
+                        current_messages.clone(),
+                        vec![],
+                        participants_info.clone(),
+                        participant_name.clone(),
+                    );
 
-            // Add Participants metadata
-            input_payload = input_payload.with_participants(participants_info.clone());
+                    let messages = turn_input.to_messages();
+                    let mut payload = Payload::from_messages(messages);
 
-            // Handle initial join if this participant hasn't sent a message yet
-            if is_initial_join {
-                let (updated_payload, message_ids) = Self::apply_joining_strategy(
-                    &self.message_store,
-                    self.context.as_ref(),
-                    joining_strategy,
-                    current_turn,
-                    input_payload,
-                    &participants_info,
-                    &name,
-                );
-                input_payload = updated_payload;
-                all_joining_message_ids.extend(message_ids);
+                    if let Some(ref context) = self.context {
+                        payload = payload.with_context(context.to_prompt());
+                    }
 
-                // Mark participant as having sent once
-                participant.has_sent_once = true;
-            }
+                    payload = Self::apply_metadata_attachments(payload, &messages_with_metadata);
+                    payload.with_participants(participants_info.clone())
+                };
 
             trace!(
                 target = "llm_toolkit::dialogue",
                 turn = current_turn,
-                participant = %name,
-                message_count = current_messages.len(),
+                participant = %participant_name,
                 "Spawning task for mentioned participant"
             );
 
             pending.spawn(async move {
                 let result = agent.execute(input_payload).await;
-                (idx, name, result)
+                (idx, participant_name, result)
             });
-        }
-
-        // Mark joining strategy messages as sent (if any)
-        if !all_joining_message_ids.is_empty() {
-            self.message_store
-                .mark_all_as_sent(&all_joining_message_ids);
         }
 
         // Mark all unsent messages as sent to agents (including both agent and incoming messages)
@@ -7856,18 +7828,21 @@ mod tests {
         let carol_second_payload = &carol_clone.get_payloads()[1];
         let turn4_messages = carol_second_payload.to_messages();
 
-        // Carol should now see Alice's Turn 4 response (new message)
-        let alice_turn4_messages: Vec<_> = turn4_messages
+        // In Turn 4, Carol and Alice execute in parallel
+        // Carol should NOT see Alice's Turn 4 response (they execute concurrently)
+        // Carol should only see Turn 4 incoming message
+        let alice_messages: Vec<_> = turn4_messages
             .iter()
             .filter(|msg| msg.speaker.name() == "Alice")
             .collect();
 
-        assert!(
-            !alice_turn4_messages.is_empty(),
-            "In Turn 4, Carol should see Alice's Turn 4 response (new message)"
+        assert_eq!(
+            alice_messages.len(),
+            0,
+            "In Turn 4, Carol should NOT see Alice's Turn 4 response (parallel execution)"
         );
 
-        // Verify Carol does NOT see Alice's Turn 1 response (historical)
+        // Verify Carol does NOT see Alice's Turn 1 response (historical, marked as sent)
         let has_alice_turn1 = turn4_messages
             .iter()
             .any(|msg| msg.speaker.name() == "Alice" && msg.content.contains("turn 1"));
