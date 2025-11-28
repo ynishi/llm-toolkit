@@ -281,7 +281,7 @@ pub enum ExecutionProfile {
 }
 
 pub use capability::Capability;
-pub use error::AgentError;
+pub use error::{AgentError, ErrorMetadata, ParseErrorReason, RichErrorBuilder};
 #[cfg(feature = "agent")]
 pub use expertise_agent::ExpertiseAgent;
 pub use payload::{Payload, PayloadContent};

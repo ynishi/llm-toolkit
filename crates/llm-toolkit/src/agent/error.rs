@@ -491,6 +491,152 @@ impl AgentError {
             other => other,
         }
     }
+
+    /// Logs this error with tracing, including all available metadata.
+    ///
+    /// This method provides structured logging that integrates with the observability
+    /// system. Rich variants log detailed metadata including agent name, operation,
+    /// span ID, and context. Simple variants log basic error information.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::AgentError;
+    ///
+    /// let err = AgentError::execution_failed_rich("Model timeout")
+    ///     .agent("GeminiAgent")
+    ///     .operation("execute")
+    ///     .build();
+    ///
+    /// err.trace_error(); // Logs structured error with all metadata
+    /// ```
+    pub fn trace_error(&self) {
+        match self {
+            // Rich variants with full metadata
+            AgentError::ExecutionFailedRich { message, metadata } => {
+                tracing::error!(
+                    target: "llm_toolkit::agent::error",
+                    error_type = "ExecutionFailedRich",
+                    error_message = %message,
+                    agent_name = ?metadata.agent_name,
+                    agent_expertise = ?metadata.agent_expertise,
+                    operation = ?metadata.operation,
+                    span_id = ?metadata.span_id,
+                    caused_by = ?metadata.caused_by_description,
+                    context = ?metadata.context,
+                    "Agent execution failed with context"
+                );
+            }
+            AgentError::ParseErrorRich {
+                message,
+                reason,
+                metadata,
+            } => {
+                tracing::error!(
+                    target: "llm_toolkit::agent::error",
+                    error_type = "ParseErrorRich",
+                    error_message = %message,
+                    error_reason = ?reason,
+                    agent_name = ?metadata.agent_name,
+                    agent_expertise = ?metadata.agent_expertise,
+                    operation = ?metadata.operation,
+                    span_id = ?metadata.span_id,
+                    caused_by = ?metadata.caused_by_description,
+                    context = ?metadata.context,
+                    "Parse error with context"
+                );
+            }
+            AgentError::ProcessErrorRich {
+                status_code,
+                message,
+                is_retryable,
+                retry_after,
+                metadata,
+            } => {
+                tracing::error!(
+                    target: "llm_toolkit::agent::error",
+                    error_type = "ProcessErrorRich",
+                    error_message = %message,
+                    error_status_code = ?status_code,
+                    error_is_retryable = %is_retryable,
+                    error_retry_after = ?retry_after,
+                    agent_name = ?metadata.agent_name,
+                    agent_expertise = ?metadata.agent_expertise,
+                    operation = ?metadata.operation,
+                    span_id = ?metadata.span_id,
+                    caused_by = ?metadata.caused_by_description,
+                    context = ?metadata.context,
+                    "Process error with context"
+                );
+            }
+            // Simple variants - basic logging
+            AgentError::ExecutionFailed(msg) => {
+                tracing::error!(
+                    target: "llm_toolkit::agent::error",
+                    error_type = "ExecutionFailed",
+                    error_message = %msg,
+                    "Agent execution failed (no metadata)"
+                );
+            }
+            AgentError::ParseError { message, reason } => {
+                tracing::error!(
+                    target: "llm_toolkit::agent::error",
+                    error_type = "ParseError",
+                    error_message = %message,
+                    error_reason = ?reason,
+                    "Parse error (no metadata)"
+                );
+            }
+            AgentError::ProcessError {
+                status_code,
+                message,
+                is_retryable,
+                retry_after,
+            } => {
+                tracing::error!(
+                    target: "llm_toolkit::agent::error",
+                    error_type = "ProcessError",
+                    error_message = %message,
+                    error_status_code = ?status_code,
+                    error_is_retryable = %is_retryable,
+                    error_retry_after = ?retry_after,
+                    "Process error (no metadata)"
+                );
+            }
+            AgentError::IoError(err) => {
+                tracing::error!(
+                    target: "llm_toolkit::agent::error",
+                    error_type = "IoError",
+                    error_message = %err,
+                    "I/O error"
+                );
+            }
+            AgentError::JsonError(err) => {
+                tracing::error!(
+                    target: "llm_toolkit::agent::error",
+                    error_type = "JsonError",
+                    error_message = %err,
+                    "JSON serialization/deserialization error"
+                );
+            }
+            AgentError::SerializationFailed(msg) => {
+                tracing::error!(
+                    target: "llm_toolkit::agent::error",
+                    error_type = "SerializationFailed",
+                    error_message = %msg,
+                    "Serialization failed"
+                );
+            }
+            AgentError::Other(msg) => {
+                tracing::error!(
+                    target: "llm_toolkit::agent::error",
+                    error_type = "Other",
+                    error_message = %msg,
+                    "Generic agent error"
+                );
+            }
+        }
+    }
 }
 
 /// Builder for creating rich errors with metadata.
@@ -1016,5 +1162,34 @@ mod tests {
         assert!(display_string.contains("Something went wrong"));
         assert!(display_string.contains("DisplayTestAgent"));
         assert!(display_string.contains("test_display"));
+    }
+
+    #[test]
+    fn test_trace_error_does_not_panic() {
+        // Test that trace_error() doesn't panic for various error types
+        // Note: We can't easily test the actual tracing output without a subscriber,
+        // but we can ensure the method doesn't panic
+
+        let rich_err = AgentError::execution_failed_rich("test")
+            .agent("TestAgent")
+            .build();
+        rich_err.trace_error(); // Should not panic
+
+        let simple_err = AgentError::ExecutionFailed("test".to_string());
+        simple_err.trace_error(); // Should not panic
+
+        let parse_err = AgentError::ParseError {
+            message: "test".to_string(),
+            reason: ParseErrorReason::InvalidJson,
+        };
+        parse_err.trace_error(); // Should not panic
+
+        let process_err = AgentError::ProcessError {
+            status_code: Some(500),
+            message: "test".to_string(),
+            is_retryable: true,
+            retry_after: None,
+        };
+        process_err.trace_error(); // Should not panic
     }
 }
