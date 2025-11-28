@@ -145,6 +145,72 @@ impl Dialogue {
         Self::new(ExecutionModel::Mentioned { strategy })
     }
 
+    /// Creates a dialogue with ordered sequential execution.
+    ///
+    /// Participants execute one by one in the specified order, with output chained as input.
+    /// Any participants not listed will execute afterward in their original order.
+    ///
+    /// # Arguments
+    ///
+    /// * `order` - Vector of persona names specifying execution order
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::Dialogue;
+    ///
+    /// // UX Designer → Engineer → Product Manager order
+    /// let mut dialogue = Dialogue::ordered_sequential(vec![
+    ///     "Jordan".to_string(),  // UX Designer responds first
+    ///     "Alex".to_string(),    // Engineer builds on UX feedback
+    ///     "Sam".to_string(),     // Product Manager finalizes
+    /// ])
+    /// .add_participant(jordan_persona, designer_agent)
+    /// .add_participant(alex_persona, engineer_agent)
+    /// .add_participant(sam_persona, pm_agent);
+    ///
+    /// let turns = dialogue.run("Design the user onboarding flow").await?;
+    /// // Jordan speaks first, then Alex sees Jordan's output, then Sam sees both
+    /// ```
+    pub fn ordered_sequential(order: Vec<String>) -> Self {
+        Self::new(ExecutionModel::OrderedSequential(
+            SequentialOrder::Explicit(order),
+        ))
+    }
+
+    /// Creates a dialogue with ordered broadcast execution.
+    ///
+    /// All participants respond in parallel to the same input, but results are yielded
+    /// in the specified participant order rather than completion order.
+    ///
+    /// # Arguments
+    ///
+    /// * `order` - Vector of persona names specifying the result order
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use llm_toolkit::agent::dialogue::Dialogue;
+    ///
+    /// // Responses in UX → Engineering → Business order
+    /// let mut dialogue = Dialogue::ordered_broadcast(vec![
+    ///     "Jordan".to_string(),  // UX perspective first
+    ///     "Alex".to_string(),    // Technical perspective second
+    ///     "Sam".to_string(),     // Business perspective last
+    /// ])
+    /// .add_participant(jordan_persona, designer_agent)
+    /// .add_participant(alex_persona, engineer_agent)
+    /// .add_participant(sam_persona, pm_agent);
+    ///
+    /// let turns = dialogue.run("Evaluate this feature proposal").await?;
+    /// // All three respond in parallel, but results are ordered: Jordan, Alex, Sam
+    /// ```
+    pub fn ordered_broadcast(order: Vec<String>) -> Self {
+        Self::new(ExecutionModel::OrderedBroadcast(
+            BroadcastOrder::Explicit(order),
+        ))
+    }
+
     /// Sets initial conversation history for session resumption.
     ///
     /// This method allows you to inject a saved conversation history into a new
@@ -579,5 +645,80 @@ impl Dialogue {
             .with_additional_context(ctx);
         self.context = Some(context);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::dialogue::{BroadcastOrder, ExecutionModel, SequentialOrder};
+
+    #[test]
+    fn test_ordered_sequential_builder() {
+        let order = vec!["Jordan".to_string(), "Alex".to_string(), "Sam".to_string()];
+        let dialogue = Dialogue::ordered_sequential(order.clone());
+
+        match dialogue.execution_model {
+            ExecutionModel::OrderedSequential(SequentialOrder::Explicit(ref exec_order)) => {
+                assert_eq!(exec_order, &order, "Sequential order should match input");
+            }
+            _ => panic!("Expected OrderedSequential execution model"),
+        }
+    }
+
+    #[test]
+    fn test_ordered_broadcast_builder() {
+        let order = vec!["Jordan".to_string(), "Alex".to_string(), "Sam".to_string()];
+        let dialogue = Dialogue::ordered_broadcast(order.clone());
+
+        match dialogue.execution_model {
+            ExecutionModel::OrderedBroadcast(BroadcastOrder::Explicit(ref explicit_order)) => {
+                assert_eq!(
+                    explicit_order, &order,
+                    "Explicit order should match provided order"
+                );
+            }
+            _ => panic!("Expected OrderedBroadcast with Explicit"),
+        }
+    }
+
+    #[test]
+    fn test_existing_builders_unchanged() {
+        // Verify existing builders still work correctly
+
+        let sequential = Dialogue::sequential();
+        match sequential.execution_model {
+            ExecutionModel::OrderedSequential(SequentialOrder::AsAdded) => {}
+            _ => panic!("sequential() should create OrderedSequential(AsAdded)"),
+        }
+
+        let broadcast = Dialogue::broadcast();
+        match broadcast.execution_model {
+            ExecutionModel::OrderedBroadcast(BroadcastOrder::Completion) => {}
+            _ => panic!("broadcast() should create OrderedBroadcast(Completion)"),
+        }
+
+        let mentioned = Dialogue::mentioned();
+        match mentioned.execution_model {
+            ExecutionModel::Mentioned { .. } => {}
+            _ => panic!("mentioned() should create Mentioned execution model"),
+        }
+
+        let moderator = Dialogue::moderator();
+        match moderator.execution_model {
+            ExecutionModel::Moderator => {}
+            _ => panic!("moderator() should create Moderator execution model"),
+        }
+    }
+
+    #[test]
+    fn test_empty_order_lists() {
+        let dialogue = Dialogue::ordered_sequential(vec![]);
+        match dialogue.execution_model {
+            ExecutionModel::OrderedSequential(SequentialOrder::Explicit(ref order)) => {
+                assert!(order.is_empty(), "Empty order should be preserved");
+            }
+            _ => panic!("Expected OrderedSequential execution model"),
+        }
     }
 }

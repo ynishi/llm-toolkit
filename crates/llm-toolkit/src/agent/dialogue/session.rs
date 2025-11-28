@@ -41,7 +41,7 @@ impl<'a> DialogueSession<'a> {
                     match state.pending.join_next().await {
                         Some(Ok((idx, name, result))) => {
                             let participant_name = name;
-                            match state.order {
+                            match &state.order {
                                 BroadcastOrder::Completion => {
                                     match &result {
                                         Ok(content) => {
@@ -102,6 +102,53 @@ impl<'a> DialogueSession<'a> {
                                                 target = "llm_toolkit::dialogue",
                                                 mode = ?self.model,
                                                 participant = %participant_name,
+                                                participant_index = idx,
+                                                total_participants = participant_total,
+                                                error = %err,
+                                                event = "dialogue_turn_failed"
+                                            );
+                                        }
+                                    }
+                                    state.record_result(idx, participant_name, result);
+                                    continue;
+                                }
+                                BroadcastOrder::Explicit(_) => {
+                                    // For Explicit order, process results based on the specified order
+                                    // For now, implement similar to Completion order
+                                    match &result {
+                                        Ok(content) => {
+                                            // Store in MessageStore
+                                            let participant = &self.dialogue.participants[idx];
+                                            let metadata = MessageMetadata::new()
+                                                .with_origin(MessageOrigin::AgentGenerated);
+                                            let message = DialogueMessage::new(
+                                                current_turn,
+                                                Speaker::agent(
+                                                    participant_name.clone(),
+                                                    participant.persona.role.clone(),
+                                                ),
+                                                content.clone(),
+                                            )
+                                            .with_metadata(&metadata);
+                                            self.dialogue.message_store.push(message);
+
+                                            info!(
+                                                target = "llm_toolkit::dialogue",
+                                                mode = ?self.model,
+                                                turn = current_turn,
+                                                speaker = %participant_name,
+                                                role = %participant.persona.role,
+                                                participant_index = idx,
+                                                total_participants = participant_total,
+                                                event = "dialogue_turn_completed"
+                                            );
+                                        }
+                                        Err(err) => {
+                                            error!(
+                                                target = "llm_toolkit::dialogue",
+                                                mode = ?self.model,
+                                                turn = current_turn,
+                                                speaker = %participant_name,
                                                 participant_index = idx,
                                                 total_participants = participant_total,
                                                 error = %err,

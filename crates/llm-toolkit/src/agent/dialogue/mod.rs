@@ -533,13 +533,15 @@ impl Participant {
 }
 
 /// Controls the order in which broadcast responses are yielded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BroadcastOrder {
     /// Yields turns as soon as each participant finishes (default).
     Completion,
     /// Buffers responses and yields them in the original participant order.
     ParticipantOrder,
+    /// Buffers responses and yields them in a custom specified order by participant name.
+    Explicit(Vec<String>),
 }
 
 /// Controls the execution order for sequential dialogues.
@@ -1677,7 +1679,7 @@ impl Dialogue {
 
                 SessionState::Broadcast(BroadcastState::new(
                     pending,
-                    *order,
+                    order.clone(),
                     self.participants.len(),
                     current_turn,
                 ))

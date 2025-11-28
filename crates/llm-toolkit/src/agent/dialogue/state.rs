@@ -32,6 +32,9 @@ impl BroadcastState {
             BroadcastOrder::ParticipantOrder => std::iter::repeat_with(|| None)
                 .take(participant_count)
                 .collect::<Vec<Option<Result<String, AgentError>>>>(),
+            BroadcastOrder::Explicit(_) => std::iter::repeat_with(|| None)
+                .take(participant_count)
+                .collect::<Vec<Option<Result<String, AgentError>>>>(),
         };
 
         Self {
@@ -77,6 +80,22 @@ impl BroadcastState {
                         is_error = result.is_err(),
                         turn = self.current_turn,
                         "Recording result to buffered (ParticipantOrder mode)"
+                    );
+                    self.buffered[idx] = Some(result);
+                }
+            }
+            BroadcastOrder::Explicit(_) => {
+                // For Explicit order mode, use participant order approach for now
+                if idx < self.buffered.len() {
+                    let content_len = result.as_ref().map(|s| s.len()).unwrap_or(0);
+                    trace!(
+                        target = "llm_toolkit::dialogue",
+                        participant = %participant_name,
+                        participant_index = idx,
+                        content_length = content_len,
+                        is_error = result.is_err(),
+                        turn = self.current_turn,
+                        "Recording result to buffered (Explicit order mode)"
                     );
                     self.buffered[idx] = Some(result);
                 }
@@ -174,6 +193,67 @@ impl BroadcastState {
                         info!(
                             target = "llm_toolkit::dialogue",
                             mode = "broadcast_participant_order",
+                            participant = %participant_name,
+                            participant_index = idx,
+                            total_participants = participant_total,
+                            event = "dialogue_turn_emitted"
+                        );
+                        Some(Ok(turn))
+                    }
+                    Err(err) => Some(Err(err)),
+                }
+            }
+            BroadcastOrder::Explicit(_) => {
+                // For Explicit order mode, use participant order approach for now
+                let participant_total = dialogue.participants.len();
+
+                if self.next_emit >= participant_total {
+                    return None;
+                }
+
+                let idx = self.next_emit;
+                let slot_ready = self
+                    .buffered
+                    .get(idx)
+                    .and_then(|slot| slot.as_ref())
+                    .is_some();
+
+                if !slot_ready {
+                    return None;
+                }
+
+                let result = self.buffered[idx].take().expect("checked is_some");
+                self.next_emit += 1;
+
+                match result {
+                    Ok(content) => {
+                        let participant = &dialogue.participants[idx];
+                        let participant_name = participant.name().to_string();
+
+                        // Store in MessageStore
+                        let metadata =
+                            MessageMetadata::new().with_origin(MessageOrigin::AgentGenerated);
+                        let message = DialogueMessage::new(
+                            self.current_turn,
+                            Speaker::agent(
+                                participant_name.clone(),
+                                participant.persona.role.clone(),
+                            ),
+                            content.clone(),
+                        )
+                        .with_metadata(&metadata);
+                        dialogue.message_store.push(message);
+
+                        let turn = DialogueTurn {
+                            speaker: Speaker::agent(
+                                participant_name.clone(),
+                                participant.persona.role.clone(),
+                            ),
+                            content: content.clone(),
+                        };
+                        info!(
+                            target = "llm_toolkit::dialogue",
+                            mode = "broadcast_explicit_order",
                             participant = %participant_name,
                             participant_index = idx,
                             total_participants = participant_total,

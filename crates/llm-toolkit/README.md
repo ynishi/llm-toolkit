@@ -1256,9 +1256,11 @@ For use cases that require simulating conversations *between* multiple AI agents
 **Core Concepts:**
 
 -   **`Dialogue`**: The main orchestrator for the conversation.
--   **Execution Strategy**: Determines how agents interact. Three strategies are provided:
+-   **Execution Strategy**: Determines how agents interact. Five strategies are provided:
     -   **`Sequential`**: A pipeline where agents execute in a chain (`A -> B -> C`), with the output of one becoming the input for the next. Ideal for data processing workflows.
     -   **`Broadcast`**: A 1-to-N pattern where all agents respond to the same prompt. Ideal for brainstorming or getting multiple perspectives.
+    -   **`Ordered Sequential`**: Similar to Sequential, but allows you to specify the exact execution order by participant names (e.g., `Designer -> PM -> Engineer`). Any participants not in the order list execute afterward in their original order.
+    -   **`Ordered Broadcast`**: Similar to Broadcast, but responses are yielded in a custom-specified order rather than completion order. All agents still execute in parallel, but results are buffered and returned in your desired sequence.
     -   **`Mentioned`**: Only `@mentioned` participants respond (e.g., `@Alice @Bob what do you think?`). Falls back to Broadcast if no mentions are found. Perfect for selective participation in group conversations. Supports multiple **mention matching strategies**:
         - **`ExactWord`** (default): Matches `@word` patterns without spaces (e.g., `@Alice`, `@Bob123`, `@太郎`)
         - **`Name`**: Matches full names including spaces (e.g., `@Ayaka Nakamura` matches participant "Ayaka Nakamura"). Requires explicit delimiter (space, comma, period, etc.) after the name.
@@ -1315,6 +1317,14 @@ dialogue.with_sequential_order(SequentialOrder::Explicit(vec![
     // any other participants (e.g., reviewers) run afterward in their original order
 ]));
 
+// Or create an ordered sequential dialogue from the start:
+let mut ordered_dialogue = Dialogue::ordered_sequential(vec![
+    "Designer".to_string(),
+    "PM".to_string(),
+    "Engineer".to_string(),
+]);
+// Participants execute in: Designer -> PM -> Engineer order
+
 // --- Pattern 2: Broadcast ---
 let critic = Chat::new(MockLLMAgent { agent_type: "Critic".to_string() })
     .with_persona(CRITIC_PERSONA).with_history(false).build();
@@ -1325,6 +1335,14 @@ let mut dialogue = Dialogue::broadcast();
 dialogue.add_participant(critic).add_participant(translator_b);
 let responses = dialogue.run("The new API design is complete.").await?;
 // responses: Ok(vec!["[Critic] processed: 'The new API design is complete.'", "[Translator] processed: 'The new API design is complete.'"])
+
+// Want responses in a specific order? Use ordered_broadcast:
+let mut ordered_broadcast = Dialogue::ordered_broadcast(vec![
+    "Jordan".to_string(),  // UX Designer's perspective first
+    "Alex".to_string(),    // Engineer's technical view second
+    "Sam".to_string(),     // PM's business view last
+]);
+// All agents run in parallel, but results are yielded in: Jordan, Alex, Sam order
 
 // --- Pattern 3: Mentioned (Selective Participation) ---
 # const ALICE_PERSONA: Persona = Persona { name: "Alice", role: "Backend", background: "...", communication_style: "..." };

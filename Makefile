@@ -56,7 +56,8 @@ EXAMPLES := \
 	agent_with_expertise_full \
 	expertise_basic \
 	expertise_generate_schema \
-	expertise_prompt_generation
+	expertise_prompt_generation \
+	test_ordered_builders
 
 # 外部API依存なしのExample（E2Eテストとして実行可能）
 # Note: check_agent_availability と codex_agent_basic は外部CLIチェック用なので除外
