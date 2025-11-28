@@ -1432,6 +1432,29 @@ impl Dialogue {
             let agent = &participant.agent;
             let agent_name = participant.name().to_string();
 
+            // Handle pending participant: apply JoiningStrategy and mark history as sent
+            if let Some(pending_info) = self.pending_participants.get(&agent_name) {
+                let all_messages = self.message_store.all_messages();
+                let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
+                let filtered_history = pending_info.joining_strategy.filter_messages(
+                    &message_refs,
+                    current_turn,
+                );
+
+                // Mark filtered history as sent
+                let history_message_ids: Vec<MessageId> = filtered_history
+                    .iter()
+                    .map(|msg| msg.id)
+                    .collect();
+
+                if !history_message_ids.is_empty() {
+                    self.message_store.mark_all_as_sent(&history_message_ids);
+                }
+
+                // Remove from pending (before execution)
+                self.pending_participants.remove(&agent_name);
+            }
+
             // Check if this is the participant's first message
             let is_initial_join = !participant.has_sent_once;
             let joining_strategy = participant.joining_strategy;
@@ -1444,8 +1467,8 @@ impl Dialogue {
                 let mut messages = Vec::new();
                 let mut metadata_messages = Vec::new();
 
-                // Add previous turn's agent messages if in multi-turn scenario (skip if initial join with joining_strategy)
-                if current_turn > 1 && !(is_initial_join && joining_strategy.is_some()) {
+                // Add previous turn's agent messages if in multi-turn scenario
+                if current_turn > 1 {
                     let prev_turn_messages: Vec<PayloadMessage> = self
                         .message_store
                         .messages_for_turn(current_turn - 1)
@@ -8036,7 +8059,7 @@ mod tests {
         // Carol should see Bob's Turn 4 output (new message in the chain)
         let bob_turn4: Vec<_> = turn4_messages
             .iter()
-            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 3"))
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 4"))
             .collect();
 
         assert_eq!(

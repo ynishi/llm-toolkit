@@ -5,7 +5,7 @@
 //! and responsive UIs.
 
 use super::super::{Agent, AgentError, Payload, PayloadMessage};
-use super::message::{DialogueMessage, MessageMetadata, MessageOrigin, Speaker};
+use super::message::{DialogueMessage, MessageId, MessageMetadata, MessageOrigin, Speaker};
 use super::state::SessionState;
 use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel, ParticipantInfo};
 use crate::prompt::ToPrompt;
@@ -206,16 +206,48 @@ impl<'a> DialogueSession<'a> {
 
                     // Check if this is initial join before building payload
                     let participant = &self.dialogue.participants[participant_idx];
+                    let participant_name = participant.name().to_string();
+
+                    // Handle pending participant: apply JoiningStrategy and mark history as sent
+                    let was_pending = if let Some(pending_info) = self.dialogue.pending_participants.get(&participant_name) {
+                        let all_messages = self.dialogue.message_store.all_messages();
+                        let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
+                        let filtered_history = pending_info.joining_strategy.filter_messages(
+                            &message_refs,
+                            turn,
+                        );
+
+                        // Mark filtered history as sent
+                        let history_message_ids: Vec<MessageId> = filtered_history
+                            .iter()
+                            .map(|msg| msg.id)
+                            .collect();
+
+                        if !history_message_ids.is_empty() {
+                            self.dialogue.message_store.mark_all_as_sent(&history_message_ids);
+                        }
+
+                        // Remove from pending (before execution)
+                        self.dialogue.pending_participants.remove(&participant_name);
+                        true // Was pending
+                    } else {
+                        false // Regular participant
+                    };
+
                     let is_initial_join = !participant.has_sent_once;
                     let joining_strategy = participant.joining_strategy;
 
+                    // For pending participants, prev_agent_outputs are already handled by JoiningStrategy
+                    // So we skip them here (only use current_turn_outputs for the chain)
+                    let prev_outputs_to_use = if was_pending {
+                        &[] // Pending already handled history via JoiningStrategy
+                    } else {
+                        prev_agent_outputs.as_slice()
+                    };
+
                     let mut response_payload = build_sequential_payload(
                         payload,
-                        if is_initial_join && joining_strategy.is_some() {
-                            &[]
-                        } else {
-                            prev_agent_outputs.as_slice()
-                        },
+                        prev_outputs_to_use,
                         current_turn_outputs.as_slice(), // Always include current turn outputs (sequential chain requirement)
                         participants_info.as_slice(),
                         sequence_position,
