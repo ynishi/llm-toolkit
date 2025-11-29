@@ -2231,9 +2231,18 @@ impl Dialogue {
             "Mention-based execution plan determined"
         );
 
-        // Prepare joining history contexts for all participants before the loop
+        // Collect indices of mentioned participants
+        let mentioned_indices: Vec<usize> = self
+            .participants
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| target_participants.contains(&p.name()))
+            .map(|(idx, _)| idx)
+            .collect();
+
+        // Prepare joining history contexts for mentioned participants only
         let mut joining_history_contexts = vec![];
-        for idx in 0..self.participants.len() {
+        for &idx in &mentioned_indices {
             let participant = &self.participants[idx];
             let speaker = participant.to_speaker();
             let joining_history_context = self.join_pending_participant(speaker, current_turn);
@@ -2242,29 +2251,18 @@ impl Dialogue {
 
         let mut pending = JoinSet::new();
 
-        // Only spawn tasks for mentioned participants (or all if no mentions)
-        for (idx, participant) in self.participants.iter().enumerate() {
+        // Spawn tasks for mentioned participants only
+        for (i, &idx) in mentioned_indices.iter().enumerate() {
+            let participant = &self.participants[idx];
             let participant_name = participant.name().to_string();
-
-            // Skip if this participant was not mentioned
-            if !target_participants.contains(&participant_name.as_str()) {
-                trace!(
-                    target = "llm_toolkit::dialogue",
-                    participant = %participant_name,
-                    reason = "not_mentioned",
-                    "Skipping participant"
-                );
-                continue;
-            }
-
             let agent = Arc::clone(&participant.agent);
 
             // Get joining history for this participant
-            let joining_history_context = joining_history_contexts.get(idx);
+            let joining_history_context = &joining_history_contexts[i];
 
             let mut current_messages: Vec<PayloadMessage> = vec![];
-            if let Some(Some(context)) = joining_history_context {
-                current_messages.extend_from_slice(context);
+            if let Some(context) = joining_history_context {
+                current_messages.extend(context.clone());
             }
 
             current_messages.extend(unsent_messages_incoming.clone());
