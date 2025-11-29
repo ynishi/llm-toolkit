@@ -643,6 +643,25 @@ pub struct Dialogue {
     pub(super) pending_participants: HashMap<String, PendingParticipant>,
 }
 
+/// Prepared context for broadcast-based execution models.
+///
+/// Contains all common data needed to spawn tasks for participants:
+/// - Participant info list
+/// - Joining history contexts for pending participants
+/// - Unsent messages from various sources
+/// - Message IDs to mark as sent after task execution
+///
+/// This context is used by:
+/// - `spawn_broadcast_tasks()`: Uses all participants
+/// - `spawn_mentioned_tasks()`: Filters participants based on mentions
+struct BroadcastContext {
+    participants_info: Vec<ParticipantInfo>,
+    joining_history_contexts: Vec<Option<Vec<PayloadMessage>>>,
+    unsent_incoming: Vec<PayloadMessage>,
+    unsent_from_agent: Vec<PayloadMessage>,
+    message_ids_to_mark: Vec<MessageId>,
+}
+
 impl Dialogue {
     // Constructor is in constructor.rs
 
@@ -1149,6 +1168,78 @@ impl Dialogue {
         } else {
             // Not a pending participant
             None
+        }
+    }
+
+    /// Prepare common context for broadcast-based execution.
+    ///
+    /// This method collects all shared data needed for spawning agent tasks:
+    /// 1. Participant info list (for all participants)
+    /// 2. Joining history contexts (for pending participants using JoiningStrategy)
+    /// 3. Unsent incoming messages (from external sources)
+    /// 4. Unsent agent-generated messages (from other participants)
+    /// 5. Message IDs to mark as sent after task completion
+    ///
+    /// # Usage
+    /// - `spawn_broadcast_tasks()`: Uses all participants from the context
+    /// - `spawn_mentioned_tasks()`: Filters participants based on @mentions, then uses this context
+    ///
+    /// # Arguments
+    /// * `current_turn` - The current turn number
+    ///
+    /// # Returns
+    /// A `BroadcastContext` containing all prepared data
+    fn prepare_broadcast_context(&mut self, current_turn: usize) -> BroadcastContext {
+        // Build participant list
+        let participants_info = self.get_participants_info();
+
+        // Prepare joining history contexts for all participants
+        let mut joining_history_contexts = vec![];
+        for idx in 0..self.participants.len() {
+            let participant = &self.participants[idx];
+            let speaker = participant.to_speaker();
+            let joining_history_context = self.join_pending_participant(speaker, current_turn);
+            joining_history_contexts.push(joining_history_context);
+        }
+
+        // Get unsent agent-generated messages from MessageStore
+        let unsent_from_agent: Vec<PayloadMessage> = self
+            .message_store
+            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
+            .into_iter()
+            .map(PayloadMessage::from)
+            .collect();
+
+        // Collect agent message IDs to mark as sent later
+        let mut message_ids_to_mark: Vec<_> = self
+            .message_store
+            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
+            .iter()
+            .map(|msg| msg.id)
+            .collect();
+
+        // Get unsent incoming messages (from external sources)
+        let unsent_incoming: Vec<PayloadMessage> = self
+            .message_store
+            .unsent_messages_with_origin(MessageOrigin::IncomingPayload)
+            .into_iter()
+            .map(PayloadMessage::from)
+            .collect();
+
+        // Collect incoming message IDs to mark as sent later
+        message_ids_to_mark.extend(
+            self.message_store
+                .unsent_messages_with_origin(MessageOrigin::IncomingPayload)
+                .iter()
+                .map(|msg| msg.id),
+        );
+
+        BroadcastContext {
+            participants_info,
+            joining_history_contexts,
+            unsent_incoming,
+            unsent_from_agent,
+            message_ids_to_mark,
         }
     }
 
@@ -1933,58 +2024,14 @@ impl Dialogue {
         &mut self,
         current_turn: usize,
     ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
-        // Build participant list
-        let participants_info = self.get_participants_info();
-
-        let mut joining_history_contexts = vec![];
-
-        // Before unsent check, join pending and set sent flag.
-        for idx in 0..self.participants.len() {
-            let participant = &self.participants[idx];
-
-            let joining_history_context = {
-                let speaker = participant.to_speaker();
-                self.join_pending_participant(speaker, current_turn)
-            };
-            joining_history_contexts.push(joining_history_context);
-        }
-
-        // Get unsent agent-generated messages from MessageStore (for regular participants)
-        let unsent_messages_from_agent: Vec<PayloadMessage> = self
-            .message_store
-            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
-            .into_iter()
-            .map(PayloadMessage::from)
-            .collect();
-
-        // Collect message IDs to mark as sent after spawning tasks
-        let mut unsent_message_ids: Vec<_> = self
-            .message_store
-            .unsent_messages_with_origin(MessageOrigin::AgentGenerated)
-            .iter()
-            .map(|msg| msg.id)
-            .collect();
-
-        let unsent_messages_incoming: Vec<PayloadMessage> = self
-            .message_store
-            .unsent_messages_with_origin(MessageOrigin::IncomingPayload)
-            .into_iter()
-            .map(PayloadMessage::from)
-            .collect();
-
-        // Collect message IDs to mark as sent after spawning tasks
-        unsent_message_ids.extend(
-            self.message_store
-                .unsent_messages_with_origin(MessageOrigin::IncomingPayload)
-                .iter()
-                .map(|msg| msg.id),
-        );
+        // Prepare broadcast context (participant info, joining histories, unsent messages)
+        let ctx = self.prepare_broadcast_context(current_turn);
 
         let mut pending = JoinSet::new();
 
         for idx in 0..self.participants.len() {
             let participant: &Participant = &self.participants[idx];
-            let joining_history_context = joining_history_contexts.get(idx);
+            let joining_history_context = ctx.joining_history_contexts.get(idx);
             let agent: Arc<crate::AnyAgent<String>> = Arc::clone(&participant.agent);
             let participant_name = participant.name().to_string();
 
@@ -1993,8 +2040,9 @@ impl Dialogue {
                 current_messages.extend_from_slice(context)
             }
 
-            // Regular participant: use unsent_messages_from_agent
-            let unsent_payload_messages: Vec<PayloadMessage> = unsent_messages_from_agent
+            // Regular participant: use unsent_from_agent
+            let unsent_payload_messages: Vec<PayloadMessage> = ctx
+                .unsent_from_agent
                 .iter()
                 .filter(|msg| msg.speaker.name() != participant_name)
                 .cloned()
@@ -2002,14 +2050,14 @@ impl Dialogue {
 
             current_messages.extend(unsent_payload_messages);
 
-            current_messages.extend(unsent_messages_incoming.clone());
+            current_messages.extend(ctx.unsent_incoming.clone());
             let messages_with_metadata = current_messages.clone();
 
             // Create payload with turn input formatting
             let turn_input = TurnInput::with_messages_and_context(
                 current_messages,
                 vec![],
-                participants_info.clone(),
+                ctx.participants_info.clone(),
                 participant_name.clone(),
             );
 
@@ -2022,7 +2070,7 @@ impl Dialogue {
             }
 
             payload = Self::apply_metadata_attachments(payload, &messages_with_metadata);
-            let input_payload = payload.with_participants(participants_info.clone());
+            let input_payload = payload.with_participants(ctx.participants_info.clone());
 
             pending.spawn(async move {
                 let result = agent.execute(input_payload).await;
@@ -2031,12 +2079,13 @@ impl Dialogue {
         }
 
         // Mark unsent messages as sent to agents
-        self.message_store.mark_all_as_sent(&unsent_message_ids);
+        self.message_store
+            .mark_all_as_sent(&ctx.message_ids_to_mark);
 
-        if !unsent_message_ids.is_empty() {
+        if !ctx.message_ids_to_mark.is_empty() {
             trace!(
                 target = "llm_toolkit::dialogue",
-                marked_sent_count = unsent_message_ids.len(),
+                marked_sent_count = ctx.message_ids_to_mark.len(),
                 "Marked messages as sent_to_agents in MessageStore"
             );
         }
