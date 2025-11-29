@@ -1094,6 +1094,64 @@ impl Dialogue {
         self.message_store.latest_turn() + 1
     }
 
+    /// Join a pending participant's join-in-progress activation.
+    ///
+    /// This method handles the complete lifecycle of activating a pending participant:
+    /// 1. Extracts filtered history according to the participant's JoiningStrategy
+    /// 2. Removes the participant from the pending pool (now active)
+    /// 3. Marks all historical messages as sent to this participant
+    ///
+    /// This logic is consistent across all execution modes (Broadcast, Sequential, Mentioned).
+    ///
+    /// # Arguments
+    /// * `participant_name` - Name of the participant to activate
+    /// * `participant` - Reference to the participant structure (for speaker info)
+    /// * `current_turn` - The current turn number
+    ///
+    /// # Returns
+    /// Filtered historical messages according to the participant's JoiningStrategy.
+    /// Returns empty vec if the participant is not pending.
+    fn join_pending_participant(
+        &mut self,
+        speaker: Speaker,
+        current_turn: usize,
+    ) -> Option<Vec<PayloadMessage>> {
+        let name = speaker.name();
+        if let Some(pending_info) = self.pending_participants.get(name) {
+            // Extract filtered history according to JoiningStrategy
+            let filtered_history: Vec<PayloadMessage> = {
+                let all_messages = self.message_store.all_messages();
+                let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
+                let history_refs = pending_info
+                    .joining_strategy
+                    .historical_messages(&message_refs, current_turn);
+                // Convert to PayloadMessage to release the borrow
+                history_refs
+                    .iter()
+                    .map(|&msg| PayloadMessage::from(msg))
+                    .collect()
+            };
+
+            // Remove from pending pool (participant is now active)
+            self.pending_participants.remove(name);
+
+            // Mark all historical messages as sent to this participant
+            self.message_store.mark_as_sent_all_for(speaker.clone());
+
+            trace!(
+                target = "llm_toolkit::dialogue",
+                participant = name,
+                turn = current_turn,
+                history_count = filtered_history.len(),
+                "Activated pending participant with filtered history"
+            );
+            Some(filtered_history)
+        } else {
+            // Not a pending participant
+            None
+        }
+    }
+
     /// Runs the dialogue with the configured execution model.
     ///
     /// The behavior depends on the execution model:
@@ -1337,7 +1395,7 @@ impl Dialogue {
         );
 
         // Spawn broadcast tasks using helper method
-        let mut pending = self.spawn_broadcast_tasks();
+        let mut pending = self.spawn_broadcast_tasks(current_turn);
 
         // Collect responses and create message entities
         let mut dialogue_turns = Vec::new();
@@ -1417,39 +1475,21 @@ impl Dialogue {
 
         for (sequence_idx, participant_idx) in sequence_indices.iter().enumerate() {
             let participant_idx = *participant_idx;
+
+            // Handle pending participant: apply JoiningStrategy and mark history as sent
+            // Extract necessary data in a scope to release the borrow before calling join_pending_participant
+            let joining_history_context = {
+                let speaker = {
+                    let participant = &self.participants[participant_idx];
+                    participant.to_speaker()
+                };
+                self.join_pending_participant(speaker, current_turn)
+            };
+
+            // Get participant reference for the rest of the logic
             let participant = &self.participants[participant_idx];
             let agent = &participant.agent;
             let agent_name = participant.name().to_string();
-
-            // Handle pending participant: apply JoiningStrategy and mark history as sent
-            let (joining_history_context, mark_all_as_sent) =
-                if let Some(pending_info) = self.pending_participants.get(&agent_name) {
-                    let filtered_history: Vec<PayloadMessage> = {
-                        let all_messages = self.message_store.all_messages();
-                        let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
-                        let history_refs = pending_info
-                            .joining_strategy
-                            .historical_messages(&message_refs, current_turn);
-                        // Convert to PayloadMessage to release the borrow
-                        history_refs
-                            .iter()
-                            .map(|&msg| PayloadMessage::from(msg))
-                            .collect()
-                    };
-
-                    // Remove from pending (before execution)
-                    self.pending_participants.remove(&agent_name);
-
-                    (filtered_history, true)
-                } else {
-                    (vec![], false)
-                };
-
-            // Mark all history data as sent for joining participant (after borrowing filtered_history)
-            if mark_all_as_sent {
-                let speaker = participant.to_speaker();
-                self.message_store.mark_as_sent_all_for(speaker);
-            }
 
             // Determine input messages based on position in sequence
             let (current_messages, messages_with_metadata, message_ids_to_mark) = if sequence_idx
@@ -1485,7 +1525,9 @@ impl Dialogue {
                 }
 
                 // Add unsent incoming messages
-                messages.extend(joining_history_context);
+                if let Some(context) = joining_history_context {
+                    messages.extend(context)
+                }
                 messages.extend(unsent_messages_incoming.clone());
                 metadata_messages.extend(unsent_messages_incoming.clone());
 
@@ -1505,7 +1547,7 @@ impl Dialogue {
                     .collect();
 
                 // Combine: previous agents' outputs + unsent incoming messages
-                let mut messages: Vec<PayloadMessage> = joining_history_context;
+                let mut messages: Vec<PayloadMessage> = joining_history_context.unwrap_or_default();
                 messages.extend(prev_agent_messages.clone());
                 messages.extend(unsent_messages_incoming.clone());
 
@@ -1832,7 +1874,7 @@ impl Dialogue {
             }
             ExecutionModel::Broadcast => {
                 // Broadcast with default Completion order
-                let pending = self.spawn_broadcast_tasks();
+                let pending = self.spawn_broadcast_tasks(current_turn);
 
                 SessionState::Broadcast(BroadcastState::new(
                     pending,
@@ -1843,7 +1885,7 @@ impl Dialogue {
             }
             ExecutionModel::OrderedBroadcast(order) => {
                 // Spawn broadcast tasks using helper method
-                let pending = self.spawn_broadcast_tasks();
+                let pending = self.spawn_broadcast_tasks(current_turn);
 
                 SessionState::Broadcast(BroadcastState::new(
                     pending,
@@ -1884,61 +1926,28 @@ impl Dialogue {
         }
     }
 
-    /// Builds payload for a pending participant (waiting to join).
-    ///
-    /// Pending participants do not use unsent_messages_from_agent. Instead,
-    /// they receive history directly from MessageStore based on their JoiningStrategy.
-    ///
-    /// # Arguments
-    /// * `pending` - The pending participant state
-    /// * `base_payload` - The current turn's input payload
-    /// * `participants_info` - Information about all participants
-    /// * `current_turn` - The current turn number
-    ///
-    /// # Returns
-    /// Constructed payload with filtered history prepended
-    fn build_pending_participant_payload(
-        &self,
-        pending: &PendingParticipant,
-        base_payload: &Payload,
-        participants_info: &[ParticipantInfo],
-        current_turn: usize,
-    ) -> Payload {
-        // Build history context using JoiningStrategy
-        let all_messages = self.message_store.all_messages();
-        let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
-        let history_refs = pending
-            .joining_strategy
-            .historical_messages(&message_refs, current_turn);
-        let history_messages: Vec<PayloadMessage> = history_refs
-            .iter()
-            .map(|&msg| PayloadMessage::from(msg))
-            .collect();
-
-        // Build payload: history + base_payload
-        let mut payload = if history_messages.is_empty() {
-            base_payload.clone()
-        } else {
-            Payload::from_messages(history_messages).merge(base_payload.clone())
-        };
-
-        // Apply context if exists
-        if let Some(ref context) = self.context {
-            payload = payload.with_context(context.to_prompt());
-        }
-
-        // Add participants info
-        payload.with_participants(participants_info.to_vec())
-    }
-
     /// Helper method to spawn broadcast tasks for all participants.
     ///
     /// Returns a JoinSet with pending agent executions.
     pub(super) fn spawn_broadcast_tasks(
         &mut self,
+        current_turn: usize,
     ) -> JoinSet<(usize, String, Result<String, AgentError>)> {
         // Build participant list
         let participants_info = self.get_participants_info();
+
+        let mut joining_history_contexts = vec![];
+
+        // Before unsent check, join pending and set sent flag.
+        for idx in 0..self.participants.len() {
+            let participant = &self.participants[idx];
+
+            let joining_history_context = {
+                let speaker = participant.to_speaker();
+                self.join_pending_participant(speaker, current_turn)
+            };
+            joining_history_contexts.push(joining_history_context);
+        }
 
         // Get unsent agent-generated messages from MessageStore (for regular participants)
         let unsent_messages_from_agent: Vec<PayloadMessage> = self
@@ -1972,61 +1981,48 @@ impl Dialogue {
         );
 
         let mut pending = JoinSet::new();
-        let current_turn = self.message_store.latest_turn();
 
-        for (idx, participant) in self.participants.iter().enumerate() {
-            let agent = Arc::clone(&participant.agent);
+        for idx in 0..self.participants.len() {
+            let participant: &Participant = &self.participants[idx];
+            let joining_history_context = joining_history_contexts.get(idx);
+            let agent: Arc<crate::AnyAgent<String>> = Arc::clone(&participant.agent);
             let participant_name = participant.name().to_string();
 
-            // Entry point: Check if pending participant
-            let input_payload =
-                if let Some(pending) = self.pending_participants.get(&participant_name) {
-                    // Pending participant: use JoiningStrategy, skip unsent_messages
-                    // Only include incoming payload (current turn's user input)
-                    let base_payload = Payload::from_messages(unsent_messages_incoming.clone());
+            let mut current_messages: Vec<PayloadMessage> = vec![];
+            if let Some(Some(context)) = joining_history_context {
+                current_messages.extend_from_slice(context)
+            }
 
-                    let payload = self.build_pending_participant_payload(
-                        pending,
-                        &base_payload,
-                        &participants_info,
-                        current_turn,
-                    );
+            // Regular participant: use unsent_messages_from_agent
+            let unsent_payload_messages: Vec<PayloadMessage> = unsent_messages_from_agent
+                .iter()
+                .filter(|msg| msg.speaker.name() != participant_name)
+                .cloned()
+                .collect();
 
-                    // Remove from pending immediately after payload construction
-                    // (before agent execution, so next turn sees them as regular)
-                    self.pending_participants.remove(&participant_name);
+            current_messages.extend(unsent_payload_messages);
 
-                    payload
-                } else {
-                    // Regular participant: use unsent_messages_from_agent
-                    let mut current_messages: Vec<PayloadMessage> = unsent_messages_from_agent
-                        .iter()
-                        .filter(|msg| msg.speaker.name() != participant_name)
-                        .cloned()
-                        .collect();
+            current_messages.extend(unsent_messages_incoming.clone());
+            let messages_with_metadata = current_messages.clone();
 
-                    current_messages.extend(unsent_messages_incoming.clone());
-                    let messages_with_metadata = current_messages.clone();
+            // Create payload with turn input formatting
+            let turn_input = TurnInput::with_messages_and_context(
+                current_messages,
+                vec![],
+                participants_info.clone(),
+                participant_name.clone(),
+            );
 
-                    // Create payload with turn input formatting
-                    let turn_input = TurnInput::with_messages_and_context(
-                        current_messages,
-                        vec![],
-                        participants_info.clone(),
-                        participant_name.clone(),
-                    );
+            let messages = turn_input.to_messages();
+            let mut payload = Payload::from_messages(messages);
 
-                    let messages = turn_input.to_messages();
-                    let mut payload = Payload::from_messages(messages);
+            // Attach context if exists
+            if let Some(ref context) = self.context {
+                payload = payload.with_context(context.to_prompt());
+            }
 
-                    // Attach context if exists
-                    if let Some(ref context) = self.context {
-                        payload = payload.with_context(context.to_prompt());
-                    }
-
-                    payload = Self::apply_metadata_attachments(payload, &messages_with_metadata);
-                    payload.with_participants(participants_info.clone())
-                };
+            payload = Self::apply_metadata_attachments(payload, &messages_with_metadata);
+            let input_payload = payload.with_participants(participants_info.clone());
 
             pending.spawn(async move {
                 let result = agent.execute(input_payload).await;
@@ -2186,6 +2182,15 @@ impl Dialogue {
             "Mention-based execution plan determined"
         );
 
+        // Prepare joining history contexts for all participants before the loop
+        let mut joining_history_contexts = vec![];
+        for idx in 0..self.participants.len() {
+            let participant = &self.participants[idx];
+            let speaker = participant.to_speaker();
+            let joining_history_context = self.join_pending_participant(speaker, current_turn);
+            joining_history_contexts.push(joining_history_context);
+        }
+
         let mut pending = JoinSet::new();
 
         // Only spawn tasks for mentioned participants (or all if no mentions)
@@ -2205,37 +2210,13 @@ impl Dialogue {
 
             let agent = Arc::clone(&participant.agent);
 
-            // Entry point: Check if pending participant
-            let (joining_history_context, mark_all_as_sent) =
-                if let Some(pending_info) = self.pending_participants.get(&participant_name) {
-                    let filtered_history: Vec<PayloadMessage> = {
-                        let all_messages = self.message_store.all_messages();
-                        let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
-                        let history_refs = pending_info
-                            .joining_strategy
-                            .historical_messages(&message_refs, current_turn);
-                        // Convert to PayloadMessage to release the borrow
-                        history_refs
-                            .iter()
-                            .map(|&msg| PayloadMessage::from(msg))
-                            .collect()
-                    };
+            // Get joining history for this participant
+            let joining_history_context = joining_history_contexts.get(idx);
 
-                    // Remove from pending immediately after payload construction
-                    self.pending_participants.remove(&participant_name);
-                    (filtered_history, true)
-                } else {
-                    // Regular Participants
-                    (vec![], false)
-                };
-
-            // Mark all history data as sent for joining participant (after borrowing filtered_history)
-            if mark_all_as_sent {
-                let speaker = participant.to_speaker();
-                self.message_store.mark_as_sent_all_for(speaker);
+            let mut current_messages: Vec<PayloadMessage> = vec![];
+            if let Some(Some(context)) = joining_history_context {
+                current_messages.extend_from_slice(context);
             }
-
-            let mut current_messages: Vec<PayloadMessage> = joining_history_context;
 
             current_messages.extend(unsent_messages_incoming.clone());
             let messages_with_metadata = current_messages.clone();
@@ -7265,15 +7246,15 @@ mod tests {
             "Fresh strategy: Carol should not see historical messages from Alice or Bob"
         );
 
-        // Carol should only see the current turn's System message
+        // Fresh strategy: Carol should NOT see any messages on first turn (only Persona/Participants)
         let system_messages: Vec<_> = messages
             .iter()
             .filter(|msg| matches!(msg.speaker, Speaker::System))
             .collect();
 
         assert!(
-            !system_messages.is_empty(),
-            "Carol should see at least the current system message"
+            system_messages.is_empty(),
+            "Fresh strategy: Carol should NOT see any system messages on initial turn"
         );
 
         // Turn 4: Verify Carol now receives Turn 3 messages in subsequent turns
@@ -7509,7 +7490,7 @@ mod tests {
         let bob_first_payload = &bob_payloads[0];
         let messages = bob_first_payload.to_messages();
 
-        // Bob should see only the last 2 of Alice's responses
+        // Bob should see the last 2 Alice responses (Turn 4 and Turn 5)
         let alice_historical_messages: Vec<_> = messages
             .iter()
             .filter(|msg| msg.speaker.name() == "Alice")
@@ -7518,7 +7499,7 @@ mod tests {
         assert_eq!(
             alice_historical_messages.len(),
             2,
-            "Recent(2) strategy: Bob should see only 2 recent historical messages from Alice"
+            "Recent(2) strategy: Bob should see 2 recent historical messages from Alice"
         );
 
         // Verify the content - should be Turn 4 and Turn 5
