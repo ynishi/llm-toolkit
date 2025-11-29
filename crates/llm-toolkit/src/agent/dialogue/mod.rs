@@ -509,16 +509,8 @@ impl Default for ReactionStrategy {
 /// JoiningStrategy, after which they transition to regular participant status.
 #[derive(Debug, Clone)]
 pub(super) struct PendingParticipant {
-    /// Index of the participant in the participants vector
-    #[allow(dead_code)]
-    pub participant_index: usize,
-
     /// JoiningStrategy determining how much history they receive
     pub joining_strategy: JoiningStrategy,
-
-    /// The turn number when this participant joined
-    #[allow(dead_code)]
-    pub joined_at_turn: usize,
 }
 
 /// Internal representation of a dialogue participant.
@@ -856,7 +848,6 @@ impl Dialogue {
         T: Agent<Output = String> + 'static,
     {
         let participant_name = persona.name.clone();
-        let participant_index = self.participants.len();
 
         // Add as regular participant (no joining_strategy set on Participant)
         self.participants.push(Self::create_participant(
@@ -864,14 +855,8 @@ impl Dialogue {
         ));
 
         // Place in pending pool ("waiting at the entrance")
-        self.pending_participants.insert(
-            participant_name,
-            PendingParticipant {
-                participant_index,
-                joining_strategy,
-                joined_at_turn: self.message_store.current_turn(),
-            },
-        );
+        self.pending_participants
+            .insert(participant_name, PendingParticipant { joining_strategy });
 
         self
     }
@@ -1105,6 +1090,10 @@ impl Dialogue {
         }
     }
 
+    fn next_turn(&self) -> usize {
+        self.message_store.latest_turn() + 1
+    }
+
     /// Runs the dialogue with the configured execution model.
     ///
     /// The behavior depends on the execution model:
@@ -1164,7 +1153,7 @@ impl Dialogue {
         initial_prompt: impl Into<Payload>,
     ) -> Result<Vec<DialogueTurn>, AgentError> {
         let payload = initial_prompt.into();
-        let current_turn = self.message_store.current_turn() + 1;
+        let current_turn = self.next_turn();
         // Store incoming payload for history/unsent tracking
         let (stored_prompt, _) = self.store_payload_messages(&payload, current_turn);
 
@@ -1726,7 +1715,7 @@ impl Dialogue {
         }
 
         let payload: Payload = initial_prompt.into();
-        let current_turn = self.message_store.current_turn() + 1;
+        let current_turn = self.next_turn();
 
         // Store incoming payload for history/unsent tracking
         let (stored_prompt, _) = self.store_payload_messages(&payload, current_turn);
@@ -1942,43 +1931,6 @@ impl Dialogue {
         payload.with_participants(participants_info.to_vec())
     }
 
-    /// Builds payload for a regular participant (already joined).
-    ///
-    /// Regular participants use the standard unsent_messages_from_agent mechanism.
-    ///
-    /// # Arguments
-    /// * `base_payload` - The current turn's input payload
-    /// * `unsent_messages_from_agent` - Unsent messages from previous turn
-    /// * `participant_name` - Name of the participant
-    /// * `participants_info` - Information about all participants
-    ///
-    /// # Returns
-    /// Constructed payload with unsent messages from other participants
-    #[allow(dead_code)]
-    fn build_regular_participant_payload(
-        base_payload: &Payload,
-        unsent_messages_from_agent: &[PayloadMessage],
-        participant_name: &str,
-        participants_info: &[ParticipantInfo],
-    ) -> Payload {
-        // Filter out self from unsent messages
-        let current_messages: Vec<PayloadMessage> = unsent_messages_from_agent
-            .iter()
-            .filter(|msg| msg.speaker.name() != participant_name)
-            .cloned()
-            .collect();
-
-        // Build payload
-        let payload = if current_messages.is_empty() {
-            base_payload.clone()
-        } else {
-            Payload::from_messages(current_messages).merge(base_payload.clone())
-        };
-
-        // Add participants info
-        payload.with_participants(participants_info.to_vec())
-    }
-
     /// Helper method to spawn broadcast tasks for all participants.
     ///
     /// Returns a JoinSet with pending agent executions.
@@ -2020,7 +1972,7 @@ impl Dialogue {
         );
 
         let mut pending = JoinSet::new();
-        let current_turn = self.message_store.current_turn();
+        let current_turn = self.message_store.latest_turn();
 
         for (idx, participant) in self.participants.iter().enumerate() {
             let agent = Arc::clone(&participant.agent);
@@ -2254,10 +2206,8 @@ impl Dialogue {
             let agent = Arc::clone(&participant.agent);
 
             // Entry point: Check if pending participant
-            let (joining_history_context, mark_all_as_sent) = 
-                if let Some(pending_info) =
-                    self.pending_participants.get(&participant_name) {
-
+            let (joining_history_context, mark_all_as_sent) =
+                if let Some(pending_info) = self.pending_participants.get(&participant_name) {
                     let filtered_history: Vec<PayloadMessage> = {
                         let all_messages = self.message_store.all_messages();
                         let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
@@ -4371,7 +4321,7 @@ mod tests {
         assert_eq!(dialogue.history()[3].speaker.name(), "Agent1");
 
         // Verify current_turn increments correctly
-        assert_eq!(dialogue.message_store.current_turn(), 2);
+        assert_eq!(dialogue.message_store.latest_turn(), 2);
     }
 
     /// Test partial_session with broadcast mode, multiple agents, and both Text and Messages.
@@ -4507,7 +4457,7 @@ mod tests {
         assert_eq!(dialogue.history()[7].content, "[AgentB]");
 
         // Verify current_turn increments correctly
-        assert_eq!(dialogue.message_store.current_turn(), 2);
+        assert_eq!(dialogue.message_store.latest_turn(), 2);
     }
 
     /// Test that partial_session multi-turn behavior matches run() multi-turn behavior
@@ -4584,8 +4534,8 @@ mod tests {
         // Both should have identical history structure
         assert_eq!(history_run.len(), history_partial.len());
         assert_eq!(
-            dialogue_run.message_store.current_turn(),
-            dialogue_partial.message_store.current_turn()
+            dialogue_run.message_store.latest_turn(),
+            dialogue_partial.message_store.latest_turn()
         );
 
         // Verify both have the same message structure

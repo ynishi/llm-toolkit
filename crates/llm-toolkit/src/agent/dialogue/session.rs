@@ -238,7 +238,6 @@ impl<'a> DialogueSession<'a> {
                         self.dialogue.message_store.mark_as_sent_all_for(speaker);
                     }
 
-
                     let mut prev_messages = joining_history_context;
                     prev_messages.append(prev_agent_outputs);
 

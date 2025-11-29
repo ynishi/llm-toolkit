@@ -74,7 +74,7 @@ impl MessageStore {
     ///
     /// This returns the maximum turn number among all stored messages.
     /// Returns 0 if no messages have been stored yet.
-    pub fn current_turn(&self) -> usize {
+    pub fn latest_turn(&self) -> usize {
         self.all_messages()
             .iter()
             .map(|msg| msg.turn)
@@ -234,31 +234,31 @@ mod tests {
     }
 
     #[test]
-    fn test_current_turn() {
+    fn test_latest_turn() {
         let mut store = MessageStore::new();
 
-        assert_eq!(store.current_turn(), 0);
+        assert_eq!(store.latest_turn(), 0);
 
         store.push(DialogueMessage::new(
             1,
             Speaker::System,
             "Prompt 1".to_string(),
         ));
-        assert_eq!(store.current_turn(), 1);
+        assert_eq!(store.latest_turn(), 1);
 
         store.push(DialogueMessage::new(
             1,
             Speaker::agent("A", "Role"),
             "Response".to_string(),
         ));
-        assert_eq!(store.current_turn(), 1); // Still turn 1
+        assert_eq!(store.latest_turn(), 1); // Still turn 1
 
         store.push(DialogueMessage::new(
             2,
             Speaker::System,
             "Prompt 2".to_string(),
         ));
-        assert_eq!(store.current_turn(), 2);
+        assert_eq!(store.latest_turn(), 2);
     }
 
     #[test]
