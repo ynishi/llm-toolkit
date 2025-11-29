@@ -111,19 +111,19 @@ impl JoiningStrategy {
         Self::Range { start, end }
     }
 
-    /// Filters messages based on the strategy and current turn number.
+    /// Historical messages based on the strategy and current turn number.
     ///
     /// # Arguments
     /// * `all_messages` - All available messages in chronological order
     /// * `current_turn` - The current turn number
     ///
     /// # Returns
-    /// Filtered messages according to the strategy
+    /// Filtered historical messages according to the strategy
     ///
     /// # Notes
     /// - Messages are returned in chronological order
     /// - Current turn messages are excluded (only past history)
-    pub fn filter_messages<'a>(
+    pub fn historical_messages<'a>(
         &self,
         all_messages: &[&'a DialogueMessage],
         current_turn: usize,
@@ -190,7 +190,7 @@ mod tests {
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
         let strategy = JoiningStrategy::recent_with_turns(3);
-        let filtered = strategy.filter_messages(&msg_refs, 10);
+        let filtered = strategy.historical_messages(&msg_refs, 10);
 
         assert_eq!(filtered.len(), 3);
         assert_eq!(filtered[0].turn, 7);
@@ -204,7 +204,7 @@ mod tests {
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
         let strategy = JoiningStrategy::recent_with_turns(5);
-        let filtered = strategy.filter_messages(&msg_refs, 4);
+        let filtered = strategy.historical_messages(&msg_refs, 4);
 
         // Should return all 3 messages (turn 1, 2, 3)
         assert_eq!(filtered.len(), 3);
@@ -219,7 +219,7 @@ mod tests {
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
         let strategy = JoiningStrategy::recent_with_turns(5);
-        let filtered = strategy.filter_messages(&msg_refs, 8);
+        let filtered = strategy.historical_messages(&msg_refs, 8);
 
         // Should return turns 3-7 (not turn 8)
         assert_eq!(filtered.len(), 5);
@@ -234,7 +234,7 @@ mod tests {
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
         let strategy = JoiningStrategy::fresh();
-        let filtered = strategy.filter_messages(&msg_refs, 10);
+        let filtered = strategy.historical_messages(&msg_refs, 10);
 
         assert_eq!(filtered.len(), 0);
     }
@@ -247,9 +247,9 @@ mod tests {
         let strategy = JoiningStrategy::fresh();
 
         // Check at different turn numbers
-        assert_eq!(strategy.filter_messages(&msg_refs, 1).len(), 0);
-        assert_eq!(strategy.filter_messages(&msg_refs, 5).len(), 0);
-        assert_eq!(strategy.filter_messages(&msg_refs, 10).len(), 0);
+        assert_eq!(strategy.historical_messages(&msg_refs, 1).len(), 0);
+        assert_eq!(strategy.historical_messages(&msg_refs, 5).len(), 0);
+        assert_eq!(strategy.historical_messages(&msg_refs, 10).len(), 0);
     }
 
     #[test]
@@ -258,7 +258,7 @@ mod tests {
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
         let strategy = JoiningStrategy::full();
-        let filtered = strategy.filter_messages(&msg_refs, 11);
+        let filtered = strategy.historical_messages(&msg_refs, 11);
 
         // Should return all 10 messages (turns 1-10) when current_turn is 11
         assert_eq!(filtered.len(), 10);
@@ -272,7 +272,7 @@ mod tests {
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
         let strategy = JoiningStrategy::full();
-        let filtered = strategy.filter_messages(&msg_refs, 5);
+        let filtered = strategy.historical_messages(&msg_refs, 5);
 
         // Should return turns 1-4 (not turn 5)
         assert_eq!(filtered.len(), 4);
@@ -287,7 +287,7 @@ mod tests {
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
         let strategy = JoiningStrategy::full();
-        let filtered = strategy.filter_messages(&msg_refs, 1);
+        let filtered = strategy.historical_messages(&msg_refs, 1);
 
         // No history on first turn
         assert_eq!(filtered.len(), 0);
@@ -299,7 +299,7 @@ mod tests {
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
         let strategy = JoiningStrategy::range(3, Some(7));
-        let filtered = strategy.filter_messages(&msg_refs, 10);
+        let filtered = strategy.historical_messages(&msg_refs, 10);
 
         // Should return turns 3, 4, 5, 6 (7 is exclusive)
         assert_eq!(filtered.len(), 4);
@@ -313,7 +313,7 @@ mod tests {
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
         let strategy = JoiningStrategy::range(5, None);
-        let filtered = strategy.filter_messages(&msg_refs, 8);
+        let filtered = strategy.historical_messages(&msg_refs, 8);
 
         // Should return turns 5, 6, 7 (8 is exclusive)
         assert_eq!(filtered.len(), 3);
@@ -327,7 +327,7 @@ mod tests {
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
         let strategy = JoiningStrategy::range(5, Some(5));
-        let filtered = strategy.filter_messages(&msg_refs, 10);
+        let filtered = strategy.historical_messages(&msg_refs, 10);
 
         assert_eq!(filtered.len(), 0);
     }
@@ -338,7 +338,7 @@ mod tests {
         let msg_refs: Vec<&DialogueMessage> = messages.iter().collect();
 
         let strategy = JoiningStrategy::range(15, None);
-        let filtered = strategy.filter_messages(&msg_refs, 10);
+        let filtered = strategy.historical_messages(&msg_refs, 10);
 
         assert_eq!(filtered.len(), 0);
     }

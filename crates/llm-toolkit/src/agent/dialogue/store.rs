@@ -72,12 +72,14 @@ impl MessageStore {
 
     /// Returns the current turn number.
     ///
-    /// This counts the number of System messages (prompts) that have been sent.
+    /// This returns the maximum turn number among all stored messages.
+    /// Returns 0 if no messages have been stored yet.
     pub fn current_turn(&self) -> usize {
         self.all_messages()
             .iter()
-            .filter(|msg| matches!(msg.speaker, Speaker::System))
-            .count()
+            .map(|msg| msg.turn)
+            .max()
+            .unwrap_or(0)
     }
 
     /// Returns the total number of messages.
@@ -132,6 +134,13 @@ impl MessageStore {
     pub fn mark_as_sent(&mut self, id: MessageId, agent: Speaker) {
         if let Some(msg) = self.messages_by_id.get_mut(&id) {
             msg.sent(agent);
+        }
+    }
+
+    pub fn mark_as_sent_all_for(&mut self, agent: Speaker) {
+        // Collect IDs first to avoid borrow checker issues
+        for id in self.message_order.clone() {
+            self.mark_as_sent(id, agent.clone());
         }
     }
 

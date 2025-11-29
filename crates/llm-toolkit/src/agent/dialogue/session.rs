@@ -5,7 +5,7 @@
 //! and responsive UIs.
 
 use super::super::{Agent, AgentError, Payload, PayloadMessage};
-use super::message::{DialogueMessage, MessageId, MessageMetadata, MessageOrigin, Speaker};
+use super::message::{DialogueMessage, MessageMetadata, MessageOrigin, Speaker};
 use super::state::SessionState;
 use super::{BroadcastOrder, Dialogue, DialogueTurn, ExecutionModel, ParticipantInfo};
 use crate::prompt::ToPrompt;
@@ -86,7 +86,6 @@ impl<'a> DialogueSession<'a> {
                                     continue;
                                 }
                                 BroadcastOrder::ParticipantOrder => {
-
                                     match &result {
                                         Ok(_) => {
                                             info!(
@@ -209,45 +208,43 @@ impl<'a> DialogueSession<'a> {
                     let participant_name = participant.name().to_string();
 
                     // Handle pending participant: apply JoiningStrategy and mark history as sent
-                    let was_pending = if let Some(pending_info) = self.dialogue.pending_participants.get(&participant_name) {
-                        let all_messages = self.dialogue.message_store.all_messages();
-                        let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
-                        let filtered_history = pending_info.joining_strategy.filter_messages(
-                            &message_refs,
-                            turn,
-                        );
-
-                        // Mark filtered history as sent
-                        let history_message_ids: Vec<MessageId> = filtered_history
-                            .iter()
-                            .map(|msg| msg.id)
-                            .collect();
-
-                        if !history_message_ids.is_empty() {
-                            self.dialogue.message_store.mark_all_as_sent(&history_message_ids);
-                        }
+                    let (joining_history_context, mark_all_as_sent) = if let Some(pending_info) =
+                        self.dialogue.pending_participants.get(&participant_name)
+                    {
+                        let filtered_history: Vec<PayloadMessage> = {
+                            let all_messages = self.dialogue.message_store.all_messages();
+                            let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
+                            let history_refs = pending_info
+                                .joining_strategy
+                                .historical_messages(&message_refs, turn);
+                            // Convert to PayloadMessage to release the borrow
+                            history_refs
+                                .iter()
+                                .map(|&msg| PayloadMessage::from(msg))
+                                .collect()
+                        };
 
                         // Remove from pending (before execution)
                         self.dialogue.pending_participants.remove(&participant_name);
-                        true // Was pending
+
+                        (filtered_history, true)
                     } else {
-                        false // Regular participant
+                        (vec![], false) // Regular participant
                     };
 
-                    let is_initial_join = !participant.has_sent_once;
-                    let joining_strategy = participant.joining_strategy;
+                    // Mark all history data as sent for joining participant (after borrowing filtered_history)
+                    if mark_all_as_sent {
+                        let speaker = participant.to_speaker();
+                        self.dialogue.message_store.mark_as_sent_all_for(speaker);
+                    }
 
-                    // For pending participants, prev_agent_outputs are already handled by JoiningStrategy
-                    // So we skip them here (only use current_turn_outputs for the chain)
-                    let prev_outputs_to_use = if was_pending {
-                        &[] // Pending already handled history via JoiningStrategy
-                    } else {
-                        prev_agent_outputs.as_slice()
-                    };
+
+                    let mut prev_messages = joining_history_context;
+                    prev_messages.append(prev_agent_outputs);
 
                     let mut response_payload = build_sequential_payload(
                         payload,
-                        prev_outputs_to_use,
+                        prev_messages.as_slice(),
                         current_turn_outputs.as_slice(), // Always include current turn outputs (sequential chain requirement)
                         participants_info.as_slice(),
                         sequence_position,
@@ -258,35 +255,10 @@ impl<'a> DialogueSession<'a> {
                         response_payload = response_payload.with_context(context.to_prompt());
                     }
 
-                    // Handle initial join if this participant hasn't sent a message yet
-                    let participant_name = participant.name().to_string();
-
-                    let mut joining_message_ids = Vec::new();
-                    if is_initial_join {
-                        let (updated_payload, message_ids) = Dialogue::apply_joining_strategy(
-                            &self.dialogue.message_store,
-                            self.dialogue.context.as_ref(),
-                            joining_strategy,
-                            turn,
-                            response_payload,
-                            participants_info,
-                            &participant_name,
-                        );
-                        response_payload = updated_payload;
-                        joining_message_ids = message_ids;
-                    }
-
                     let response_result = {
                         let participant = &self.dialogue.participants[participant_idx];
                         participant.agent.execute(response_payload).await
                     };
-
-                    // Mark joining strategy messages as sent (if any)
-                    if !joining_message_ids.is_empty() {
-                        self.dialogue
-                            .message_store
-                            .mark_all_as_sent(&joining_message_ids);
-                    }
 
                     return match response_result {
                         Ok(content) => {
@@ -307,11 +279,6 @@ impl<'a> DialogueSession<'a> {
 
                             current_turn_outputs
                                 .push(PayloadMessage::new(speaker.clone(), content.clone()));
-
-                            // Mark participant as having sent once (after successful execution)
-                            if is_initial_join {
-                                self.dialogue.participants[participant_idx].has_sent_once = true;
-                            }
 
                             let turn = DialogueTurn { speaker, content };
                             info!(

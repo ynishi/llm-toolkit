@@ -1433,31 +1433,34 @@ impl Dialogue {
             let agent_name = participant.name().to_string();
 
             // Handle pending participant: apply JoiningStrategy and mark history as sent
-            if let Some(pending_info) = self.pending_participants.get(&agent_name) {
-                let all_messages = self.message_store.all_messages();
-                let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
-                let filtered_history = pending_info.joining_strategy.filter_messages(
-                    &message_refs,
-                    current_turn,
-                );
+            let (joining_history_context, mark_all_as_sent) =
+                if let Some(pending_info) = self.pending_participants.get(&agent_name) {
+                    let filtered_history: Vec<PayloadMessage> = {
+                        let all_messages = self.message_store.all_messages();
+                        let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
+                        let history_refs = pending_info
+                            .joining_strategy
+                            .historical_messages(&message_refs, current_turn);
+                        // Convert to PayloadMessage to release the borrow
+                        history_refs
+                            .iter()
+                            .map(|&msg| PayloadMessage::from(msg))
+                            .collect()
+                    };
 
-                // Mark filtered history as sent
-                let history_message_ids: Vec<MessageId> = filtered_history
-                    .iter()
-                    .map(|msg| msg.id)
-                    .collect();
+                    // Remove from pending (before execution)
+                    self.pending_participants.remove(&agent_name);
 
-                if !history_message_ids.is_empty() {
-                    self.message_store.mark_all_as_sent(&history_message_ids);
-                }
+                    (filtered_history, true)
+                } else {
+                    (vec![], false)
+                };
 
-                // Remove from pending (before execution)
-                self.pending_participants.remove(&agent_name);
+            // Mark all history data as sent for joining participant (after borrowing filtered_history)
+            if mark_all_as_sent {
+                let speaker = participant.to_speaker();
+                self.message_store.mark_as_sent_all_for(speaker);
             }
-
-            // Check if this is the participant's first message
-            let is_initial_join = !participant.has_sent_once;
-            let joining_strategy = participant.joining_strategy;
 
             // Determine input messages based on position in sequence
             let (current_messages, messages_with_metadata, message_ids_to_mark) = if sequence_idx
@@ -1493,6 +1496,7 @@ impl Dialogue {
                 }
 
                 // Add unsent incoming messages
+                messages.extend(joining_history_context);
                 messages.extend(unsent_messages_incoming.clone());
                 metadata_messages.extend(unsent_messages_incoming.clone());
 
@@ -1512,7 +1516,8 @@ impl Dialogue {
                     .collect();
 
                 // Combine: previous agents' outputs + unsent incoming messages
-                let mut messages = prev_agent_messages.clone();
+                let mut messages: Vec<PayloadMessage> = joining_history_context;
+                messages.extend(prev_agent_messages.clone());
                 messages.extend(unsent_messages_incoming.clone());
 
                 let mut metadata_messages = prev_agent_messages.clone();
@@ -1559,29 +1564,8 @@ impl Dialogue {
             // Add participants info
             input_payload = input_payload.with_participants(participants_info.clone());
 
-            // Handle initial join if this participant hasn't sent a message yet
-            let mut joining_message_ids = Vec::new();
-            if is_initial_join {
-                let (updated_payload, message_ids) = Self::apply_joining_strategy(
-                    &self.message_store,
-                    self.context.as_ref(),
-                    joining_strategy,
-                    current_turn,
-                    input_payload,
-                    &participants_info,
-                    &agent_name,
-                );
-                input_payload = updated_payload;
-                joining_message_ids = message_ids;
-            }
-
             // Execute agent
             let response = agent.execute(input_payload).await?;
-
-            // Mark joining strategy messages as sent (if any)
-            if !joining_message_ids.is_empty() {
-                self.message_store.mark_all_as_sent(&joining_message_ids);
-            }
 
             // Store response message
             let speaker = participant.to_speaker();
@@ -1605,11 +1589,6 @@ impl Dialogue {
                     message_ids_to_mark.len(),
                     agent_name
                 );
-            }
-
-            // Mark participant as having sent once (after successful execution)
-            if is_initial_join {
-                self.participants[participant_idx].has_sent_once = true;
             }
 
             // Keep track of final turn
@@ -1945,22 +1924,21 @@ impl Dialogue {
         let mut message_ids_to_mark = Vec::new();
 
         if let Some(strategy) = joining_strategy {
-            // Apply joining strategy: filter history messages
+            // Build history context using JoiningStrategy
             let all_messages = message_store.all_messages();
             let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
-            let filtered_history = strategy.filter_messages(&message_refs, current_turn);
+            let history_refs = strategy.historical_messages(&message_refs, current_turn);
+            let history_messages: Vec<PayloadMessage> = history_refs
+                .iter()
+                .map(|&msg| PayloadMessage::from(msg))
+                .collect();
 
             // Collect message IDs before filtering (for marking as sent)
-            let all_past_message_ids: Vec<_> = all_messages
+            let all_past_message_ids: Vec<_> = message_store
+                .all_messages()
                 .iter()
                 .filter(|msg| msg.turn < current_turn)
                 .map(|msg| msg.id)
-                .collect();
-
-            // Convert filtered history to PayloadMessage
-            let history_messages: Vec<PayloadMessage> = filtered_history
-                .into_iter()
-                .map(|msg| PayloadMessage::from(msg.clone()))
                 .collect();
 
             let filtered_count = history_messages.len();
@@ -2015,17 +1993,15 @@ impl Dialogue {
         participants_info: &[ParticipantInfo],
         current_turn: usize,
     ) -> Payload {
-        // Apply JoiningStrategy to filter history from MessageStore
+        // Build history context using JoiningStrategy
         let all_messages = self.message_store.all_messages();
         let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
-        let filtered_history = pending
+        let history_refs = pending
             .joining_strategy
-            .filter_messages(&message_refs, current_turn);
-
-        // Convert to PayloadMessage
-        let history_messages: Vec<PayloadMessage> = filtered_history
-            .into_iter()
-            .map(PayloadMessage::from)
+            .historical_messages(&message_refs, current_turn);
+        let history_messages: Vec<PayloadMessage> = history_refs
+            .iter()
+            .map(|&msg| PayloadMessage::from(msg))
             .collect();
 
         // Build payload: history + base_payload
@@ -2356,50 +2332,58 @@ impl Dialogue {
             let agent = Arc::clone(&participant.agent);
 
             // Entry point: Check if pending participant
-            let input_payload =
-                if let Some(pending_info) = self.pending_participants.get(&participant_name) {
-                    // Pending participant: use JoiningStrategy, skip unsent_messages
-                    let base_payload = Payload::from_messages(unsent_messages_incoming.clone());
+            let (joining_history_context, mark_all_as_sent) = 
+                if let Some(pending_info) =
+                    self.pending_participants.get(&participant_name) {
 
-                    let payload = self.build_pending_participant_payload(
-                        pending_info,
-                        &base_payload,
-                        &participants_info,
-                        current_turn,
-                    );
+                    let filtered_history: Vec<PayloadMessage> = {
+                        let all_messages = self.message_store.all_messages();
+                        let message_refs: Vec<&DialogueMessage> = all_messages.to_vec();
+                        let history_refs = pending_info
+                            .joining_strategy
+                            .historical_messages(&message_refs, current_turn);
+                        // Convert to PayloadMessage to release the borrow
+                        history_refs
+                            .iter()
+                            .map(|&msg| PayloadMessage::from(msg))
+                            .collect()
+                    };
 
                     // Remove from pending immediately after payload construction
                     self.pending_participants.remove(&participant_name);
-
-                    payload
+                    (filtered_history, true)
                 } else {
-                    // Regular participant: use unsent_messages_from_agent
-                    let mut current_messages: Vec<PayloadMessage> = unsent_messages_from_agent
-                        .iter()
-                        .filter(|msg| msg.speaker.name() != participant_name)
-                        .cloned()
-                        .collect();
-
-                    current_messages.extend(unsent_messages_incoming.clone());
-                    let messages_with_metadata = current_messages.clone();
-
-                    let turn_input = TurnInput::with_messages_and_context(
-                        current_messages.clone(),
-                        vec![],
-                        participants_info.clone(),
-                        participant_name.clone(),
-                    );
-
-                    let messages = turn_input.to_messages();
-                    let mut payload = Payload::from_messages(messages);
-
-                    if let Some(ref context) = self.context {
-                        payload = payload.with_context(context.to_prompt());
-                    }
-
-                    payload = Self::apply_metadata_attachments(payload, &messages_with_metadata);
-                    payload.with_participants(participants_info.clone())
+                    // Regular Participants
+                    (vec![], false)
                 };
+
+            // Mark all history data as sent for joining participant (after borrowing filtered_history)
+            if mark_all_as_sent {
+                let speaker = participant.to_speaker();
+                self.message_store.mark_as_sent_all_for(speaker);
+            }
+
+            let mut current_messages: Vec<PayloadMessage> = joining_history_context;
+
+            current_messages.extend(unsent_messages_incoming.clone());
+            let messages_with_metadata = current_messages.clone();
+
+            let turn_input = TurnInput::with_messages_and_context(
+                current_messages.clone(),
+                vec![],
+                participants_info.clone(),
+                participant_name.clone(),
+            );
+
+            let messages = turn_input.to_messages();
+            let mut payload = Payload::from_messages(messages);
+
+            if let Some(ref context) = self.context {
+                payload = payload.with_context(context.to_prompt());
+            }
+
+            payload = Self::apply_metadata_attachments(payload, &messages_with_metadata);
+            let input_payload = payload.with_participants(participants_info.clone());
 
             trace!(
                 target = "llm_toolkit::dialogue",
@@ -8230,6 +8214,1195 @@ mod tests {
             historical_turn4.len(),
             0,
             "In Turn 4 via partial_session, Carol should NOT see Turn 1 or Turn 2 (marked as sent)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_join_in_progress_mentioned_mode_with_full_strategy() {
+        use crate::agent::dialogue::joining_strategy::JoiningStrategy;
+        use crate::agent::persona::Persona;
+
+        // Create initial participants
+        let alice = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let bob = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Creative".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_alice = MockAgent::new(
+            "Alice",
+            vec![
+                "Alice turn 1".to_string(),
+                "Alice turn 2".to_string(),
+                "Alice turn 3".to_string(),
+                "Alice turn 4".to_string(),
+            ],
+        );
+        let agent_bob = MockAgent::new(
+            "Bob",
+            vec![
+                "Bob turn 1".to_string(),
+                "Bob turn 2".to_string(),
+                "Bob turn 3".to_string(),
+            ],
+        );
+        let alice_clone = agent_alice.clone();
+        let bob_clone = agent_bob.clone();
+
+        let mut dialogue = Dialogue::mentioned();
+        dialogue.add_participant(alice, agent_alice);
+        dialogue.add_participant(bob, agent_bob);
+
+        // Turn 1: Mention Alice
+        let _turn1 = dialogue.run("@Alice what's the plan?").await.unwrap();
+
+        // Turn 2: Mention Bob
+        let _turn2 = dialogue.run("@Bob your thoughts?").await.unwrap();
+
+        // Verify call counts
+        assert_eq!(
+            alice_clone.get_call_count(),
+            1,
+            "Alice should be called once (Turn 1)"
+        );
+        assert_eq!(
+            bob_clone.get_call_count(),
+            1,
+            "Bob should be called once (Turn 2)"
+        );
+
+        // Add Carol mid-dialogue with Full strategy - should see ALL history
+        let carol = Persona {
+            name: "Carol".to_string(),
+            role: "Security Consultant".to_string(),
+            background: "Security expert".to_string(),
+            communication_style: "Analytical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_carol = MockAgent::new(
+            "Carol",
+            vec![
+                "Carol's full analysis".to_string(),
+                "Carol turn 4".to_string(),
+            ],
+        );
+        let carol_clone = agent_carol.clone();
+
+        dialogue.join_in_progress(carol, agent_carol, JoiningStrategy::Full);
+
+        // Turn 3: Mention Carol (first time she participates)
+        let turn3 = dialogue.run("@Carol security review please").await.unwrap();
+
+        assert!(turn3.iter().any(|t| t.speaker.name() == "Carol"));
+        assert_eq!(
+            carol_clone.get_call_count(),
+            1,
+            "Carol should be called once"
+        );
+
+        // Verify Carol received FULL history (Alice's Turn 1 and Bob's Turn 2)
+        let carol_payloads = carol_clone.get_payloads();
+        assert_eq!(carol_payloads.len(), 1, "Carol should receive 1 payload");
+
+        let carol_first_payload = &carol_payloads[0];
+        let messages = carol_first_payload.to_messages();
+
+        // Carol should see ALL historical messages from Alice and Bob
+        let alice_historical: Vec<_> = messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Alice")
+            .collect();
+        let bob_historical: Vec<_> = messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob")
+            .collect();
+
+        assert_eq!(
+            alice_historical.len(),
+            1,
+            "Full strategy in mentioned mode: Carol should see Alice's Turn 1"
+        );
+        assert_eq!(
+            bob_historical.len(),
+            1,
+            "Full strategy in mentioned mode: Carol should see Bob's Turn 2"
+        );
+
+        // Verify content
+        assert_eq!(alice_historical[0].content, "Alice turn 1");
+        assert_eq!(bob_historical[0].content, "Bob turn 1");
+
+        // Turn 4: Mention both Carol and Alice
+        let _turn4 = dialogue
+            .run("@Carol and @Alice continue discussion")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            carol_clone.get_call_count(),
+            2,
+            "Carol should be called twice"
+        );
+        assert_eq!(
+            alice_clone.get_call_count(),
+            2,
+            "Alice should be called twice"
+        );
+
+        let carol_second_payload = &carol_clone.get_payloads()[1];
+        let turn4_messages = carol_second_payload.to_messages();
+
+        // In Turn 4, Carol and Alice execute in parallel
+        // Carol should NOT see Alice's Turn 4 response (concurrent execution)
+        // Carol should only see historical messages that haven't been marked as sent yet
+        let alice_turn4_messages: Vec<_> = turn4_messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Alice")
+            .collect();
+
+        assert_eq!(
+            alice_turn4_messages.len(),
+            0,
+            "In Turn 4, Carol should NOT see Alice's concurrent Turn 4 response"
+        );
+
+        // Verify Carol does NOT see Turn 1 and Turn 2 responses again (marked as sent)
+        let has_alice_turn1 = turn4_messages
+            .iter()
+            .any(|msg| msg.speaker.name() == "Alice" && msg.content.contains("turn 1"));
+        let has_bob_turn1 = turn4_messages
+            .iter()
+            .any(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 1"));
+
+        assert!(
+            !has_alice_turn1,
+            "Carol should NOT see Alice's Turn 1 in Turn 4 (marked as sent)"
+        );
+        assert!(
+            !has_bob_turn1,
+            "Carol should NOT see Bob's Turn 1 in Turn 4 (marked as sent)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_join_in_progress_mentioned_mode_with_recent_strategy() {
+        use crate::agent::dialogue::joining_strategy::JoiningStrategy;
+        use crate::agent::persona::Persona;
+
+        // Create initial participants
+        let alice = Persona {
+            name: "Alice".to_string(),
+            role: "Developer".to_string(),
+            background: "Backend engineer".to_string(),
+            communication_style: "Direct".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let bob = Persona {
+            name: "Bob".to_string(),
+            role: "Designer".to_string(),
+            background: "UI/UX specialist".to_string(),
+            communication_style: "Creative".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let dave = Persona {
+            name: "Dave".to_string(),
+            role: "QA Engineer".to_string(),
+            background: "Testing specialist".to_string(),
+            communication_style: "Meticulous".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_alice = MockAgent::new(
+            "Alice",
+            vec![
+                "Alice turn 1".to_string(),
+                "Alice turn 2".to_string(),
+                "Alice turn 3".to_string(),
+                "Alice turn 4".to_string(),
+                "Alice turn 5".to_string(),
+                "Alice turn 6".to_string(),
+            ],
+        );
+        let agent_bob = MockAgent::new(
+            "Bob",
+            vec![
+                "Bob turn 1".to_string(),
+                "Bob turn 3".to_string(),
+                "Bob turn 5".to_string(),
+            ],
+        );
+        let agent_dave = MockAgent::new(
+            "Dave",
+            vec!["Dave turn 2".to_string(), "Dave turn 4".to_string()],
+        );
+
+        let mut dialogue = Dialogue::mentioned();
+        dialogue.add_participant(alice, agent_alice);
+        dialogue.add_participant(bob, agent_bob);
+        dialogue.add_participant(dave, agent_dave);
+
+        // Build up 5 turns of history with various mention patterns
+        let _turn1 = dialogue.run("@Alice and @Bob start").await.unwrap();
+        let _turn2 = dialogue.run("@Dave check this").await.unwrap();
+        let _turn3 = dialogue.run("@Alice and @Bob continue").await.unwrap();
+        let _turn4 = dialogue.run("@Dave verify").await.unwrap();
+        let _turn5 = dialogue.run("@Alice and @Bob finalize").await.unwrap();
+
+        // Add Carol with Recent(2) strategy - should see only last 2 turns (Turn 4, 5)
+        let carol = Persona {
+            name: "Carol".to_string(),
+            role: "Security Consultant".to_string(),
+            background: "Security expert".to_string(),
+            communication_style: "Analytical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_carol = MockAgent::new(
+            "Carol",
+            vec![
+                "Carol's recent analysis".to_string(),
+                "Carol turn 7".to_string(),
+            ],
+        );
+        let carol_clone = agent_carol.clone();
+
+        dialogue.join_in_progress(carol, agent_carol, JoiningStrategy::recent_with_turns(2));
+
+        // Turn 6: Mention Carol (first time she participates)
+        let turn6 = dialogue.run("@Carol security review").await.unwrap();
+
+        assert!(turn6.iter().any(|t| t.speaker.name() == "Carol"));
+        assert_eq!(
+            carol_clone.get_call_count(),
+            1,
+            "Carol should be called once"
+        );
+
+        // Verify Carol received ONLY recent 2 turns (Turn 4 and Turn 5)
+        let carol_payloads = carol_clone.get_payloads();
+        assert_eq!(carol_payloads.len(), 1, "Carol should receive 1 payload");
+
+        let carol_first_payload = &carol_payloads[0];
+        let messages = carol_first_payload.to_messages();
+
+        // Collect all agent messages from history
+        let agent_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| {
+                msg.speaker.name() == "Alice"
+                    || msg.speaker.name() == "Bob"
+                    || msg.speaker.name() == "Dave"
+            })
+            .collect();
+
+        // Carol should see messages from Turn 4 and Turn 5 only
+        // Turn 4: Dave's response ("Dave turn 4")
+        // Turn 5: Alice's and Bob's responses ("Alice turn 3" - Alice's 3rd call, "Bob turn 5" - Bob's 3rd call)
+        let has_dave_turn4 = agent_messages
+            .iter()
+            .any(|msg| msg.speaker.name() == "Dave" && msg.content.contains("turn 4"));
+        let has_alice_turn3 = agent_messages
+            .iter()
+            .any(|msg| msg.speaker.name() == "Alice" && msg.content.contains("turn 3"));
+        let has_bob_turn5 = agent_messages
+            .iter()
+            .any(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 5"));
+
+        assert!(
+            has_dave_turn4,
+            "Recent(2) strategy: Carol should see Dave's Turn 4"
+        );
+        assert!(
+            has_alice_turn3,
+            "Recent(2) strategy: Carol should see Alice's response in Turn 5 (her 3rd call)"
+        );
+        assert!(
+            has_bob_turn5,
+            "Recent(2) strategy: Carol should see Bob's response in Turn 5 (his 3rd call)"
+        );
+
+        // Carol should NOT see Turn 1, 2, or 3 responses
+        let has_alice_turn1 = agent_messages
+            .iter()
+            .any(|msg| msg.speaker.name() == "Alice" && msg.content.contains("turn 1"));
+        let has_bob_turn1 = agent_messages
+            .iter()
+            .any(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 1"));
+        let has_dave_turn2 = agent_messages
+            .iter()
+            .any(|msg| msg.speaker.name() == "Dave" && msg.content.contains("turn 2"));
+        let has_bob_turn3 = agent_messages
+            .iter()
+            .any(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 3"));
+
+        assert!(
+            !has_alice_turn1,
+            "Recent(2) strategy: Carol should NOT see Alice's Turn 1 (too old)"
+        );
+        assert!(
+            !has_bob_turn1,
+            "Recent(2) strategy: Carol should NOT see Bob's Turn 1 (too old)"
+        );
+        assert!(
+            !has_dave_turn2,
+            "Recent(2) strategy: Carol should NOT see Dave's Turn 2 (too old)"
+        );
+        assert!(
+            !has_bob_turn3,
+            "Recent(2) strategy: Carol should NOT see Bob's Turn 3 (too old)"
+        );
+
+        // Turn 7: Mention both Carol and Alice
+        let _turn7 = dialogue.run("@Carol and @Alice continue").await.unwrap();
+
+        assert_eq!(
+            carol_clone.get_call_count(),
+            2,
+            "Carol should be called twice"
+        );
+
+        let carol_second_payload = &carol_clone.get_payloads()[1];
+        let turn7_messages = carol_second_payload.to_messages();
+
+        // In Turn 7, Carol should NOT see Alice's concurrent Turn 7 response
+        // and should NOT see old historical messages (marked as sent)
+        let alice_turn7: Vec<_> = turn7_messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Alice")
+            .collect();
+
+        assert_eq!(
+            alice_turn7.len(),
+            0,
+            "In Turn 7, Carol should NOT see Alice's concurrent response"
+        );
+
+        // Verify no historical messages are resent
+        let has_historical = turn7_messages.iter().any(|msg| {
+            msg.content.contains("turn 1")
+                || msg.content.contains("turn 2")
+                || msg.content.contains("turn 3")
+                || msg.content.contains("turn 4")
+                || msg.content.contains("turn 5")
+        });
+
+        assert!(
+            !has_historical,
+            "In Turn 7, Carol should NOT see any historical messages (marked as sent)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_join_in_progress_sequential_mode_with_full_strategy() {
+        use crate::agent::dialogue::joining_strategy::JoiningStrategy;
+        use crate::agent::persona::Persona;
+
+        // Create initial participants for sequential processing
+        let alice = Persona {
+            name: "Alice".to_string(),
+            role: "Analyzer".to_string(),
+            background: "Data analyst".to_string(),
+            communication_style: "Analytical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let bob = Persona {
+            name: "Bob".to_string(),
+            role: "Reviewer".to_string(),
+            background: "Code reviewer".to_string(),
+            communication_style: "Critical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_alice = MockAgent::new(
+            "Alice",
+            vec![
+                "Alice analyzed: turn 1".to_string(),
+                "Alice analyzed: turn 2".to_string(),
+                "Alice analyzed: turn 3".to_string(),
+                "Alice analyzed: turn 4".to_string(),
+            ],
+        );
+        let agent_bob = MockAgent::new(
+            "Bob",
+            vec![
+                "Bob reviewed: turn 1".to_string(),
+                "Bob reviewed: turn 2".to_string(),
+                "Bob reviewed: turn 3".to_string(),
+                "Bob reviewed: turn 4".to_string(),
+            ],
+        );
+        let alice_clone = agent_alice.clone();
+        let bob_clone = agent_bob.clone();
+
+        let mut dialogue = Dialogue::sequential();
+        dialogue.add_participant(alice, agent_alice);
+        dialogue.add_participant(bob, agent_bob);
+
+        // Turn 1 & 2: Alice → Bob (sequential)
+        let _turn1 = dialogue.run("Analyze this data").await.unwrap();
+        let _turn2 = dialogue.run("Continue analysis").await.unwrap();
+
+        // Verify Alice and Bob were called twice each
+        assert_eq!(
+            alice_clone.get_call_count(),
+            2,
+            "Alice should be called twice"
+        );
+        assert_eq!(bob_clone.get_call_count(), 2, "Bob should be called twice");
+
+        // Add Carol mid-dialogue with Full strategy - should see ALL history
+        let carol = Persona {
+            name: "Carol".to_string(),
+            role: "Summarizer".to_string(),
+            background: "Summary specialist".to_string(),
+            communication_style: "Concise".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_carol = MockAgent::new(
+            "Carol",
+            vec![
+                "Carol full summary".to_string(),
+                "Carol summary 2".to_string(),
+            ],
+        );
+        let carol_clone = agent_carol.clone();
+
+        // Carol joins with Full strategy (joins at end of sequence)
+        dialogue.join_in_progress(carol, agent_carol, JoiningStrategy::Full);
+
+        // Turn 3: Alice → Bob → Carol (sequential)
+        let turn3 = dialogue.run("Final analysis").await.unwrap();
+
+        // In sequential mode, only the last agent's output is returned
+        assert_eq!(
+            turn3.len(),
+            1,
+            "Sequential mode returns only last agent's output"
+        );
+        assert_eq!(
+            turn3[0].speaker.name(),
+            "Carol",
+            "Last agent should be Carol"
+        );
+
+        // Verify all agents were called
+        assert_eq!(
+            alice_clone.get_call_count(),
+            3,
+            "Alice should be called 3 times"
+        );
+        assert_eq!(
+            bob_clone.get_call_count(),
+            3,
+            "Bob should be called 3 times"
+        );
+        assert_eq!(
+            carol_clone.get_call_count(),
+            1,
+            "Carol should be called once"
+        );
+
+        // Verify Carol received FULL history (Turn 1 and Turn 2 from Alice and Bob)
+        let carol_payloads = carol_clone.get_payloads();
+        assert_eq!(carol_payloads.len(), 1, "Carol should receive 1 payload");
+
+        let carol_first_payload = &carol_payloads[0];
+        let messages = carol_first_payload.to_messages();
+
+        // Carol should see ALL Turn 1 and Turn 2 historical messages from Alice and Bob
+        let turn1_turn2_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| {
+                let content = msg.content.as_str();
+                (msg.speaker.name() == "Alice" || msg.speaker.name() == "Bob")
+                    && (content.contains("turn 1") || content.contains("turn 2"))
+            })
+            .collect();
+
+        assert_eq!(
+            turn1_turn2_messages.len(),
+            4,
+            "Full strategy in sequential mode: Carol should see ALL 4 historical messages (Alice Turn 1, Bob Turn 1, Alice Turn 2, Bob Turn 2)"
+        );
+
+        // Carol SHOULD also see Bob's Turn 3 output (immediate predecessor in the chain)
+        let bob_turn3_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 3"))
+            .collect();
+
+        assert_eq!(
+            bob_turn3_messages.len(),
+            1,
+            "Carol should see Bob's Turn 3 output (her immediate input in sequential chain)"
+        );
+
+        // Turn 4: Verify Carol receives only differential updates
+        let _turn4 = dialogue.run("Continue").await.unwrap();
+
+        assert_eq!(
+            carol_clone.get_call_count(),
+            2,
+            "Carol should be called twice"
+        );
+
+        let carol_second_payload = &carol_clone.get_payloads()[1];
+        let turn4_messages = carol_second_payload.to_messages();
+
+        // Carol should see Bob's Turn 4 output (current chain input)
+        // but NOT Turn 1, 2, or 3 historical messages (marked as sent)
+        let bob_historical: Vec<_> = turn4_messages
+            .iter()
+            .filter(|msg| {
+                msg.speaker.name() == "Bob"
+                    && (msg.content.contains("turn 1")
+                        || msg.content.contains("turn 2")
+                        || msg.content.contains("turn 3"))
+            })
+            .collect();
+
+        assert_eq!(
+            bob_historical.len(),
+            0,
+            "In Turn 4, Carol should NOT see Bob's Turn 1, 2, or 3 (marked as sent)"
+        );
+
+        // Carol should see Bob's Turn 4 output (new message in the chain)
+        let bob_turn4: Vec<_> = turn4_messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 4"))
+            .collect();
+
+        assert_eq!(
+            bob_turn4.len(),
+            1,
+            "In Turn 4, Carol should see Bob's Turn 4 output (new chain input)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_join_in_progress_sequential_mode_with_recent_strategy() {
+        use crate::agent::dialogue::joining_strategy::JoiningStrategy;
+        use crate::agent::persona::Persona;
+
+        // Create initial participants for sequential processing
+        let alice = Persona {
+            name: "Alice".to_string(),
+            role: "Analyzer".to_string(),
+            background: "Data analyst".to_string(),
+            communication_style: "Analytical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let bob = Persona {
+            name: "Bob".to_string(),
+            role: "Reviewer".to_string(),
+            background: "Code reviewer".to_string(),
+            communication_style: "Critical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_alice = MockAgent::new(
+            "Alice",
+            vec![
+                "Alice analyzed: turn 1".to_string(),
+                "Alice analyzed: turn 2".to_string(),
+                "Alice analyzed: turn 3".to_string(),
+                "Alice analyzed: turn 4".to_string(),
+                "Alice analyzed: turn 5".to_string(),
+                "Alice analyzed: turn 6".to_string(),
+                "Alice analyzed: turn 7".to_string(),
+            ],
+        );
+        let agent_bob = MockAgent::new(
+            "Bob",
+            vec![
+                "Bob reviewed: turn 1".to_string(),
+                "Bob reviewed: turn 2".to_string(),
+                "Bob reviewed: turn 3".to_string(),
+                "Bob reviewed: turn 4".to_string(),
+                "Bob reviewed: turn 5".to_string(),
+                "Bob reviewed: turn 6".to_string(),
+                "Bob reviewed: turn 7".to_string(),
+            ],
+        );
+        let alice_clone = agent_alice.clone();
+        let bob_clone = agent_bob.clone();
+
+        let mut dialogue = Dialogue::sequential();
+        dialogue.add_participant(alice, agent_alice);
+        dialogue.add_participant(bob, agent_bob);
+
+        // Build up 5 turns of history: Alice → Bob
+        for i in 1..=5 {
+            let _ = dialogue.run(format!("Message {}", i)).await.unwrap();
+        }
+
+        // Verify Alice and Bob were called 5 times each
+        assert_eq!(
+            alice_clone.get_call_count(),
+            5,
+            "Alice should be called 5 times"
+        );
+        assert_eq!(
+            bob_clone.get_call_count(),
+            5,
+            "Bob should be called 5 times"
+        );
+
+        // Add Carol mid-dialogue with Recent(2) strategy
+        let carol = Persona {
+            name: "Carol".to_string(),
+            role: "Summarizer".to_string(),
+            background: "Summary specialist".to_string(),
+            communication_style: "Concise".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_carol = MockAgent::new(
+            "Carol",
+            vec![
+                "Carol recent summary".to_string(),
+                "Carol summary 2".to_string(),
+            ],
+        );
+        let carol_clone = agent_carol.clone();
+
+        // Carol joins with Recent(2) strategy (joins at end of sequence)
+        dialogue.join_in_progress(carol, agent_carol, JoiningStrategy::recent_with_turns(2));
+
+        // Turn 6: Alice → Bob → Carol (sequential)
+        let turn6 = dialogue.run("Recent analysis").await.unwrap();
+
+        // In sequential mode, only the last agent's output is returned
+        assert_eq!(
+            turn6.len(),
+            1,
+            "Sequential mode returns only last agent's output"
+        );
+        assert_eq!(
+            turn6[0].speaker.name(),
+            "Carol",
+            "Last agent should be Carol"
+        );
+
+        // Verify all agents were called
+        assert_eq!(
+            alice_clone.get_call_count(),
+            6,
+            "Alice should be called 6 times"
+        );
+        assert_eq!(
+            bob_clone.get_call_count(),
+            6,
+            "Bob should be called 6 times"
+        );
+        assert_eq!(
+            carol_clone.get_call_count(),
+            1,
+            "Carol should be called once"
+        );
+
+        // Verify Carol received ONLY recent 2 turns (Turn 4 and Turn 5)
+        let carol_payloads = carol_clone.get_payloads();
+        assert_eq!(carol_payloads.len(), 1, "Carol should receive 1 payload");
+
+        let carol_first_payload = &carol_payloads[0];
+        let messages = carol_first_payload.to_messages();
+
+        // Carol should see recent Turn 4 and Turn 5 historical messages
+        let turn4_turn5_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| {
+                let content = msg.content.as_str();
+                (msg.speaker.name() == "Alice" || msg.speaker.name() == "Bob")
+                    && (content.contains("turn 4") || content.contains("turn 5"))
+            })
+            .collect();
+
+        assert_eq!(
+            turn4_turn5_messages.len(),
+            4,
+            "Recent(2) strategy in sequential mode: Carol should see 4 recent messages (Alice Turn 4, Bob Turn 4, Alice Turn 5, Bob Turn 5)"
+        );
+
+        // Carol should NOT see Turn 1, 2, or 3
+        let turn1_turn2_turn3: Vec<_> = messages
+            .iter()
+            .filter(|msg| {
+                let content = msg.content.as_str();
+                content.contains("turn 1")
+                    || content.contains("turn 2")
+                    || content.contains("turn 3")
+            })
+            .collect();
+
+        assert_eq!(
+            turn1_turn2_turn3.len(),
+            0,
+            "Recent(2) strategy: Carol should NOT see Turn 1, 2, or 3 (too old)"
+        );
+
+        // Carol SHOULD also see Bob's Turn 6 output (immediate predecessor in the chain)
+        let bob_turn6_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 6"))
+            .collect();
+
+        assert_eq!(
+            bob_turn6_messages.len(),
+            1,
+            "Carol should see Bob's Turn 6 output (her immediate input in sequential chain)"
+        );
+
+        // Turn 7: Verify Carol receives only differential updates
+        let _turn7 = dialogue.run("Continue").await.unwrap();
+
+        assert_eq!(
+            carol_clone.get_call_count(),
+            2,
+            "Carol should be called twice"
+        );
+
+        let carol_second_payload = &carol_clone.get_payloads()[1];
+        let turn7_messages = carol_second_payload.to_messages();
+
+        // Carol should see Bob's Turn 7 output (current chain input)
+        // but NOT any historical messages (marked as sent)
+        let bob_historical: Vec<_> = turn7_messages
+            .iter()
+            .filter(|msg| {
+                msg.speaker.name() == "Bob"
+                    && (msg.content.contains("turn 1")
+                        || msg.content.contains("turn 2")
+                        || msg.content.contains("turn 3")
+                        || msg.content.contains("turn 4")
+                        || msg.content.contains("turn 5")
+                        || msg.content.contains("turn 6"))
+            })
+            .collect();
+
+        assert_eq!(
+            bob_historical.len(),
+            0,
+            "In Turn 7, Carol should NOT see Bob's historical turns (marked as sent)"
+        );
+
+        // Carol should see Bob's Turn 7 output (new message in the chain)
+        let bob_turn7: Vec<_> = turn7_messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 7"))
+            .collect();
+
+        assert_eq!(
+            bob_turn7.len(),
+            1,
+            "In Turn 7, Carol should see Bob's Turn 7 output (new chain input)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_join_in_progress_partial_session_sequential_with_full_strategy() {
+        use crate::agent::dialogue::joining_strategy::JoiningStrategy;
+        use crate::agent::persona::Persona;
+
+        // Create initial participants
+        let alice = Persona {
+            name: "Alice".to_string(),
+            role: "Analyzer".to_string(),
+            background: "Data analyst".to_string(),
+            communication_style: "Analytical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let bob = Persona {
+            name: "Bob".to_string(),
+            role: "Reviewer".to_string(),
+            background: "Code reviewer".to_string(),
+            communication_style: "Critical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_alice = MockAgent::new(
+            "Alice",
+            vec![
+                "Alice analyzed: turn 1".to_string(),
+                "Alice analyzed: turn 2".to_string(),
+                "Alice analyzed: turn 3".to_string(),
+                "Alice analyzed: turn 4".to_string(),
+            ],
+        );
+        let agent_bob = MockAgent::new(
+            "Bob",
+            vec![
+                "Bob reviewed: turn 1".to_string(),
+                "Bob reviewed: turn 2".to_string(),
+                "Bob reviewed: turn 3".to_string(),
+                "Bob reviewed: turn 4".to_string(),
+            ],
+        );
+        let alice_clone = agent_alice.clone();
+
+        let mut dialogue = Dialogue::sequential();
+        dialogue.add_participant(alice, agent_alice);
+        dialogue.add_participant(bob, agent_bob);
+
+        // Turn 1 & 2: Use partial_session
+        let mut session1 = dialogue.partial_session("Analyze this");
+        while let Some(turn) = session1.next_turn().await {
+            turn.unwrap();
+        }
+
+        let mut session2 = dialogue.partial_session("Continue analysis");
+        while let Some(turn) = session2.next_turn().await {
+            turn.unwrap();
+        }
+
+        assert_eq!(
+            alice_clone.get_call_count(),
+            2,
+            "Alice called twice via partial_session"
+        );
+
+        // Add Carol with Full strategy - should see ALL history
+        let carol = Persona {
+            name: "Carol".to_string(),
+            role: "Summarizer".to_string(),
+            background: "Summary specialist".to_string(),
+            communication_style: "Concise".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_carol = MockAgent::new(
+            "Carol",
+            vec![
+                "Carol full summary".to_string(),
+                "Carol summary 2".to_string(),
+            ],
+        );
+        let carol_clone = agent_carol.clone();
+
+        dialogue.join_in_progress(carol, agent_carol, JoiningStrategy::Full);
+
+        // Turn 3: Use partial_session with Carol
+        let mut session3 = dialogue.partial_session("Final summary");
+        let mut turn_count = 0;
+        while let Some(turn) = session3.next_turn().await {
+            turn.unwrap();
+            turn_count += 1;
+        }
+
+        // Sequential mode executes all participants (Alice → Bob → Carol)
+        assert_eq!(
+            turn_count, 3,
+            "Should have 3 turns in sequential partial_session"
+        );
+        assert_eq!(carol_clone.get_call_count(), 1, "Carol called once");
+
+        // Verify Carol received FULL history (Turn 1 and Turn 2)
+        let carol_payloads = carol_clone.get_payloads();
+        assert_eq!(carol_payloads.len(), 1, "Carol should receive 1 payload");
+
+        let carol_first_payload = &carol_payloads[0];
+        let messages = carol_first_payload.to_messages();
+
+        // Carol should see ALL Turn 1 and Turn 2 historical messages
+        let historical_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| {
+                let content = msg.content.as_str();
+                (msg.speaker.name() == "Alice" || msg.speaker.name() == "Bob")
+                    && (content.contains("turn 1") || content.contains("turn 2"))
+            })
+            .collect();
+
+        assert_eq!(
+            historical_messages.len(),
+            4,
+            "Full strategy in partial_session sequential: Carol should see ALL 4 historical messages (Alice Turn 1, Bob Turn 1, Alice Turn 2, Bob Turn 2)"
+        );
+
+        // Carol SHOULD see Bob's Turn 3 output (immediate predecessor in chain)
+        let bob_turn3: Vec<_> = messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 3"))
+            .collect();
+
+        assert_eq!(
+            bob_turn3.len(),
+            1,
+            "Carol should see Bob's Turn 3 output via partial_session"
+        );
+
+        // Turn 4: Verify differential updates via partial_session
+        let mut session4 = dialogue.partial_session("Continue");
+        while let Some(turn) = session4.next_turn().await {
+            turn.unwrap();
+        }
+
+        assert_eq!(carol_clone.get_call_count(), 2, "Carol called twice");
+
+        let carol_second_payload = &carol_clone.get_payloads()[1];
+        let turn4_messages = carol_second_payload.to_messages();
+
+        // Carol should NOT see Turn 1, 2, or 3 historical messages
+        let historical_turn4: Vec<_> = turn4_messages
+            .iter()
+            .filter(|msg| {
+                msg.speaker.name() == "Bob"
+                    && (msg.content.contains("turn 1")
+                        || msg.content.contains("turn 2")
+                        || msg.content.contains("turn 3"))
+            })
+            .collect();
+
+        assert_eq!(
+            historical_turn4.len(),
+            0,
+            "In Turn 4 via partial_session, Carol should NOT see Turn 1, 2, or 3 (marked as sent)"
+        );
+
+        // Carol should see Bob's Turn 4 output (new chain input)
+        let bob_turn4: Vec<_> = turn4_messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 4"))
+            .collect();
+
+        assert_eq!(
+            bob_turn4.len(),
+            1,
+            "In Turn 4 via partial_session, Carol should see Bob's Turn 4 output"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_join_in_progress_partial_session_sequential_with_recent_strategy() {
+        use crate::agent::dialogue::joining_strategy::JoiningStrategy;
+        use crate::agent::persona::Persona;
+
+        // Create initial participants
+        let alice = Persona {
+            name: "Alice".to_string(),
+            role: "Analyzer".to_string(),
+            background: "Data analyst".to_string(),
+            communication_style: "Analytical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let bob = Persona {
+            name: "Bob".to_string(),
+            role: "Reviewer".to_string(),
+            background: "Code reviewer".to_string(),
+            communication_style: "Critical".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_alice = MockAgent::new(
+            "Alice",
+            vec![
+                "Alice analyzed: turn 1".to_string(),
+                "Alice analyzed: turn 2".to_string(),
+                "Alice analyzed: turn 3".to_string(),
+                "Alice analyzed: turn 4".to_string(),
+                "Alice analyzed: turn 5".to_string(),
+                "Alice analyzed: turn 6".to_string(),
+                "Alice analyzed: turn 7".to_string(),
+            ],
+        );
+        let agent_bob = MockAgent::new(
+            "Bob",
+            vec![
+                "Bob reviewed: turn 1".to_string(),
+                "Bob reviewed: turn 2".to_string(),
+                "Bob reviewed: turn 3".to_string(),
+                "Bob reviewed: turn 4".to_string(),
+                "Bob reviewed: turn 5".to_string(),
+                "Bob reviewed: turn 6".to_string(),
+                "Bob reviewed: turn 7".to_string(),
+            ],
+        );
+        let alice_clone = agent_alice.clone();
+
+        let mut dialogue = Dialogue::sequential();
+        dialogue.add_participant(alice, agent_alice);
+        dialogue.add_participant(bob, agent_bob);
+
+        // Build up 5 turns of history using partial_session
+        for i in 1..=5 {
+            let mut session = dialogue.partial_session(format!("Message {}", i));
+            while let Some(turn) = session.next_turn().await {
+                turn.unwrap();
+            }
+        }
+
+        assert_eq!(
+            alice_clone.get_call_count(),
+            5,
+            "Alice called 5 times via partial_session"
+        );
+
+        // Add Carol with Recent(2) strategy - should see only last 2 turns
+        let carol = Persona {
+            name: "Carol".to_string(),
+            role: "Summarizer".to_string(),
+            background: "Summary specialist".to_string(),
+            communication_style: "Concise".to_string(),
+            visual_identity: None,
+            capabilities: None,
+        };
+
+        let agent_carol = MockAgent::new(
+            "Carol",
+            vec![
+                "Carol recent summary".to_string(),
+                "Carol summary 2".to_string(),
+            ],
+        );
+        let carol_clone = agent_carol.clone();
+
+        dialogue.join_in_progress(carol, agent_carol, JoiningStrategy::recent_with_turns(2));
+
+        // Turn 6: Use partial_session with Carol
+        let mut session6 = dialogue.partial_session("Recent summary");
+        let mut turn_count = 0;
+        while let Some(turn) = session6.next_turn().await {
+            turn.unwrap();
+            turn_count += 1;
+        }
+
+        // Sequential mode executes all participants (Alice → Bob → Carol)
+        assert_eq!(
+            turn_count, 3,
+            "Should have 3 turns in sequential partial_session"
+        );
+        assert_eq!(carol_clone.get_call_count(), 1, "Carol called once");
+
+        // Verify Carol received ONLY recent 2 turns (Turn 4 and Turn 5)
+        let carol_payloads = carol_clone.get_payloads();
+        assert_eq!(carol_payloads.len(), 1, "Carol should receive 1 payload");
+
+        let carol_first_payload = &carol_payloads[0];
+        let messages = carol_first_payload.to_messages();
+
+        // Carol should see recent Turn 4 and Turn 5 historical messages
+        let turn4_turn5_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| {
+                let content = msg.content.as_str();
+                (msg.speaker.name() == "Alice" || msg.speaker.name() == "Bob")
+                    && (content.contains("turn 4") || content.contains("turn 5"))
+            })
+            .collect();
+
+        assert_eq!(
+            turn4_turn5_messages.len(),
+            4,
+            "Recent(2) strategy in partial_session sequential: Carol should see 4 recent messages (Alice Turn 4, Bob Turn 4, Alice Turn 5, Bob Turn 5)"
+        );
+
+        // Carol should NOT see Turn 1, 2, or 3
+        let turn1_turn2_turn3: Vec<_> = messages
+            .iter()
+            .filter(|msg| {
+                let content = msg.content.as_str();
+                content.contains("turn 1")
+                    || content.contains("turn 2")
+                    || content.contains("turn 3")
+            })
+            .collect();
+
+        assert_eq!(
+            turn1_turn2_turn3.len(),
+            0,
+            "Recent(2) strategy: Carol should NOT see Turn 1, 2, or 3 (too old)"
+        );
+
+        // Carol SHOULD see Bob's Turn 6 output (immediate predecessor in chain)
+        let bob_turn6: Vec<_> = messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 6"))
+            .collect();
+
+        assert_eq!(
+            bob_turn6.len(),
+            1,
+            "Carol should see Bob's Turn 6 output via partial_session"
+        );
+
+        // Turn 7: Verify differential updates via partial_session
+        let mut session7 = dialogue.partial_session("Continue");
+        while let Some(turn) = session7.next_turn().await {
+            turn.unwrap();
+        }
+
+        assert_eq!(carol_clone.get_call_count(), 2, "Carol called twice");
+
+        let carol_second_payload = &carol_clone.get_payloads()[1];
+        let turn7_messages = carol_second_payload.to_messages();
+
+        // Carol should NOT see any historical messages (marked as sent)
+        let historical_turn7: Vec<_> = turn7_messages
+            .iter()
+            .filter(|msg| {
+                msg.speaker.name() == "Bob"
+                    && (msg.content.contains("turn 1")
+                        || msg.content.contains("turn 2")
+                        || msg.content.contains("turn 3")
+                        || msg.content.contains("turn 4")
+                        || msg.content.contains("turn 5")
+                        || msg.content.contains("turn 6"))
+            })
+            .collect();
+
+        assert_eq!(
+            historical_turn7.len(),
+            0,
+            "In Turn 7 via partial_session, Carol should NOT see historical turns (marked as sent)"
+        );
+
+        // Carol should see Bob's Turn 7 output (new chain input)
+        let bob_turn7: Vec<_> = turn7_messages
+            .iter()
+            .filter(|msg| msg.speaker.name() == "Bob" && msg.content.contains("turn 7"))
+            .collect();
+
+        assert_eq!(
+            bob_turn7.len(),
+            1,
+            "In Turn 7 via partial_session, Carol should see Bob's Turn 7 output"
         );
     }
 }
