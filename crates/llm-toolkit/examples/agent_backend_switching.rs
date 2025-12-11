@@ -5,6 +5,8 @@
 //!
 //! Run with: cargo run --example agent_backend_switching --features agent
 
+#![allow(deprecated)]
+
 use llm_toolkit::{Agent, agent::Agent as AgentTrait};
 use serde::{Deserialize, Serialize};
 

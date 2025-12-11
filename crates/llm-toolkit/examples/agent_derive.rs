@@ -5,6 +5,8 @@
 //!
 //! Run with: cargo run --example agent_derive --features agent
 
+#![allow(deprecated)]
+
 use llm_toolkit::{Agent, agent::Agent as AgentTrait};
 use serde::{Deserialize, Serialize};
 

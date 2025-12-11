@@ -5,6 +5,8 @@
 //!
 //! Run with: cargo run --example agent_retry_test --features agent
 
+#![allow(deprecated)]
+
 use async_trait::async_trait;
 use llm_toolkit::Agent;
 use llm_toolkit::agent::{Agent as AgentTrait, AgentError, Payload};

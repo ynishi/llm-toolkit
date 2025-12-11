@@ -5,6 +5,8 @@
 //!
 //! Run with: cargo run --example agent_with_toprompt_schema --features agent,derive
 
+#![allow(deprecated)]
+
 use llm_toolkit::agent::Agent as AgentTrait;
 use llm_toolkit::{Agent, ToPrompt};
 use serde::{Deserialize, Serialize};

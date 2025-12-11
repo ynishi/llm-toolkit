@@ -5,6 +5,8 @@
 //!
 //! Run with: cargo run --example agent_auto_json_test --features agent
 
+#![allow(deprecated)]
+
 use llm_toolkit::Agent;
 use llm_toolkit::agent::Agent as AgentTrait;
 use serde::{Deserialize, Serialize};

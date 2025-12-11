@@ -13,6 +13,8 @@
 //!
 //! Run with: cargo run --example orchestrator_type_marker_production --features agent,derive
 
+#![allow(deprecated)]
+
 use llm_toolkit::agent::impls::ClaudeCodeAgent;
 use llm_toolkit::orchestrator::{BlueprintWorkflow, Orchestrator, StrategyMap, StrategyStep};
 use llm_toolkit::{Agent, ToPrompt, type_marker};

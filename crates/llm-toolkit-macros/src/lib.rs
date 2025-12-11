@@ -4758,12 +4758,44 @@ fn generate_default_impl(
 
 /// Derive macro for implementing the Agent trait
 ///
-/// # Usage
+/// # ⚠️ DEPRECATED
+///
+/// This macro is deprecated and will be removed in a future version.
+/// Please use the `#[agent(...)]` attribute macro instead, which provides:
+/// - Automatic expertise injection into prompts
+/// - Generic inner agent support for testing
+/// - Default implementation generation
+/// - Better composability with PersonaAgent
+///
+/// # Migration Guide
+///
+/// **Before (deprecated):**
 /// ```ignore
 /// #[derive(Agent)]
 /// #[agent(expertise = "Rust expert", output = "MyOutputType")]
 /// struct MyAgent;
 /// ```
+///
+/// **After (recommended):**
+/// ```ignore
+/// #[agent(expertise = "Rust expert", output = "MyOutputType")]
+/// struct MyAgent;
+///
+/// let agent = MyAgent::default();  // Now available!
+/// ```
+///
+/// # Why Deprecated
+///
+/// The `#[derive(Agent)]` macro has a critical limitation: it does NOT inject
+/// expertise into the prompt, meaning the LLM never sees your expertise definition.
+/// The `#[agent(...)]` attribute macro fixes this by wrapping the inner agent
+/// with proper expertise injection.
+///
+/// **Planned for removal:** Version 0.60.0 (Q2 2025)
+#[deprecated(
+    since = "0.59.0",
+    note = "Use #[agent(...)] attribute macro instead. This macro does not inject expertise into prompts."
+)]
 #[proc_macro_derive(Agent, attributes(agent))]
 pub fn derive_agent(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

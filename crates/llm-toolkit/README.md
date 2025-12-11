@@ -32,9 +32,9 @@ This document proposes the creation of `llm-toolkit`, a new library crate design
 | **External Prompt Templates** | Load prompt templates from external files to separate prompts from Rust code. | `#[prompt(template_file = "...")]` attribute | Implemented |
 | **Type-Safe Intent Definition** | Generate prompt builders and extractors from a single enum definition. | `#[define_intent]` macro | Implemented |
 | **Intent Extraction** | Extracting structured intents (e.g., enums) from LLM responses. | `intent` module (`IntentFrame`, `IntentExtractor`) | Implemented |
-| **Agent API** | Define reusable AI agents with expertise and structured outputs. | `Agent` trait, `#[derive(Agent)]` macro | Implemented |
+| **Agent API** | Define reusable AI agents with expertise and structured outputs. | `Agent` trait, `#[agent(...)]` macro (recommended), `#[derive(Agent)]` (deprecated) | Implemented |
 | **Agent Description & Capabilities** | Lightweight agent metadata for orchestrator routing with auto-generated descriptions and explicit capability declarations. | `description` attribute, `capabilities` attribute, `Expertise::auto_description_from_text()` | Implemented (v0.57.0) |
-| **Auto-JSON Enforcement** | Automatically add JSON schema instructions to agent prompts for better LLM compliance. | `#[derive(Agent)]` with `ToPrompt::prompt_schema()` integration | Implemented |
+| **Auto-JSON Enforcement** | Automatically add JSON schema instructions to agent prompts for better LLM compliance. | `#[agent(...)]` with `ToPrompt::prompt_schema()` integration | Implemented |
 | **Built-in Retry** | Intelligent retry with 3-priority delay system: server retry_after (Priority 1), 429 exponential backoff (Priority 2), linear backoff (Priority 3). Includes RetryAgent decorator and Full Jitter. | `max_retries` attribute, `RetryAgent`, `retry_after` field | Implemented |
 | **Multi-Modal Payload** | Pass text and images to agents and dialogues through a unified `Payload` interface with backward compatibility. | `Payload`, `PayloadContent` types, `impl Into<Payload>` | Implemented |
 | **Dynamic Payload Instructions** | Prepend turn-specific instructions or constraints to payloads without modifying Persona definitions. | `prepend_message()`, `prepend_system()` | Implemented |
@@ -2281,9 +2281,15 @@ let result = codex.execute("Research the latest Rust async patterns".to_string()
 
 `llm-toolkit` provides two ways to define agents, each optimized for different use cases:
 
-##### 1. Simple Agents with `#[derive(Agent)]` (Recommended for Prototyping)
+##### 1. ⚠️ Simple Agents with `#[derive(Agent)]` (DEPRECATED - Use `#[agent(...)]` instead)
 
-For quick prototyping and simple use cases, use the derive macro:
+**⚠️ DEPRECATED:** This approach is deprecated as of v0.59.0 and will be removed in v0.60.0 (Q2 2025).
+
+**Critical Issue:** The `#[derive(Agent)]` macro does NOT inject expertise into prompts, meaning the LLM never sees your expertise definition. This leads to poor results.
+
+**Migration:** Simply remove `#[derive(Agent)]` and use only `#[agent(...)]` (see section 2 below).
+
+For historical reference, the old derive macro syntax was:
 
 ```rust
 use llm_toolkit::Agent;
@@ -2705,9 +2711,16 @@ let error = AgentError::process_error_with_retry_after(
 // This prevents overwhelming rate-limited APIs and respects server guidance
 ```
 
-##### 2. Advanced Agents with `#[agent(...)]` (Recommended for Production)
+##### 2. ✅ Production Agents with `#[agent(...)]` (RECOMMENDED - Use This!)
 
-For production use, testing, and when you need agent injection:
+**This is the recommended way to define agents.** The `#[agent(...)]` attribute macro:
+- ✅ Automatically injects expertise into prompts (the LLM sees your expertise!)
+- ✅ Generates `Default` implementation for easy instantiation
+- ✅ Supports generic inner agents for testing with mocks
+- ✅ Provides better composability with PersonaAgent
+- ✅ Full feature set for production use
+
+**Quick Start:**
 
 ```rust
 use llm_toolkit::agent::impls::ClaudeCodeAgent;
@@ -3080,9 +3093,9 @@ let agent = AdvancedAnalyzerAgent::default()  // init_analyzer applied
 ```
 
 **When to use which:**
-- **`#[derive(Agent)]`**: Quick scripts, prototyping, simple tools
-- **`#[agent(...)]` with `backend`**: Production with Claude/Gemini
-- **`#[agent(...)]` with `default_inner`**: Custom backends (Olama, local models, mocks)
+- **`#[agent(...)]` with `backend`**: ✅ **RECOMMENDED** - Production with Claude/Gemini
+- **`#[agent(...)]` with `default_inner`**: Custom backends (Ollama, local models, mocks)
+- **`#[derive(Agent)]`**: ⚠️ **DEPRECATED** - Do not use (expertise not injected)
 
 ### Multi-Agent Orchestration
 
