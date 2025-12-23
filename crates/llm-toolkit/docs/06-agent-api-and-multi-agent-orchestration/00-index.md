@@ -11,3 +11,4 @@
 - [Context-Aware Detection & Enrichment](./04-context-aware-detection-enrichment.md)
 - [High-Performance Parallel Execution with ParallelOrchestrator](./05-high-performance-parallel-execution-with.md)
 - [Parallel Orchestrator with Human-in-the-Loop (HIL)](./06-parallel-orchestrator-with-human-in-the-.md)
+- [Retrieval-Augmented Generation (RAG)](./07-retrieval-augmented-generation.md)
