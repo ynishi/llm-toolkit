@@ -31,6 +31,7 @@
 
 use crate::agent::{Agent, AgentError, Payload};
 use crate::attachment::Attachment;
+use crate::models::GeminiModel;
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -38,8 +39,6 @@ use reqwest::{Client, StatusCode, header::HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::time::Duration;
-
-const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
 const BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
 /// Agent implementation that talks to the Gemini HTTP API.
@@ -70,7 +69,7 @@ impl GeminiApiAgent {
     ///
     /// Environment variables:
     /// - `GEMINI_API_KEY` (required)
-    /// - `GEMINI_MODEL` (optional, defaults to `gemini-2.5-flash`)
+    /// - `GEMINI_MODEL` (optional, defaults to Gemini 2.5 Flash)
     pub fn try_from_env() -> Result<Self, AgentError> {
         let api_key = env::var("GEMINI_API_KEY").map_err(|_| {
             AgentError::ExecutionFailed(
@@ -78,7 +77,9 @@ impl GeminiApiAgent {
             )
         })?;
 
-        let model = env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string());
+        let model = env::var("GEMINI_MODEL")
+            .map(|s| s.parse::<GeminiModel>().unwrap_or_default().as_api_id().to_string())
+            .unwrap_or_else(|_| GeminiModel::default().as_api_id().to_string());
 
         Ok(Self::new(api_key, model))
     }
@@ -106,9 +107,15 @@ impl GeminiApiAgent {
         Ok(agent)
     }
 
-    /// Overrides the model after construction.
+    /// Overrides the model after construction using a string.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
+        self
+    }
+
+    /// Overrides the model using a typed [`GeminiModel`].
+    pub fn with_gemini_model(mut self, model: GeminiModel) -> Self {
+        self.model = model.as_api_id().to_string();
         self
     }
 

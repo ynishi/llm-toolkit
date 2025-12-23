@@ -22,5 +22,7 @@
 | **Context-Aware Detection** | Automatically infer task health, task type, and user states from execution patterns using layered detection (rule-based + LLM-based). Orchestrator automatically enriches agent payloads with detected context. | `DetectedContext`, `RuleBasedDetector`, `AgentBasedDetector`, `DetectionMode` | Implemented |
 | **Execution Profiles** | Declaratively configure agent behavior (Creative/Balanced/Deterministic) via semantic profiles. | `ExecutionProfile` enum, `profile` attribute, `.with_execution_profile()` | Implemented (v0.13.0) |
 | **Template File Validation** | Compile-time validation of template file paths with helpful error messages. | `template_file` attribute validation | Implemented (v0.13.0) |
+| **Type-Safe Model Identifiers** | Enum-based model identifiers with validation for Claude, Gemini, and OpenAI. Prevents typos, supports Custom variants with prefix validation, and provides both API IDs and CLI names. | `ClaudeModel`, `GeminiModel`, `OpenAIModel`, `Model` enums | Implemented (v0.59.0) |
+| **Direct API Clients** | HTTP API clients for LLM providers without CLI dependency. Includes retry support, multi-modal payloads, and provider-specific features (Gemini thinking, Google Search). | `AnthropicApiAgent`, `GeminiApiAgent`, `OpenAIApiAgent` | Implemented (v0.58.0) |
 | **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
 

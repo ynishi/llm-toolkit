@@ -12,3 +12,4 @@
 - [High-Performance Parallel Execution with ParallelOrchestrator](./05-high-performance-parallel-execution-with.md)
 - [Parallel Orchestrator with Human-in-the-Loop (HIL)](./06-parallel-orchestrator-with-human-in-the-.md)
 - [Retrieval-Augmented Generation (RAG)](./07-retrieval-augmented-generation.md)
+- [Direct API Clients and Type-Safe Models](./08-direct-api-clients-and-models.md)

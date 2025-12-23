@@ -4,6 +4,7 @@
 //! with prompts and configuration options.
 
 use crate::agent::{Agent, AgentError, Payload};
+use crate::models::OpenAIModel;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
@@ -11,39 +12,10 @@ use tracing::{debug, error, info, instrument};
 
 use super::cli_agent::{CliAgent, CliAgentConfig};
 
-/// Supported OpenAI Codex models
-#[derive(Debug, Clone, Default)]
-pub enum CodexModel {
-    /// GPT-5.1 Codex - Optimized for long-running, agentic coding tasks (default for macOS/Linux)
-    #[default]
-    Gpt51Codex,
-    /// GPT-5.1 Codex Mini - Smaller, more cost-effective version
-    Gpt51CodexMini,
-    /// GPT-5.1 - Great for coding and agentic tasks across domains (default for Windows)
-    Gpt51,
-    /// GPT-5 Codex - Legacy version for agentic coding tasks
-    Gpt5Codex,
-    /// GPT-5 Codex Mini - Legacy cost-effective alternative
-    Gpt5CodexMini,
-    /// GPT-5 - Legacy reasoning model for coding tasks
-    Gpt5,
-    /// Custom model string
-    Custom(String),
-}
-
-impl CodexModel {
-    fn as_str(&self) -> &str {
-        match self {
-            CodexModel::Gpt51Codex => "gpt-5.1-codex",
-            CodexModel::Gpt51CodexMini => "gpt-5.1-codex-mini",
-            CodexModel::Gpt51 => "gpt-5.1",
-            CodexModel::Gpt5Codex => "gpt-5-codex",
-            CodexModel::Gpt5CodexMini => "gpt-5-codex-mini",
-            CodexModel::Gpt5 => "gpt-5",
-            CodexModel::Custom(s) => s.as_str(),
-        }
-    }
-}
+/// Type alias for backward compatibility.
+/// Use [`OpenAIModel`] directly for new code.
+#[deprecated(since = "0.59.0", note = "Use OpenAIModel directly")]
+pub type CodexModel = OpenAIModel;
 
 /// A general-purpose agent that executes tasks using the Codex CLI.
 ///
@@ -77,7 +49,7 @@ pub struct CodexAgent {
     /// Path to the `codex` executable. If None, searches in PATH.
     codex_path: Option<PathBuf>,
     /// Model to use for generation
-    model: Option<CodexModel>,
+    model: Option<OpenAIModel>,
     /// Common CLI agent configuration
     config: CliAgentConfig,
     /// Sandbox mode (read-only, workspace-write, danger-full-access)
@@ -121,7 +93,7 @@ impl CodexAgent {
     }
 
     /// Sets the model to use.
-    pub fn with_model(mut self, model: CodexModel) -> Self {
+    pub fn with_model(mut self, model: OpenAIModel) -> Self {
         self.model = Some(model);
         self
     }
@@ -129,17 +101,10 @@ impl CodexAgent {
     /// Sets the model using a string identifier.
     ///
     /// Accepts: "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1", "gpt-5-codex",
-    /// "gpt-5-codex-mini", "gpt-5", or any custom model name
+    /// "gpt-5-codex-mini", "gpt-5", or any custom model name.
+    /// See [`OpenAIModel`] for all supported variants.
     pub fn with_model_str(mut self, model: &str) -> Self {
-        self.model = Some(match model {
-            "gpt-5.1-codex" => CodexModel::Gpt51Codex,
-            "gpt-5.1-codex-mini" => CodexModel::Gpt51CodexMini,
-            "gpt-5.1" => CodexModel::Gpt51,
-            "gpt-5-codex" => CodexModel::Gpt5Codex,
-            "gpt-5-codex-mini" => CodexModel::Gpt5CodexMini,
-            "gpt-5" => CodexModel::Gpt5,
-            _ => CodexModel::Custom(model.to_string()),
-        });
+        self.model = Some(model.parse().unwrap_or(OpenAIModel::Gpt51Codex));
         self
     }
 
@@ -369,10 +334,10 @@ impl CliAgent for CodexAgent {
 
         // Add model if specified
         if let Some(model) = &self.model {
-            cmd.arg("-m").arg(model.as_str());
+            cmd.arg("-m").arg(model.as_api_id());
             debug!(
                 target: "llm_toolkit::agent::codex",
-                "Using model: {}", model.as_str()
+                "Using model: {}", model.as_api_id()
             );
         }
 
@@ -552,8 +517,8 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_model_custom() {
-        let model = CodexModel::Custom("gpt-4".to_string());
-        assert_eq!(model.as_str(), "gpt-4");
+    fn test_openai_model_custom() {
+        let model = OpenAIModel::Custom("gpt-4".to_string());
+        assert_eq!(model.as_api_id(), "gpt-4");
     }
 }

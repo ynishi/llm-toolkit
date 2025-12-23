@@ -29,13 +29,17 @@ High-level LLM frameworks like LangChain can be problematic in Rust. Their heavy
 
 ```toml
 [dependencies]
-llm-toolkit = "0.58"
+llm-toolkit = "0.59"
 
 # With derive macros
-llm-toolkit = { version = "0.58", features = ["derive"] }
+llm-toolkit = { version = "0.59", features = ["derive"] }
 
 # With full agent support
-llm-toolkit = { version = "0.58", features = ["agent"] }
+llm-toolkit = { version = "0.59", features = ["agent"] }
+
+# With direct API clients (no CLI dependency)
+llm-toolkit = { version = "0.59", features = ["all-apis"] }
+# Or individual: "anthropic-api", "gemini-api", "openai-api"
 ```
 
 ### Extract JSON from LLM Response
@@ -97,6 +101,8 @@ struct CodeReviewer;
 | **Agent API** | `#[agent(...)]` macro with retry, profiles, and multi-modal support |
 | **Orchestration** | `Orchestrator` for multi-agent workflows |
 | **Context Detection** | Rule-based and LLM-based context inference |
+| **Type-Safe Models** | `ClaudeModel`, `GeminiModel`, `OpenAIModel` enums with validation |
+| **Direct API Clients** | HTTP API agents for Anthropic, Gemini, OpenAI (no CLI required) |
 
 ## Documentation
 

@@ -27,6 +27,7 @@
 
 use crate::agent::{Agent, AgentError, Payload};
 use crate::attachment::Attachment;
+use crate::models::ClaudeModel;
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -34,8 +35,6 @@ use reqwest::{Client, StatusCode, header::HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::time::Duration;
-
-const DEFAULT_CLAUDE_MODEL: &str = "claude-sonnet-4-20250514";
 const BASE_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
@@ -65,7 +64,7 @@ impl AnthropicApiAgent {
     ///
     /// Environment variables:
     /// - `ANTHROPIC_API_KEY` (required)
-    /// - `ANTHROPIC_MODEL` (optional, defaults to `claude-sonnet-4-20250514`)
+    /// - `ANTHROPIC_MODEL` (optional, defaults to Claude Sonnet 4.5)
     pub fn try_from_env() -> Result<Self, AgentError> {
         let api_key = env::var("ANTHROPIC_API_KEY").map_err(|_| {
             AgentError::ExecutionFailed(
@@ -73,15 +72,22 @@ impl AnthropicApiAgent {
             )
         })?;
 
-        let model =
-            env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string());
+        let model = env::var("ANTHROPIC_MODEL")
+            .map(|s| s.parse::<ClaudeModel>().unwrap_or_default().as_api_id().to_string())
+            .unwrap_or_else(|_| ClaudeModel::default().as_api_id().to_string());
 
         Ok(Self::new(api_key, model))
     }
 
-    /// Overrides the model after construction.
+    /// Overrides the model after construction using a string.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
+        self
+    }
+
+    /// Overrides the model using a typed [`ClaudeModel`].
+    pub fn with_claude_model(mut self, model: ClaudeModel) -> Self {
+        self.model = model.as_api_id().to_string();
         self
     }
 

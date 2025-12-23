@@ -26,6 +26,7 @@
 
 use crate::agent::{Agent, AgentError, Payload};
 use crate::attachment::Attachment;
+use crate::models::OpenAIModel;
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -34,7 +35,6 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::time::Duration;
 
-const DEFAULT_OPENAI_MODEL: &str = "gpt-4o";
 const BASE_URL: &str = "https://api.openai.com/v1/chat/completions";
 
 /// Agent implementation that talks to the OpenAI HTTP API.
@@ -61,7 +61,7 @@ impl OpenAIApiAgent {
     ///
     /// Environment variables:
     /// - `OPENAI_API_KEY` (required)
-    /// - `OPENAI_MODEL` (optional, defaults to `gpt-4o`)
+    /// - `OPENAI_MODEL` (optional, defaults to GPT-4o)
     pub fn try_from_env() -> Result<Self, AgentError> {
         let api_key = env::var("OPENAI_API_KEY").map_err(|_| {
             AgentError::ExecutionFailed(
@@ -69,14 +69,22 @@ impl OpenAIApiAgent {
             )
         })?;
 
-        let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string());
+        let model = env::var("OPENAI_MODEL")
+            .map(|s| s.parse::<OpenAIModel>().unwrap_or_default().as_api_id().to_string())
+            .unwrap_or_else(|_| OpenAIModel::default().as_api_id().to_string());
 
         Ok(Self::new(api_key, model))
     }
 
-    /// Overrides the model after construction.
+    /// Overrides the model after construction using a string.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
+        self
+    }
+
+    /// Overrides the model using a typed [`OpenAIModel`].
+    pub fn with_openai_model(mut self, model: OpenAIModel) -> Self {
+        self.model = model.as_api_id().to_string();
         self
     }
 

@@ -4,31 +4,13 @@
 //! with prompts and configuration options.
 
 use crate::agent::{Agent, AgentError, Payload};
+use crate::models::GeminiModel;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tracing::{debug, error, info, instrument};
 
 use super::cli_agent::{CliAgent, CliAgentConfig};
-
-/// Supported Gemini models
-#[derive(Debug, Clone, Copy, Default)]
-pub enum GeminiModel {
-    /// Gemini 2.5 Flash - Fast and efficient
-    #[default]
-    Flash,
-    /// Gemini 2.5 Pro - Most capable
-    Pro,
-}
-
-impl GeminiModel {
-    fn as_str(&self) -> &str {
-        match self {
-            GeminiModel::Flash => "gemini-2.5-flash",
-            GeminiModel::Pro => "gemini-2.5-pro",
-        }
-    }
-}
 
 /// A general-purpose agent that executes tasks using the Gemini CLI.
 ///
@@ -102,13 +84,10 @@ impl GeminiAgent {
 
     /// Sets the model using a string identifier.
     ///
-    /// Accepts: "flash", "pro", "gemini-2.5-flash", "gemini-2.5-pro"
+    /// Accepts: "flash", "pro", "gemini-2.5-flash", "gemini-2.5-pro", etc.
+    /// See [`GeminiModel`] for all supported variants.
     pub fn with_model_str(mut self, model: &str) -> Self {
-        self.model = match model {
-            "flash" | "gemini-2.5-flash" => GeminiModel::Flash,
-            "pro" | "gemini-2.5-pro" => GeminiModel::Pro,
-            _ => GeminiModel::Flash, // Default fallback
-        };
+        self.model = model.parse().unwrap_or_default();
         self
     }
 
@@ -322,7 +301,7 @@ impl CliAgent for GeminiAgent {
         self.config.apply_to_command(&mut cmd);
 
         // Add model argument
-        cmd.arg("--model").arg(self.model.as_str());
+        cmd.arg("--model").arg(self.model.as_api_id());
 
         // Add extra CLI arguments from config
         for arg in &self.config.extra_args {
@@ -445,16 +424,16 @@ mod tests {
 
     #[test]
     fn test_gemini_agent_with_model() {
-        let agent = GeminiAgent::new().with_model(GeminiModel::Pro);
+        let agent = GeminiAgent::new().with_model(GeminiModel::Pro25);
 
-        assert!(matches!(agent.model, GeminiModel::Pro));
+        assert!(matches!(agent.model, GeminiModel::Pro25));
     }
 
     #[test]
     fn test_gemini_agent_with_model_str() {
         let agent = GeminiAgent::new().with_model_str("pro");
 
-        assert!(matches!(agent.model, GeminiModel::Pro));
+        assert!(matches!(agent.model, GeminiModel::Pro25));
     }
 
     #[test]
@@ -551,12 +530,12 @@ mod tests {
     #[test]
     fn test_gemini_agent_builder_pattern_comprehensive() {
         let agent = GeminiAgent::new()
-            .with_model(GeminiModel::Pro)
+            .with_model(GeminiModel::Pro25)
             .with_cwd("/project")
             .with_env("PATH", "/custom/path")
             .with_arg("--experimental");
 
-        assert!(matches!(agent.model, GeminiModel::Pro));
+        assert!(matches!(agent.model, GeminiModel::Pro25));
         assert_eq!(agent.config.working_dir, Some(PathBuf::from("/project")));
         assert_eq!(
             agent.config.env_vars.get("PATH"),

@@ -4,6 +4,7 @@
 //! with the `-p` flag to pass prompts directly.
 
 use crate::agent::{Agent, AgentError, Payload};
+use crate::models::ClaudeModel;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -12,28 +13,6 @@ use tokio::process::Command;
 use tracing::{debug, error, info, instrument};
 
 use super::cli_agent::{CliAgent, CliAgentConfig};
-
-/// Supported Claude models
-#[derive(Debug, Clone, Copy, Default)]
-pub enum ClaudeModel {
-    /// Claude Sonnet 4.5 - Balanced performance and speed
-    #[default]
-    Sonnet45,
-    /// Claude Sonnet 4 - Previous generation balanced model
-    Sonnet4,
-    /// Claude Opus 4 - Most capable model
-    Opus4,
-}
-
-impl ClaudeModel {
-    fn as_str(&self) -> &str {
-        match self {
-            ClaudeModel::Sonnet45 => "claude-sonnet-4.5",
-            ClaudeModel::Sonnet4 => "claude-sonnet-4",
-            ClaudeModel::Opus4 => "claude-opus-4",
-        }
-    }
-}
 
 /// A general-purpose agent that executes tasks using the Claude CLI.
 ///
@@ -106,13 +85,9 @@ impl ClaudeCodeAgent {
     /// Sets the model using a string identifier.
     ///
     /// Accepts: "sonnet", "sonnet-4.5", "sonnet-4", "opus", "opus-4", etc.
+    /// See [`ClaudeModel`] for all supported variants.
     pub fn with_model_str(mut self, model: &str) -> Self {
-        self.model = Some(match model {
-            "sonnet" | "sonnet-4.5" | "claude-sonnet-4.5" => ClaudeModel::Sonnet45,
-            "sonnet-4" | "claude-sonnet-4" => ClaudeModel::Sonnet4,
-            "opus" | "opus-4" | "claude-opus-4" => ClaudeModel::Opus4,
-            _ => ClaudeModel::Sonnet45, // Default fallback
-        });
+        self.model = Some(model.parse().unwrap_or_default());
         self
     }
 
@@ -331,10 +306,10 @@ impl CliAgent for ClaudeCodeAgent {
 
         // Add model if specified
         if let Some(model) = &self.model {
-            cmd.arg("--model").arg(model.as_str());
+            cmd.arg("--model").arg(model.as_cli_name());
             debug!(
                 target: "llm_toolkit::agent::claude_code",
-                "Using model: {}", model.as_str()
+                "Using model: {}", model.as_cli_name()
             );
         }
 

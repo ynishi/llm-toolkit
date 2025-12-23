@@ -16,11 +16,18 @@ pub mod openai_api;
 #[cfg(feature = "anthropic-api")]
 pub mod anthropic_api;
 
-pub use claude_code::{ClaudeCodeAgent, ClaudeCodeJsonAgent, ClaudeModel};
-pub use codex_agent::{CodexAgent, CodexModel};
-pub use gemini::{GeminiAgent, GeminiModel};
+pub use claude_code::{ClaudeCodeAgent, ClaudeCodeJsonAgent};
+pub use codex_agent::CodexAgent;
+pub use gemini::GeminiAgent;
 pub use inner_validator::InnerValidatorAgent;
 pub use retry::RetryAgent;
+
+// Re-export model types from the models module for backward compatibility
+pub use crate::models::{ClaudeModel, GeminiModel, OpenAIModel};
+
+// Deprecated type alias for backward compatibility
+#[allow(deprecated)]
+pub use codex_agent::CodexModel;
 
 // API client exports
 #[cfg(feature = "gemini-api")]
