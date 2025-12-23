@@ -496,13 +496,13 @@ mod tests {
     #[test]
     fn test_codex_agent_builder() {
         let agent = CodexAgent::new()
-            .with_model(CodexModel::Gpt51Codex)
+            .with_model(OpenAIModel::Gpt51Codex)
             .with_cwd("/project")
             .with_sandbox("workspace-write")
             .with_approval_policy("on-failure")
             .with_search(true);
 
-        assert!(matches!(agent.model, Some(CodexModel::Gpt51Codex)));
+        assert!(matches!(agent.model, Some(OpenAIModel::Gpt51Codex)));
         assert_eq!(agent.sandbox, Some("workspace-write".to_string()));
         assert_eq!(agent.approval_policy, Some("on-failure".to_string()));
         assert!(agent.enable_search);

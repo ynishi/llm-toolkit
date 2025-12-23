@@ -72,13 +72,16 @@ impl GeminiApiAgent {
     /// - `GEMINI_MODEL` (optional, defaults to Gemini 2.5 Flash)
     pub fn try_from_env() -> Result<Self, AgentError> {
         let api_key = env::var("GEMINI_API_KEY").map_err(|_| {
-            AgentError::ExecutionFailed(
-                "GEMINI_API_KEY environment variable not set".to_string(),
-            )
+            AgentError::ExecutionFailed("GEMINI_API_KEY environment variable not set".to_string())
         })?;
 
         let model = env::var("GEMINI_MODEL")
-            .map(|s| s.parse::<GeminiModel>().unwrap_or_default().as_api_id().to_string())
+            .map(|s| {
+                s.parse::<GeminiModel>()
+                    .unwrap_or_default()
+                    .as_api_id()
+                    .to_string()
+            })
             .unwrap_or_else(|_| GeminiModel::default().as_api_id().to_string());
 
         Ok(Self::new(api_key, model))
@@ -93,9 +96,7 @@ impl GeminiApiAgent {
     /// - Optionally enables Google Search tool
     pub fn try_gemini_3_from_env(enable_search: bool) -> Result<Self, AgentError> {
         let api_key = env::var("GEMINI_API_KEY").map_err(|_| {
-            AgentError::ExecutionFailed(
-                "GEMINI_API_KEY environment variable not set".to_string(),
-            )
+            AgentError::ExecutionFailed("GEMINI_API_KEY environment variable not set".to_string())
         })?;
 
         let mut agent = Self::new(api_key, "gemini-3-pro-preview").with_thinking_level("HIGH");

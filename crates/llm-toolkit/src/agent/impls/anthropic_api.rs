@@ -73,7 +73,12 @@ impl AnthropicApiAgent {
         })?;
 
         let model = env::var("ANTHROPIC_MODEL")
-            .map(|s| s.parse::<ClaudeModel>().unwrap_or_default().as_api_id().to_string())
+            .map(|s| {
+                s.parse::<ClaudeModel>()
+                    .unwrap_or_default()
+                    .as_api_id()
+                    .to_string()
+            })
             .unwrap_or_else(|_| ClaudeModel::default().as_api_id().to_string());
 
         Ok(Self::new(api_key, model))

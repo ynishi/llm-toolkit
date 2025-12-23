@@ -9,12 +9,12 @@ pub mod inner_validator;
 pub mod retry;
 
 // API client implementations (direct HTTP API calls)
+#[cfg(feature = "anthropic-api")]
+pub mod anthropic_api;
 #[cfg(feature = "gemini-api")]
 pub mod gemini_api;
 #[cfg(feature = "openai-api")]
 pub mod openai_api;
-#[cfg(feature = "anthropic-api")]
-pub mod anthropic_api;
 
 pub use claude_code::{ClaudeCodeAgent, ClaudeCodeJsonAgent};
 pub use codex_agent::CodexAgent;
@@ -30,9 +30,9 @@ pub use crate::models::{ClaudeModel, GeminiModel, OpenAIModel};
 pub use codex_agent::CodexModel;
 
 // API client exports
+#[cfg(feature = "anthropic-api")]
+pub use anthropic_api::AnthropicApiAgent;
 #[cfg(feature = "gemini-api")]
 pub use gemini_api::GeminiApiAgent;
 #[cfg(feature = "openai-api")]
 pub use openai_api::OpenAIApiAgent;
-#[cfg(feature = "anthropic-api")]
-pub use anthropic_api::AnthropicApiAgent;

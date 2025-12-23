@@ -64,13 +64,16 @@ impl OpenAIApiAgent {
     /// - `OPENAI_MODEL` (optional, defaults to GPT-4o)
     pub fn try_from_env() -> Result<Self, AgentError> {
         let api_key = env::var("OPENAI_API_KEY").map_err(|_| {
-            AgentError::ExecutionFailed(
-                "OPENAI_API_KEY environment variable not set".to_string(),
-            )
+            AgentError::ExecutionFailed("OPENAI_API_KEY environment variable not set".to_string())
         })?;
 
         let model = env::var("OPENAI_MODEL")
-            .map(|s| s.parse::<OpenAIModel>().unwrap_or_default().as_api_id().to_string())
+            .map(|s| {
+                s.parse::<OpenAIModel>()
+                    .unwrap_or_default()
+                    .as_api_id()
+                    .to_string()
+            })
             .unwrap_or_else(|_| OpenAIModel::default().as_api_id().to_string());
 
         Ok(Self::new(api_key, model))

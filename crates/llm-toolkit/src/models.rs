@@ -158,7 +158,10 @@ impl std::str::FromStr for ClaudeModel {
                 Ok(Self::Opus45)
             }
             // Sonnet 4.5 variants
-            "sonnet" | "sonnet-4.5" | "sonnet45" | "claude-sonnet-4.5"
+            "sonnet"
+            | "sonnet-4.5"
+            | "sonnet45"
+            | "claude-sonnet-4.5"
             | "claude-sonnet-4-5-20250929" => Ok(Self::Sonnet45),
             // Opus 4.1 variants
             "opus-4.1" | "opus41" | "claude-opus-4.1" | "claude-opus-4-1-20250805" => {
@@ -171,9 +174,11 @@ impl std::str::FromStr for ClaudeModel {
                 Ok(Self::Sonnet4)
             }
             // Haiku 3.5 variants
-            "haiku" | "haiku-3.5" | "haiku35" | "claude-haiku-3.5" | "claude-3-5-haiku-20241022" => {
-                Ok(Self::Haiku35)
-            }
+            "haiku"
+            | "haiku-3.5"
+            | "haiku35"
+            | "claude-haiku-3.5"
+            | "claude-3-5-haiku-20241022" => Ok(Self::Haiku35),
             // Custom (validated)
             _ => {
                 Self::validate_custom(s)?;
@@ -204,7 +209,7 @@ impl fmt::Display for ClaudeModel {
 /// assert_eq!(model.as_api_id(), "gemini-3-flash");
 ///
 /// let model: GeminiModel = "flash".parse().unwrap();
-/// assert_eq!(model, GeminiModel::Flash3);
+/// assert_eq!(model, GeminiModel::Flash25);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GeminiModel {
@@ -545,7 +550,10 @@ mod tests {
                 ClaudeModel::Sonnet45.as_api_id(),
                 "claude-sonnet-4-5-20250929"
             );
-            assert_eq!(ClaudeModel::Haiku35.as_api_id(), "claude-3-5-haiku-20241022");
+            assert_eq!(
+                ClaudeModel::Haiku35.as_api_id(),
+                "claude-3-5-haiku-20241022"
+            );
         }
 
         #[test]
@@ -605,7 +613,10 @@ mod tests {
 
         #[test]
         fn test_parse() {
-            assert_eq!("flash".parse::<GeminiModel>().unwrap(), GeminiModel::Flash25);
+            assert_eq!(
+                "flash".parse::<GeminiModel>().unwrap(),
+                GeminiModel::Flash25
+            );
             assert_eq!("pro".parse::<GeminiModel>().unwrap(), GeminiModel::Pro25);
             assert_eq!(
                 "flash-3".parse::<GeminiModel>().unwrap(),
@@ -631,9 +642,15 @@ mod tests {
         #[test]
         fn test_parse() {
             assert_eq!("4o".parse::<OpenAIModel>().unwrap(), OpenAIModel::Gpt4o);
-            assert_eq!("gpt-5.2".parse::<OpenAIModel>().unwrap(), OpenAIModel::Gpt52);
+            assert_eq!(
+                "gpt-5.2".parse::<OpenAIModel>().unwrap(),
+                OpenAIModel::Gpt52
+            );
             assert_eq!("o3".parse::<OpenAIModel>().unwrap(), OpenAIModel::O3);
-            assert_eq!("codex".parse::<OpenAIModel>().unwrap(), OpenAIModel::Gpt51Codex);
+            assert_eq!(
+                "codex".parse::<OpenAIModel>().unwrap(),
+                OpenAIModel::Gpt51Codex
+            );
         }
 
         #[test]

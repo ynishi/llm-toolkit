@@ -133,9 +133,9 @@ pub use intent::expandable::{
 pub use intent::frame::IntentFrame;
 #[allow(deprecated)]
 pub use intent::{IntentError, IntentExtractor, PromptBasedExtractor};
+pub use models::{ClaudeModel, GeminiModel, Model, ModelError, OpenAIModel};
 pub use multimodal::ImageData;
 pub use prompt::{PromptPart, PromptSetError, ToPrompt, ToPromptFor, ToPromptSet};
-pub use models::{ClaudeModel, GeminiModel, Model, ModelError, OpenAIModel};
 pub use retrieval::Document;
 
 #[cfg(feature = "agent")]
