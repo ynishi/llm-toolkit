@@ -10,3 +10,17 @@
 3.  **Minimal Dependencies:**
     The toolkit will have minimal dependencies (primarily `serde` and `minijinja`) to ensure it can be added to any Rust project with negligible overhead and maximum compatibility.
 
+4.  **Prompt as Presentation with Logic:**
+    Just as JSX revolutionized web development by acknowledging that "UI contains logic" and providing type-safe ways to handle it, `ToPrompt` acknowledges that **prompts contain logic** and provides type-safe ways to handle them in Rust.
+
+    Think of it as an **ORM for Prompts**:
+    - **ORM**: "Database access contains logic" → type-safe Rust ↔ DB mapping
+    - **JSX**: "UI contains logic" → type-safe component rendering
+    - **ToPrompt**: "Prompts contain logic" → type-safe Rust → Prompt transformation
+
+    Each type controls its own prompt representation through `to_prompt()`, just as React components control their own rendering. This enables:
+    - **Encapsulation**: Types own their prompt logic
+    - **Composability**: Complex prompts from simple building blocks
+    - **Type Safety**: Compile-time guarantees for prompt generation
+    - **Testability**: Unit test prompt output like any other code
+
