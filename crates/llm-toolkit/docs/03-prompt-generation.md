@@ -78,6 +78,8 @@ If you omit the `#[prompt(template = "...")]` attribute on a struct, `ToPrompt` 
 | `#[prompt(rename = "new_name")]` | Overrides the key with `"new_name"`. |
 | `#[prompt(skip)]` | Excludes the field from the output. |
 | `#[prompt(format_with = "path::to::func")]`| Uses a custom function to format the field's **value**. |
+| `#[prompt(as_serialize)]` | Enables dot access (e.g., `{{ field.name }}`) in templates. |
+| `#[prompt(as_prompt)]` | Forces use of `to_prompt()` (default behavior). |
 
 The **key** for each field is determined with the following priority:
 1.  `#[prompt(rename = "...")]` attribute.
@@ -126,6 +128,120 @@ let p = user.to_prompt();
 // full_name: Mai
 // formatted_id: user-123
 ```
+
+#### Nested Types and Dot Access
+
+**ToPrompt Philosophy**: By default, nested types use their `to_prompt()` implementation—each type controls its own prompt representation. This is similar to how React components control their own rendering.
+
+```rust
+use llm_toolkit::ToPrompt;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+struct Profile {
+    name: String,
+    role: String,
+}
+
+impl ToPrompt for Profile {
+    fn to_prompt(&self) -> String {
+        format!("Profile: {} ({})", self.name, self.role)
+    }
+}
+
+// Default: uses to_prompt() - the Profile controls its representation
+#[derive(ToPrompt, Serialize)]
+#[prompt(template = "{{ profile }}")]
+struct DefaultExample {
+    profile: Profile,
+}
+
+let example = DefaultExample {
+    profile: Profile {
+        name: "Alice".to_string(),
+        role: "Admin".to_string(),
+    },
+};
+
+assert_eq!(example.to_prompt(), "Profile: Alice (Admin)");
+```
+
+**When you need dot access** (e.g., `{{ profile.name }}`), use `#[prompt(as_serialize)]`:
+
+```rust
+// as_serialize: enables dot access for this field
+#[derive(ToPrompt, Serialize)]
+#[prompt(template = "User: {{ profile.name }}, Role: {{ profile.role }}")]
+struct DotAccessExample {
+    #[prompt(as_serialize)]
+    profile: Profile,
+}
+
+let example = DotAccessExample {
+    profile: Profile {
+        name: "Bob".to_string(),
+        role: "User".to_string(),
+    },
+};
+
+assert_eq!(example.to_prompt(), "User: Bob, Role: User");
+```
+
+**Mixed usage** - some fields with dot access, others with `to_prompt()`:
+
+```rust
+#[derive(ToPrompt, Serialize)]
+#[prompt(template = "Name: {{ data.name }}, Description: {{ description }}")]
+struct MixedExample {
+    #[prompt(as_serialize)]  // dot access
+    data: Profile,
+    description: Profile,    // uses to_prompt()
+}
+```
+
+**Deep nesting** works with `as_serialize`:
+
+```rust
+#[derive(Debug, Clone, Serialize, ToPrompt)]
+struct Company {
+    name: String,
+    ceo: Profile,
+}
+
+#[derive(ToPrompt, Serialize)]
+#[prompt(template = "Company: {{ company.name }}, CEO: {{ company.ceo.name }}")]
+struct DeepExample {
+    #[prompt(as_serialize)]
+    company: Company,
+}
+```
+
+**Vec and Option** work with both approaches:
+
+```rust
+// With as_serialize: iterate and access fields
+#[derive(ToPrompt, Serialize)]
+#[prompt(template = "{% for p in profiles %}{{ p.name }}, {% endfor %}")]
+struct VecDotAccess {
+    #[prompt(as_serialize)]
+    profiles: Vec<Profile>,
+}
+
+// Without as_serialize: each element uses to_prompt()
+#[derive(ToPrompt, Serialize)]
+#[prompt(template = "{% for p in profiles %}{{ p }}\n{% endfor %}")]
+struct VecToPrompt {
+    profiles: Vec<Profile>,  // Each Profile calls to_prompt()
+}
+```
+
+**When to use which:**
+
+| Use Case | Attribute | Behavior |
+|----------|-----------|----------|
+| Type has custom `to_prompt()` representation | (default) | Calls `to_prompt()` on the field |
+| Need to access nested fields in template | `#[prompt(as_serialize)]` | Uses `Serialize` for dot access |
+| Mixing both in same struct | Mix per-field | Apply attribute only where needed |
 
 #### Tip: Handling Special Characters in Templates
 

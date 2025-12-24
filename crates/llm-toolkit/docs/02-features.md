@@ -4,7 +4,7 @@
 | Feature Area | Description | Key Components | Status |
 |---|---|---|---|
 | **Content Extraction** | Safely extracting structured data (like JSON) from unstructured LLM responses. | `extract` module (`FlexibleExtractor`, `extract_json`) | Implemented |
-| **Prompt Generation** | Building complex prompts from Rust data structures with a powerful templating engine. | `prompt!` macro, `#[derive(ToPrompt)]`, `#[derive(ToPromptSet)]` | Implemented |
+| **Prompt Generation** | Building complex prompts from Rust data structures with a powerful templating engine. Supports dot access for nested types with `#[prompt(as_serialize)]`. | `prompt!` macro, `#[derive(ToPrompt)]`, `#[derive(ToPromptSet)]`, `#[prompt(as_serialize)]` | Implemented |
 | **Multi-Target Prompts** | Generate multiple prompt formats from a single data structure for different contexts. | `ToPromptSet` trait, `#[prompt_for(...)]` attributes | Implemented |
 | **Context-Aware Prompts** | Generate prompts for a type within the context of another (e.g., a `Tool` for an `Agent`). | `ToPromptFor<T>` trait, `#[derive(ToPromptFor)]` | Implemented |
 | **Example Aggregation** | Combine examples from multiple data structures into a single formatted section. | `examples_section!` macro | Implemented |
