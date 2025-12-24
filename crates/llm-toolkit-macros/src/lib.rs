@@ -958,6 +958,12 @@ struct FieldPromptAttrs {
     format_with: Option<String>,
     image: bool,
     example: Option<String>,
+    /// Force use of to_prompt() instead of from_serialize
+    /// Use this when you want the field's ToPrompt representation
+    as_prompt: bool,
+    /// Force use of from_serialize() for dot access in templates
+    /// This is the default for non-primitive types with Serialize
+    as_serialize: bool,
 }
 
 /// Parse #[prompt(...)] attributes for struct fields
@@ -1007,6 +1013,12 @@ fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
                                     result.example = Some(lit_str.value());
                                 }
                             }
+                            Meta::Path(path) if path.is_ident("as_prompt") => {
+                                result.as_prompt = true;
+                            }
+                            Meta::Path(path) if path.is_ident("as_serialize") => {
+                                result.as_serialize = true;
+                            }
                             _ => {}
                         }
                     }
@@ -1016,6 +1028,12 @@ fn parse_field_prompt_attrs(attrs: &[syn::Attribute]) -> FieldPromptAttrs {
                 } else if meta_list.tokens.to_string() == "image" {
                     // Handle simple #[prompt(image)] case
                     result.image = true;
+                } else if meta_list.tokens.to_string() == "as_prompt" {
+                    // Handle simple #[prompt(as_prompt)] case
+                    result.as_prompt = true;
+                } else if meta_list.tokens.to_string() == "as_serialize" {
+                    // Handle simple #[prompt(as_serialize)] case
+                    result.as_serialize = true;
                 }
             }
         }
@@ -2236,16 +2254,33 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                         }
                     }
                 } else {
-                    // No mode syntax, but we still need custom context building to handle
-                    // nested ToPrompt types properly (call to_prompt() instead of JSON serialization)
+                    // No mode syntax - use to_prompt() by default (ToPrompt philosophy)
+                    // Use #[prompt(as_serialize)] to enable dot access in templates
+                    //
+                    // Special handling for Vec<T> and Option<T>:
+                    // - Vec<T>: Call to_prompt() on each element, preserve as list for iteration
+                    // - Option<T>: Call to_prompt() on inner value if Some
 
                     // Build context fields for all struct fields
                     let mut simple_context_fields = Vec::new();
                     for field in fields.iter() {
                         let field_name = field.ident.as_ref().unwrap();
                         let field_name_str = field_name.to_string();
+                        let attrs = parse_field_prompt_attrs(&field.attrs);
 
-                        // Same logic as above for determining how to serialize
+                        // #[prompt(as_serialize)] enables dot access via from_serialize
+                        // Requires the field type to implement Serialize
+                        if attrs.as_serialize {
+                            simple_context_fields.push(quote! {
+                                context.insert(
+                                    #field_name_str.to_string(),
+                                    #crate_path::minijinja::Value::from_serialize(&self.#field_name)
+                                );
+                            });
+                            continue;
+                        }
+
+                        // Check for special container types that need element-wise processing
                         match &field.ty {
                             syn::Type::Path(type_path) => {
                                 if let Some(segment) = type_path.path.segments.last() {
@@ -2274,6 +2309,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                     );
 
                                     if is_primitive {
+                                        // Primitives: serialize directly
                                         simple_context_fields.push(quote! {
                                             context.insert(
                                                 #field_name_str.to_string(),
@@ -2281,6 +2317,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                             );
                                         });
                                     } else if type_name == "Option" {
+                                        // Option<T>: Check if inner is Vec
                                         let args = &segment.arguments;
                                         let is_option_vec =
                                             if let syn::PathArguments::AngleBracketed(angle_args) =
@@ -2305,6 +2342,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                             };
 
                                         if is_option_vec {
+                                            // Option<Vec<T>>: map elements to to_prompt()
                                             simple_context_fields.push(quote! {
                                                 context.insert(
                                                     #field_name_str.to_string(),
@@ -2321,6 +2359,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                                 );
                                             });
                                         } else {
+                                            // Option<T> where T is not Vec: call to_prompt() on inner
                                             simple_context_fields.push(quote! {
                                                 context.insert(
                                                     #field_name_str.to_string(),
@@ -2335,6 +2374,7 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                             });
                                         }
                                     } else if type_name == "Vec" {
+                                        // Vec<T>: map each element calling to_prompt()
                                         simple_context_fields.push(quote! {
                                             context.insert(
                                                 #field_name_str.to_string(),
@@ -2348,20 +2388,36 @@ pub fn to_prompt_derive(input: TokenStream) -> TokenStream {
                                             );
                                         });
                                     } else {
+                                        // Other non-primitive types: call to_prompt()
                                         simple_context_fields.push(quote! {
                                             context.insert(
                                                 #field_name_str.to_string(),
-                                                #crate_path::minijinja::Value::from(self.#field_name.to_prompt())
+                                                #crate_path::minijinja::Value::from(
+                                                    <_ as #crate_path::prompt::ToPrompt>::to_prompt(&self.#field_name)
+                                                )
                                             );
                                         });
                                     }
+                                } else {
+                                    // Fallback: use to_prompt()
+                                    simple_context_fields.push(quote! {
+                                        context.insert(
+                                            #field_name_str.to_string(),
+                                            #crate_path::minijinja::Value::from(
+                                                <_ as #crate_path::prompt::ToPrompt>::to_prompt(&self.#field_name)
+                                            )
+                                        );
+                                    });
                                 }
                             }
                             _ => {
+                                // Unknown type pattern: use to_prompt()
                                 simple_context_fields.push(quote! {
                                     context.insert(
                                         #field_name_str.to_string(),
-                                        #crate_path::minijinja::Value::from(self.#field_name.to_prompt())
+                                        #crate_path::minijinja::Value::from(
+                                            <_ as #crate_path::prompt::ToPrompt>::to_prompt(&self.#field_name)
+                                        )
                                     );
                                 });
                             }
