@@ -96,6 +96,7 @@ struct CodeReviewer;
 | Feature | Description |
 |---------|-------------|
 | **Content Extraction** | Extract JSON/code blocks from unstructured LLM responses |
+| **Fuzzy JSON Repair** | Auto-fix LLM JSON syntax errors and typos in tagged enums |
 | **Prompt Generation** | `#[derive(ToPrompt)]`, `prompt!` macro, external templates |
 | **Intent Extraction** | `#[define_intent]` for structured intent parsing |
 | **Agent API** | `#[agent(...)]` macro with retry, profiles, and multi-modal support |

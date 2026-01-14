@@ -1,6 +1,7 @@
 use super::core::{ContentExtractor, ExtractionStrategy};
 
 use super::error::ParseError;
+use fuzzy_parser::sanitize_json;
 use log::debug;
 use regex::Regex;
 
@@ -122,67 +123,10 @@ impl FlexibleExtractor {
         None
     }
 
-    /// Clean trailing commas from JSON string (common LLM output issue)
-    ///
-    /// Removes trailing commas before closing braces/brackets:
-    /// - `{"a": 1,}` → `{"a": 1}`
-    /// - `["a", "b",]` → `["a", "b"]`
-    ///
-    /// Handles:
-    /// - Optional whitespace between comma and bracket: `, }` or `,}`
-    /// - Preserves commas inside strings
-    /// - Nested structures
-    fn clean_json_trailing_commas(json: &str) -> String {
-        let mut result = String::with_capacity(json.len());
-        let mut in_string = false;
-        let mut escape_next = false;
-        let chars: Vec<char> = json.chars().collect();
-
-        for i in 0..chars.len() {
-            let ch = chars[i];
-
-            if escape_next {
-                escape_next = false;
-                result.push(ch);
-                continue;
-            }
-
-            match ch {
-                '\\' if in_string => {
-                    escape_next = true;
-                    result.push(ch);
-                }
-                '"' => {
-                    in_string = !in_string;
-                    result.push(ch);
-                }
-                ',' if !in_string => {
-                    // Look ahead to check if this is a trailing comma
-                    let mut j = i + 1;
-                    // Skip whitespace
-                    while j < chars.len() && chars[j].is_whitespace() {
-                        j += 1;
-                    }
-                    // If next non-whitespace is } or ], skip the comma
-                    if j < chars.len() && (chars[j] == '}' || chars[j] == ']') {
-                        // Skip this comma (trailing comma)
-                        continue;
-                    } else {
-                        // Keep this comma (not trailing)
-                        result.push(ch);
-                    }
-                }
-                _ => result.push(ch),
-            }
-        }
-
-        result
-    }
-
     /// Extract first complete JSON object from text
     fn extract_first_json_object(&self, text: &str) -> Option<String> {
         self.extract_first_json_entity(text)
-            .map(|json| Self::clean_json_trailing_commas(&json))
+            .map(|json| sanitize_json(&json))
     }
 
     /// Extract content based on keyword matching
@@ -229,7 +173,7 @@ impl ContentExtractor for FlexibleExtractor {
         // Delegate to extract_first_json_entity for proper handling
         let result = self
             .extract_first_json_entity(text)
-            .map(|json| Self::clean_json_trailing_commas(&json));
+            .map(|json| sanitize_json(&json));
 
         if result.is_none() && self.debug_mode {
             debug!("Failed to extract JSON-like content");

@@ -3,7 +3,7 @@
 
 | Feature Area | Description | Key Components | Status |
 |---|---|---|---|
-| **Content Extraction** | Safely extracting structured data (like JSON) from unstructured LLM responses. | `extract` module (`FlexibleExtractor`, `extract_json`) | Implemented |
+| **Content Extraction** | Safely extracting structured data (like JSON) from unstructured LLM responses. Includes automatic JSON sanitization (trailing commas, unclosed brackets). | `extract` module (`FlexibleExtractor`, `sanitize_json`) | Implemented |
 | **Prompt Generation** | Building complex prompts from Rust data structures with a powerful templating engine. Supports dot access for nested types with `#[prompt(as_serialize)]`. | `prompt!` macro, `#[derive(ToPrompt)]`, `#[derive(ToPromptSet)]`, `#[prompt(as_serialize)]` | Implemented |
 | **Multi-Target Prompts** | Generate multiple prompt formats from a single data structure for different contexts. | `ToPromptSet` trait, `#[prompt_for(...)]` attributes | Implemented |
 | **Context-Aware Prompts** | Generate prompts for a type within the context of another (e.g., a `Tool` for an `Agent`). | `ToPromptFor<T>` trait, `#[derive(ToPromptFor)]` | Implemented |
@@ -24,5 +24,5 @@
 | **Template File Validation** | Compile-time validation of template file paths with helpful error messages. | `template_file` attribute validation | Implemented (v0.13.0) |
 | **Type-Safe Model Identifiers** | Enum-based model identifiers with validation for Claude, Gemini, and OpenAI. Prevents typos, supports Custom variants with prefix validation, and provides both API IDs and CLI names. | `ClaudeModel`, `GeminiModel`, `OpenAIModel`, `Model` enums | Implemented (v0.59.0) |
 | **Direct API Clients** | HTTP API clients for LLM providers without CLI dependency. Includes retry support, multi-modal payloads, and provider-specific features (Gemini thinking, Google Search). | `AnthropicApiAgent`, `GeminiApiAgent`, `OpenAIApiAgent` | Implemented (v0.58.0) |
-| **Resilient Deserialization** | Deserializing LLM responses into Rust types, handling schema variations. | (Planned) | Planned |
+| **Resilient Deserialization** | Fuzzy JSON repair for LLM outputs: syntax sanitization (trailing commas, unclosed brackets/strings) and schema-based typo correction for tagged enums using similarity algorithms (Jaro-Winkler, Levenshtein). | `sanitize_json`, `repair_tagged_enum_json`, `TaggedEnumSchema`, `FuzzyOptions` | Implemented (v0.61.0) |
 
