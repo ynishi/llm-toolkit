@@ -13,6 +13,7 @@ llm-toolkit = { version = "0.59", features = ["anthropic-api"] }
 llm-toolkit = { version = "0.59", features = ["gemini-api"] }
 llm-toolkit = { version = "0.59", features = ["openai-api"] }
 llm-toolkit = { version = "0.59", features = ["ollama-api"] }
+llm-toolkit = { version = "0.59", features = ["llama-cpp-server"] }
 
 # All providers
 llm-toolkit = { version = "0.59", features = ["all-apis"] }
@@ -222,6 +223,51 @@ let response = agent.execute("Hello, world!".into()).await?;
 2. Pull a model: `ollama pull llama3`
 3. Start the server: `ollama serve`
 
+### LlamaCppServerAgent
+
+For local LLM inference with llama-server (llama.cpp HTTP server):
+
+```rust
+use llm_toolkit::agent::impls::{LlamaCppServerAgent, ChatTemplate};
+use llm_toolkit::agent::Agent;
+
+// Default configuration (localhost:8080, Llama3 template)
+let agent = LlamaCppServerAgent::new();
+
+// Custom configuration
+let agent = LlamaCppServerAgent::new()
+    .with_endpoint("http://192.168.1.100:8080")
+    .with_chat_template(ChatTemplate::Qwen)
+    .with_max_tokens(256)
+    .with_temperature(0.7)
+    .with_system_prompt("You are a helpful assistant");
+
+// From environment variables
+let agent = LlamaCppServerAgent::from_env();
+
+// Health check and slot info
+if agent.is_healthy().await {
+    let slots = agent.available_slots().await?;
+    println!("Available slots: {}", slots);
+}
+
+let response = agent.execute("Hello, world!".into()).await?;
+```
+
+**Chat Templates:**
+- `ChatTemplate::Llama3` - Llama 3 format (default)
+- `ChatTemplate::Qwen` - Qwen/Qwen2/Qwen2.5 format
+- `ChatTemplate::Mistral` - Mistral/Mixtral format
+- `ChatTemplate::Lfm2` - Sakana LFM2 format
+- `ChatTemplate::ChatMl` - Generic ChatML format
+- `ChatTemplate::None` - Raw prompt (no template)
+- `ChatTemplate::Custom { ... }` - Custom template
+
+**Prerequisites:**
+1. Build llama.cpp: https://github.com/ggerganov/llama.cpp
+2. Download a GGUF model
+3. Start the server: `llama-server -m model.gguf --port 8080`
+
 ## Environment Variables
 
 | Provider | API Key Variable | Model Variable |
@@ -230,6 +276,7 @@ let response = agent.execute("Hello, world!".into()).await?;
 | Gemini | `GEMINI_API_KEY` | `GEMINI_MODEL` |
 | OpenAI | `OPENAI_API_KEY` | `OPENAI_MODEL` |
 | Ollama | `OLLAMA_HOST` | `OLLAMA_MODEL` |
+| llama-server | `LLAMA_SERVER_ENDPOINT` | `LLAMA_SERVER_MAX_TOKENS` |
 
 ## Multi-Modal Support
 
@@ -285,7 +332,7 @@ Retryable status codes: `429`, `500`, `502`, `503`, `504`
 | Use case | Development, advanced features | Production, simple integration |
 
 **CLI Agents:** `ClaudeCodeAgent`, `GeminiAgent`, `CodexAgent`
-**API Clients:** `AnthropicApiAgent`, `GeminiApiAgent`, `OpenAIApiAgent`, `OllamaApiAgent`
+**API Clients:** `AnthropicApiAgent`, `GeminiApiAgent`, `OpenAIApiAgent`, `OllamaApiAgent`, `LlamaCppServerAgent`
 
 ## Future Direction
 

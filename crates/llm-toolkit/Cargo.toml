@@ -85,7 +85,8 @@ gemini-api = ["agent", "reqwest"]
 openai-api = ["agent", "reqwest"]
 anthropic-api = ["agent", "reqwest"]
 ollama-api = ["agent", "ollama-rs"]
-all-apis = ["gemini-api", "openai-api", "anthropic-api", "ollama-api"]
+llama-cpp-server = ["agent", "reqwest"]
+all-apis = ["gemini-api", "openai-api", "anthropic-api", "ollama-api", "llama-cpp-server"]
 
 [[example]]
 name = "derive_prompt"
@@ -162,3 +163,7 @@ required-features = ["agent"]
 [[example]]
 name = "ollama_basic"
 required-features = ["ollama-api"]
+
+[[example]]
+name = "llama_cpp_server_basic"
+required-features = ["llama-cpp-server"]

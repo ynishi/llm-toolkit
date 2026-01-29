@@ -14,8 +14,9 @@ test-all:
 
 
 # 全Example（外部API依存含む）
-# Note: ollama_basic requires running Ollama server, run separately:
+# Note: Local LLM examples require running servers:
 #   cargo run --example ollama_basic --features ollama-api
+#   cargo run --example llama_cpp_server_basic --features llama-cpp-server
 
 EXAMPLES := \
 	derive_prompt_enum \
