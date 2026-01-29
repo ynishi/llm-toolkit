@@ -3,6 +3,7 @@
 //! This module defines core types for controlling agent behavior based on
 //! task context, health status, and priority levels.
 
+#[cfg(feature = "schema")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +12,8 @@ use serde::{Deserialize, Serialize};
 /// Controls how strongly a knowledge fragment should be enforced during
 /// prompt generation. Higher priority fragments appear first and are
 /// treated as more critical constraints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Priority {
     /// Critical: Absolute must-follow (violation = error / strong negative constraint)
@@ -64,7 +66,8 @@ impl Priority {
 ///
 /// Represents the current state of a task for triggering adaptive behavior.
 /// Enables "gear shifting" based on progress and quality.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TaskHealth {
     /// On track: Proceed confidently (Action: Go/SpeedUp)
@@ -101,7 +104,8 @@ impl TaskHealth {
 ///
 /// Defines when a fragment should be included in the generated prompt
 /// based on various contextual factors.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContextProfile {
     /// Always active (no conditions)

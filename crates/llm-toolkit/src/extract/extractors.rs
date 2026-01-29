@@ -2,8 +2,18 @@ use super::core::{ContentExtractor, ExtractionStrategy};
 
 use super::error::ParseError;
 use fuzzy_parser::sanitize_json;
-use log::debug;
 use regex::Regex;
+
+// Conditional debug logging macro
+#[cfg(feature = "log")]
+macro_rules! debug_log {
+    ($($arg:tt)*) => { log::debug!($($arg)*) }
+}
+
+#[cfg(not(feature = "log"))]
+macro_rules! debug_log {
+    ($($arg:tt)*) => { }
+}
 
 /// Flexible content extractor with multiple strategies
 pub struct FlexibleExtractor {
@@ -31,7 +41,7 @@ impl FlexibleExtractor {
     /// Standard extraction
     pub fn extract(&self, text: &str) -> Result<String, ParseError> {
         if self.debug_mode {
-            debug!("Extracting content from text: {}", text);
+            debug_log!("Extracting content from text: {}", text);
         }
         self.extract_with_strategies(text, &Self::standard_extraction_strategies())
     }
@@ -43,7 +53,7 @@ impl FlexibleExtractor {
         strategy: &ExtractionStrategy,
     ) -> Option<String> {
         if self.debug_mode {
-            debug!("Trying extraction strategy: {:?}", strategy);
+            debug_log!("Trying extraction strategy: {:?}", strategy);
         }
 
         match strategy {
@@ -67,7 +77,7 @@ impl FlexibleExtractor {
         for strategy in strategies {
             if let Some(result) = self.extract_with_strategy(text, strategy) {
                 if self.debug_mode {
-                    debug!("Successfully extracted with strategy: {:?}", strategy);
+                    debug_log!("Successfully extracted with strategy: {:?}", strategy);
                 }
                 return Ok(result);
             } else {
@@ -163,7 +173,7 @@ impl ContentExtractor for FlexibleExtractor {
         }
 
         if self.debug_mode {
-            debug!("Failed to extract tagged content with tag: {}", tag);
+            debug_log!("Failed to extract tagged content with tag: {}", tag);
         }
 
         None
@@ -176,7 +186,7 @@ impl ContentExtractor for FlexibleExtractor {
             .map(|json| sanitize_json(&json));
 
         if result.is_none() && self.debug_mode {
-            debug!("Failed to extract JSON-like content");
+            debug_log!("Failed to extract JSON-like content");
         }
 
         result
@@ -195,7 +205,7 @@ impl ContentExtractor for FlexibleExtractor {
         }
 
         if self.debug_mode {
-            debug!("Failed to extract with pattern: {}", pattern);
+            debug_log!("Failed to extract with pattern: {}", pattern);
         }
 
         None

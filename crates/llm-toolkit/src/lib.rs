@@ -12,10 +12,15 @@ extern crate self as llm_toolkit;
 
 // Re-export tracing for use by generated code from macros
 // Using extern crate to ensure it's accessible via absolute path
+#[cfg(feature = "agent")]
 pub extern crate tracing;
 
 // Re-export minijinja for use by ToPrompt derive macro
 pub extern crate minijinja;
+
+// Re-export quick_xml for use by define_intent macro
+#[cfg(feature = "derive")]
+pub extern crate quick_xml;
 
 /// A derive macro to implement the `ToPrompt` trait for structs.
 ///
