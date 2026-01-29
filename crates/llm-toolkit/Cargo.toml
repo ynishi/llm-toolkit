@@ -11,29 +11,36 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Essential Core
 serde.workspace = true
 serde_json.workspace = true
-schemars = "0.8"
 thiserror.workspace = true
 regex.workspace = true
-log = { workspace = true, features = ["std"] }
 anyhow.workspace = true
-base64.workspace = true
 minijinja.workspace = true
-quick-xml.workspace = true
-rand.workspace = true
-tracing = "0.1"
-tracing-log = "0.2"
+fuzzy-parser = "0.1"
+
+# Essential Optional
+base64.workspace = true
+url = { version = "2.5", features = ["serde"] }
+mime_guess = "2.0"
+schemars = { version = "0.8", optional = true }
+
+# Agent dependencies (optional)
+async-trait = { version = "0.1", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-log = { version = "0.2", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
-llm-toolkit-macros = { workspace = true, optional = true }
-async-trait = "0.1"
+rand = { workspace = true, optional = true }
+log = { workspace = true, features = ["std"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 tokio-util = { version = "0.7", optional = true }
 futures = { workspace = true, optional = true }
-url = { version = "2.5", features = ["serde"] }
-mime_guess = "2.0"
 reqwest = { version = "0.12", features = ["json"], optional = true }
-fuzzy-parser = "0.1"
+
+# Derive macros
+llm-toolkit-macros = { workspace = true, optional = true }
+quick-xml = { workspace = true, optional = true }
 
 [dev-dependencies]
 strum.workspace = true
@@ -43,9 +50,32 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tempfile = "3.8"
 
 [features]
-default = []
-derive = ["llm-toolkit-macros"]
-agent = ["tokio", "tokio-util", "futures", "derive", "tracing-subscriber"]
+default = ["essential"]
+
+# Essential Core - prompt, extract, intent, models (minimal dependencies)
+# Use this for structured prompts and LLM output extraction without agent overhead
+essential = []
+
+# Derive macros (ToPrompt, ToPromptSet, define_intent)
+derive = ["llm-toolkit-macros", "quick-xml"]
+
+# JSON Schema support (for context types)
+schema = ["schemars"]
+
+# Agent with CLI spawn (claude, gemini, codex, llama-cpp)
+agent = [
+    "tokio",
+    "tokio-util",
+    "futures",
+    "derive",
+    "async-trait",
+    "tracing",
+    "tracing-log",
+    "tracing-subscriber",
+    "rand",
+    "log",
+    "schema",
+]
 
 # API client features (direct HTTP API calls without CLI dependency)
 gemini-api = ["agent", "reqwest"]

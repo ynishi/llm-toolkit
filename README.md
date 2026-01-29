@@ -29,18 +29,29 @@ High-level LLM frameworks like LangChain can be problematic in Rust. Their heavy
 
 ```toml
 [dependencies]
-llm-toolkit = "0.59"
+# Essential Core (default) - prompt, extract, intent, models
+# Minimal dependencies, no async runtime required
+llm-toolkit = "0.60"
 
-# With derive macros
-llm-toolkit = { version = "0.59", features = ["derive"] }
+# With derive macros (ToPrompt, define_intent)
+llm-toolkit = { version = "0.60", features = ["derive"] }
 
-# With full agent support
-llm-toolkit = { version = "0.59", features = ["agent"] }
+# With agent CLI support (claude, gemini, codex, llama-cpp)
+llm-toolkit = { version = "0.60", features = ["agent"] }
 
 # With direct API clients (no CLI dependency)
-llm-toolkit = { version = "0.59", features = ["all-apis"] }
+llm-toolkit = { version = "0.60", features = ["all-apis"] }
 # Or individual: "anthropic-api", "gemini-api", "openai-api"
 ```
+
+### Feature Tiers
+
+| Tier | Features | Use Case |
+|------|----------|----------|
+| **Essential** | `default` | Prompt templates, JSON extraction, intent parsing |
+| **Essential + Derive** | `derive` | Add `#[derive(ToPrompt)]`, `#[define_intent]` macros |
+| **Agent** | `agent` | CLI-based LLM agents (typed, async) |
+| **Full** | `all-apis` | Direct HTTP API calls without CLI |
 
 ### Extract JSON from LLM Response
 
