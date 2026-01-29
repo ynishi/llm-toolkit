@@ -16,7 +16,7 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use llm_toolkit::agent::impls::LlamaCppServerAgent;
+//! use llm_toolkit::agent::impls::{LlamaCppServerAgent, ChatTemplate};
 //! use llm_toolkit::agent::Agent;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,7 +26,7 @@
 //! // Custom endpoint and chat template
 //! let agent = LlamaCppServerAgent::new()
 //!     .with_endpoint("http://192.168.1.100:8080")
-//!     .with_chat_template(ChatTemplate::Llama3)
+//!     .with_chat_template(ChatTemplate::Qwen)
 //!     .with_temperature(0.7);
 //!
 //! let response = agent.execute("Hello, world!".into()).await?;
@@ -48,9 +48,10 @@ const DEFAULT_TOP_P: f32 = 0.9;
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 /// Chat template format for different model families.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum ChatTemplate {
     /// Llama 3 format
+    #[default]
     Llama3,
     /// Qwen format (Qwen, Qwen2, Qwen2.5)
     Qwen,
@@ -68,12 +69,6 @@ pub enum ChatTemplate {
         user_suffix: String,
         assistant_prefix: String,
     },
-}
-
-impl Default for ChatTemplate {
-    fn default() -> Self {
-        ChatTemplate::Llama3
-    }
 }
 
 impl ChatTemplate {
@@ -110,7 +105,10 @@ impl ChatTemplate {
                 user_suffix,
                 assistant_prefix,
             } => {
-                format!("{}{}{}{}", user_prefix, prompt, user_suffix, assistant_prefix)
+                format!(
+                    "{}{}{}{}",
+                    user_prefix, prompt, user_suffix, assistant_prefix
+                )
             }
         }
     }
@@ -211,8 +209,8 @@ impl LlamaCppServerAgent {
     /// - `LLAMA_SERVER_MAX_TOKENS` (optional, defaults to 512)
     /// - `LLAMA_SERVER_TEMPERATURE` (optional, defaults to 0.7)
     pub fn from_env() -> Self {
-        let endpoint = env::var("LLAMA_SERVER_ENDPOINT")
-            .unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string());
+        let endpoint =
+            env::var("LLAMA_SERVER_ENDPOINT").unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string());
         let max_tokens = env::var("LLAMA_SERVER_MAX_TOKENS")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -298,9 +296,12 @@ impl LlamaCppServerAgent {
     /// Gets the number of available slots on the server.
     pub async fn available_slots(&self) -> Result<usize, AgentError> {
         let url = format!("{}/slots", self.config.endpoint);
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            AgentError::ExecutionFailed(format!("Failed to get slots: {}", e))
-        })?;
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| AgentError::ExecutionFailed(format!("Failed to get slots: {}", e)))?;
 
         let slots: Vec<serde_json::Value> = response.json().await.map_err(|e| {
             AgentError::ExecutionFailed(format!("Failed to parse slots response: {}", e))
@@ -360,9 +361,10 @@ impl LlamaCppServerAgent {
             });
         }
 
-        let completion: CompletionResponse = response.json().await.map_err(|e| {
-            AgentError::ExecutionFailed(format!("Failed to parse response: {}", e))
-        })?;
+        let completion: CompletionResponse = response
+            .json()
+            .await
+            .map_err(|e| AgentError::ExecutionFailed(format!("Failed to parse response: {}", e)))?;
 
         Ok(completion.content)
     }

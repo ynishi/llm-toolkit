@@ -18,8 +18,8 @@
 //! cargo run --example llama_cpp_server_basic --features llama-cpp-server
 //! ```
 
-use llm_toolkit::agent::impls::{ChatTemplate, LlamaCppServerAgent};
 use llm_toolkit::agent::Agent;
+use llm_toolkit::agent::impls::{ChatTemplate, LlamaCppServerAgent};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -140,7 +140,9 @@ async fn main() {
         "   Endpoint (from LLAMA_SERVER_ENDPOINT or default): {}",
         env_agent.endpoint()
     );
-    println!("   Variables: LLAMA_SERVER_ENDPOINT, LLAMA_SERVER_MAX_TOKENS, LLAMA_SERVER_TEMPERATURE\n");
+    println!(
+        "   Variables: LLAMA_SERVER_ENDPOINT, LLAMA_SERVER_MAX_TOKENS, LLAMA_SERVER_TEMPERATURE\n"
+    );
 
     println!("=== Example Complete ===");
 }

@@ -14,11 +14,6 @@ llm-toolkit = { version = "0.59", features = ["gemini-api"] }
 llm-toolkit = { version = "0.59", features = ["openai-api"] }
 llm-toolkit = { version = "0.59", features = ["ollama-api"] }
 llm-toolkit = { version = "0.59", features = ["llama-cpp-server"] }
-llm-toolkit = { version = "0.59", features = ["llama-cpp-native"] }
-
-# With GPU acceleration (macOS Metal or NVIDIA CUDA)
-llm-toolkit = { version = "0.59", features = ["llama-cpp-native", "metal"] }
-llm-toolkit = { version = "0.59", features = ["llama-cpp-native", "cuda"] }
 
 # All providers
 llm-toolkit = { version = "0.59", features = ["all-apis"] }
@@ -273,62 +268,6 @@ let response = agent.execute("Hello, world!".into()).await?;
 2. Download a GGUF model
 3. Start the server: `llama-server -m model.gguf --port 8080`
 
-### LlamaCppNativeAgent
-
-For native llama.cpp inference without HTTP server (in-process):
-
-```rust
-use llm_toolkit::agent::impls::{LlamaCppNativeAgent, LlamaCppNativeConfig, NativeChatTemplate};
-use llm_toolkit::agent::Agent;
-
-// Use a preset model (auto-downloads from HuggingFace)
-let agent = LlamaCppNativeAgent::try_new(LlamaCppNativeConfig::qwen_0_5b())?;
-
-// Custom configuration with GPU acceleration
-let agent = LlamaCppNativeAgent::try_new(
-    LlamaCppNativeConfig::lfm2_1b()
-        .with_gpu_layers(32)
-        .with_max_tokens(256)
-        .with_temperature(0.7)
-        .with_system_prompt("You are a helpful assistant")
-)?;
-
-// From local GGUF file
-let agent = LlamaCppNativeAgent::try_new(
-    LlamaCppNativeConfig::from_local("/path/to/model.gguf")
-        .with_chat_template(NativeChatTemplate::Llama3)
-)?;
-
-let response = agent.execute("Hello, world!".into()).await?;
-```
-
-**Model Presets:**
-- `LlamaCppNativeConfig::qwen_0_5b()` - Qwen 2.5 0.5B (ultra lightweight)
-- `LlamaCppNativeConfig::qwen_1_5b()` - Qwen 2.5 1.5B
-- `LlamaCppNativeConfig::qwen_3b()` - Qwen 2.5 3B
-- `LlamaCppNativeConfig::lfm2_1b()` - LiquidAI LFM2.5 1.2B
-- `LlamaCppNativeConfig::llama3_1b()` - Llama 3.2 1B
-- `LlamaCppNativeConfig::llama3_3b()` - Llama 3.2 3B
-- `LlamaCppNativeConfig::phi3_mini()` - Microsoft Phi-3 Mini
-
-**Chat Templates:**
-- `NativeChatTemplate::Llama3` - Llama 3 format
-- `NativeChatTemplate::Qwen` - Qwen/Qwen2/Qwen2.5 format
-- `NativeChatTemplate::Lfm2` - LiquidAI LFM2 format
-- `NativeChatTemplate::Mistral` - Mistral/Mixtral format
-- `NativeChatTemplate::ChatMl` - Generic ChatML format
-- `NativeChatTemplate::None` - Raw prompt (no template)
-
-**GPU Acceleration:**
-- macOS: Enable `metal` feature
-- NVIDIA: Enable `cuda` feature
-- Use `.with_gpu_layers(N)` to offload N layers to GPU
-
-**Advantages over LlamaCppServerAgent:**
-- No HTTP overhead (in-process inference)
-- Automatic model download from HuggingFace
-- Simpler setup (no external server)
-
 ## Environment Variables
 
 | Provider | API Key Variable | Model Variable |
@@ -393,7 +332,7 @@ Retryable status codes: `429`, `500`, `502`, `503`, `504`
 | Use case | Development, advanced features | Production, simple integration |
 
 **CLI Agents:** `ClaudeCodeAgent`, `GeminiAgent`, `CodexAgent`
-**API Clients:** `AnthropicApiAgent`, `GeminiApiAgent`, `OpenAIApiAgent`, `OllamaApiAgent`, `LlamaCppServerAgent`, `LlamaCppNativeAgent`
+**API Clients:** `AnthropicApiAgent`, `GeminiApiAgent`, `OpenAIApiAgent`, `OllamaApiAgent`, `LlamaCppServerAgent`
 
 ## Future Direction
 
