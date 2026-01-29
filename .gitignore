@@ -24,3 +24,4 @@ target
 
 # Remove Cargo.lock from gitignore if creating a binary crate
 Cargo.lock
+.claude/
