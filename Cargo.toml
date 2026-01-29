@@ -30,3 +30,4 @@ base64 = "0.22"
 quick-xml = { version = "0.38.3", features = ["serde"] }
 rand = "0.8"
 futures = "0.3"
+ollama-rs = { version = "0.2", features = ["default"] }

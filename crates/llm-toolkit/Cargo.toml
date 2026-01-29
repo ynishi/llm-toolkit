@@ -38,6 +38,9 @@ tokio-util = { version = "0.7", optional = true }
 futures = { workspace = true, optional = true }
 reqwest = { version = "0.12", features = ["json"], optional = true }
 
+# Ollama API
+ollama-rs = { workspace = true, optional = true }
+
 # Derive macros
 llm-toolkit-macros = { workspace = true, optional = true }
 quick-xml = { workspace = true, optional = true }
@@ -81,7 +84,8 @@ agent = [
 gemini-api = ["agent", "reqwest"]
 openai-api = ["agent", "reqwest"]
 anthropic-api = ["agent", "reqwest"]
-all-apis = ["gemini-api", "openai-api", "anthropic-api"]
+ollama-api = ["agent", "ollama-rs"]
+all-apis = ["gemini-api", "openai-api", "anthropic-api", "ollama-api"]
 
 [[example]]
 name = "derive_prompt"
