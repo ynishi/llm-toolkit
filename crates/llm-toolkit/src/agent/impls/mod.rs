@@ -13,6 +13,8 @@ pub mod retry;
 pub mod anthropic_api;
 #[cfg(feature = "gemini-api")]
 pub mod gemini_api;
+#[cfg(feature = "llama-cpp-native")]
+pub mod llama_cpp_native;
 #[cfg(feature = "llama-cpp-server")]
 pub mod llama_cpp_server;
 #[cfg(feature = "ollama-api")]
@@ -38,6 +40,8 @@ pub use codex_agent::CodexModel;
 pub use anthropic_api::AnthropicApiAgent;
 #[cfg(feature = "gemini-api")]
 pub use gemini_api::GeminiApiAgent;
+#[cfg(feature = "llama-cpp-native")]
+pub use llama_cpp_native::{LlamaCppNativeAgent, LlamaCppNativeConfig, NativeChatTemplate};
 #[cfg(feature = "llama-cpp-server")]
 pub use llama_cpp_server::{ChatTemplate, LlamaCppServerAgent, LlamaCppServerConfig};
 #[cfg(feature = "ollama-api")]
