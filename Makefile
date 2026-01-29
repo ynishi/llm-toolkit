@@ -14,6 +14,9 @@ test-all:
 
 
 # 全Example（外部API依存含む）
+# Note: ollama_basic requires running Ollama server, run separately:
+#   cargo run --example ollama_basic --features ollama-api
+
 EXAMPLES := \
 	derive_prompt_enum \
 	derive_prompt_for \

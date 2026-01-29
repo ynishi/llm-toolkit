@@ -12,6 +12,7 @@ Enable API clients via Cargo features:
 llm-toolkit = { version = "0.59", features = ["anthropic-api"] }
 llm-toolkit = { version = "0.59", features = ["gemini-api"] }
 llm-toolkit = { version = "0.59", features = ["openai-api"] }
+llm-toolkit = { version = "0.59", features = ["ollama-api"] }
 
 # All providers
 llm-toolkit = { version = "0.59", features = ["all-apis"] }
@@ -187,6 +188,40 @@ let agent = OpenAIApiAgent::new("your-api-key", OpenAIModel::Gpt4o.as_api_id())
 let response = agent.execute("Explain quantum computing".into()).await?;
 ```
 
+### OllamaApiAgent
+
+For local LLM inference with Ollama:
+
+```rust
+use llm_toolkit::agent::impls::OllamaApiAgent;
+use llm_toolkit::agent::Agent;
+
+// Default configuration (localhost:11434, llama3)
+let agent = OllamaApiAgent::new();
+
+// Custom model and endpoint
+let agent = OllamaApiAgent::new()
+    .with_endpoint("http://192.168.1.100:11434")
+    .with_model("qwen2.5-coder:1.5b")
+    .with_system_prompt("You are a helpful assistant");
+
+// From environment variables (OLLAMA_HOST, OLLAMA_MODEL)
+let agent = OllamaApiAgent::from_env();
+
+// Health check and model listing
+if agent.is_healthy().await {
+    let models = agent.list_models().await?;
+    println!("Available models: {:?}", models);
+}
+
+let response = agent.execute("Hello, world!".into()).await?;
+```
+
+**Prerequisites:**
+1. Install Ollama: https://ollama.ai/download
+2. Pull a model: `ollama pull llama3`
+3. Start the server: `ollama serve`
+
 ## Environment Variables
 
 | Provider | API Key Variable | Model Variable |
@@ -194,6 +229,7 @@ let response = agent.execute("Explain quantum computing".into()).await?;
 | Anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` |
 | Gemini | `GEMINI_API_KEY` | `GEMINI_MODEL` |
 | OpenAI | `OPENAI_API_KEY` | `OPENAI_MODEL` |
+| Ollama | `OLLAMA_HOST` | `OLLAMA_MODEL` |
 
 ## Multi-Modal Support
 
@@ -249,7 +285,7 @@ Retryable status codes: `429`, `500`, `502`, `503`, `504`
 | Use case | Development, advanced features | Production, simple integration |
 
 **CLI Agents:** `ClaudeCodeAgent`, `GeminiAgent`, `CodexAgent`
-**API Clients:** `AnthropicApiAgent`, `GeminiApiAgent`, `OpenAIApiAgent`
+**API Clients:** `AnthropicApiAgent`, `GeminiApiAgent`, `OpenAIApiAgent`, `OllamaApiAgent`
 
 ## Future Direction
 

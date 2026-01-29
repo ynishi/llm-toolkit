@@ -12,7 +12,7 @@ macro_rules! debug_log {
 
 #[cfg(not(feature = "log"))]
 macro_rules! debug_log {
-    ($($arg:tt)*) => { }
+    ($($arg:tt)*) => {};
 }
 
 /// Flexible content extractor with multiple strategies
