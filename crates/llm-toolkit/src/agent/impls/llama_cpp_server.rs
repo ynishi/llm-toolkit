@@ -81,7 +81,7 @@ impl ChatTemplate {
                     prompt
                 )
             }
-            ChatTemplate::Qwen => {
+            ChatTemplate::Qwen | ChatTemplate::ChatMl => {
                 format!(
                     "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
                     prompt
@@ -92,12 +92,6 @@ impl ChatTemplate {
             }
             ChatTemplate::Mistral => {
                 format!("[INST] {} [/INST]", prompt)
-            }
-            ChatTemplate::ChatMl => {
-                format!(
-                    "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-                    prompt
-                )
             }
             ChatTemplate::None => prompt.to_string(),
             ChatTemplate::Custom {
