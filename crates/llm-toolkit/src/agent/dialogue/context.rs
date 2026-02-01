@@ -215,6 +215,9 @@ pub enum TalkStyle {
 
     /// Planning session - structured, forward-thinking, action-oriented.
     Planning,
+
+    /// Research session - fact-based, source-aware, expertise-driven investigation.
+    Research,
 }
 
 impl ToPrompt for TalkStyle {
@@ -349,6 +352,31 @@ This is a structured planning session. Think ahead and create actionable plans.
 - Identify dependencies and constraints
 - Suggest risk mitigation strategies
 - Focus on practical, executable planning"#
+                .to_string(),
+
+            Self::Research => r#"## Dialogue Style: Research Session
+
+This is a fact-based research session. Focus on gathering reliable information from trusted sources.
+
+## Guidelines
+- **Prioritize facts**: Base all claims on verifiable evidence
+- **Use trusted sources**: Select sources appropriate to your expertise
+- **Evaluate credibility**: Assess source reliability before citing
+- **Be transparent**: Distinguish facts from interpretation
+- **Acknowledge uncertainty**: State when information is incomplete
+
+## Source Selection by Expertise
+Each participant selects sources aligned with their domain:
+- User perspective → Real user feedback, social media, reviews
+- Technical domain → Documentation, specifications, benchmarks
+- Scientific domain → Peer-reviewed papers, journals
+- Business domain → Market data, industry reports
+
+## Expected Behavior
+- Gather information before forming conclusions
+- Cite sources and explain their relevance
+- Cross-reference multiple sources when possible
+- Clearly state confidence levels in findings"#
                 .to_string(),
         }
     }
@@ -522,6 +550,7 @@ mod tests {
                 "constructive review",
             ),
             (TalkStyle::Planning, "Planning Session", "Think forward"),
+            (TalkStyle::Research, "Research Session", "fact-based"),
         ];
 
         for (style, expected_header, expected_keyword) in styles {
