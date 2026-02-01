@@ -256,12 +256,14 @@ let response = agent.execute("Hello, world!".into()).await?;
 
 **Chat Templates:**
 - `ChatTemplate::Llama3` - Llama 3 format (default)
-- `ChatTemplate::Qwen` - Qwen/Qwen2/Qwen2.5 format
+- `ChatTemplate::Qwen` - Qwen/Qwen2/Qwen2.5 format (ChatML-based)
+- `ChatTemplate::ChatMl` - Generic ChatML format (same as Qwen)
 - `ChatTemplate::Mistral` - Mistral/Mixtral format
 - `ChatTemplate::Lfm2` - Sakana LFM2 format
-- `ChatTemplate::ChatMl` - Generic ChatML format
 - `ChatTemplate::None` - Raw prompt (no template)
 - `ChatTemplate::Custom { ... }` - Custom template
+
+> **Note:** `Qwen` and `ChatMl` use identical formatting (`<|im_start|>/<|im_end|>` tokens). Use `Qwen` for Qwen models and `ChatMl` for other ChatML-compatible models.
 
 **Prerequisites:**
 1. Build llama.cpp: https://github.com/ggerganov/llama.cpp
