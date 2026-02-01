@@ -97,7 +97,39 @@ let context = DialogueContext::default()
 
 ## Custom Talk Styles
 
-Implement `ToPrompt` to create custom talk styles:
+### Using TalkStyleTemplate (Recommended)
+
+The simplest way to create custom styles is with `TalkStyleTemplate`:
+
+```rust
+use llm_toolkit::agent::dialogue::{TalkStyle, TalkStyleTemplate, DialogueContext};
+
+// Create a custom template with builder pattern
+let template = TalkStyleTemplate::new("Security Audit")
+    .with_description("Review code for security vulnerabilities and best practices.")
+    .with_guideline("Check for injection vulnerabilities (SQL, command, etc.)")
+    .with_guideline("Verify input validation and sanitization")
+    .with_guideline("Review authentication and authorization logic")
+    .with_expected_behavior("Reference CVE IDs when applicable")
+    .with_expected_behavior("Suggest specific remediation steps");
+
+// Use via TalkStyle::Template variant
+let context = DialogueContext::default()
+    .with_talk_style(TalkStyle::Template(template));
+```
+
+`TalkStyleTemplate` fields:
+
+| Field | Description |
+|-------|-------------|
+| `name` | Style name displayed in the prompt header |
+| `description` | Brief description of the session's purpose |
+| `guidelines` | List of guidelines for participants |
+| `expected_behaviors` | List of expected behaviors during the session |
+
+### Using ToPrompt Trait (Advanced)
+
+For more control, implement `ToPrompt` directly:
 
 ```rust
 use llm_toolkit::prompt::ToPrompt;
@@ -121,7 +153,7 @@ impl ToPrompt for TechnicalReview {
     }
 }
 
-// Use with DialogueContext
+// Use with DialogueContext (requires explicit type parameters)
 let context: DialogueContext<TechnicalReview, String> = DialogueContext::new()
     .with_talk_style(TechnicalReview {
         focus_areas: vec!["memory safety".into(), "error handling".into()],

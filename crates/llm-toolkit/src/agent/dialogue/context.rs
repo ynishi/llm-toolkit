@@ -189,11 +189,147 @@ where
     }
 }
 
+/// Custom talk style template for user-defined dialogue styles.
+///
+/// This struct allows users to define custom talk styles by providing
+/// structured data instead of implementing `ToPrompt` manually.
+///
+/// # Example
+///
+/// ```rust
+/// use llm_toolkit::agent::dialogue::{TalkStyle, TalkStyleTemplate};
+///
+/// let custom = TalkStyleTemplate::new("Code Review")
+///     .with_description("A focused code review session for Rust projects.")
+///     .with_guideline("Focus on memory safety and ownership patterns")
+///     .with_guideline("Check for proper error handling with Result types")
+///     .with_guideline("Verify that unsafe blocks are justified and documented")
+///     .with_expected_behavior("Provide specific line references")
+///     .with_expected_behavior("Suggest idiomatic Rust alternatives");
+///
+/// let style = TalkStyle::Template(custom);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TalkStyleTemplate {
+    /// The name of the talk style (e.g., "Code Review", "Architecture Discussion")
+    pub name: String,
+
+    /// A brief description of the session's purpose
+    pub description: String,
+
+    /// Guidelines for participants to follow
+    pub guidelines: Vec<String>,
+
+    /// Expected behaviors during the session
+    pub expected_behaviors: Vec<String>,
+}
+
+impl TalkStyleTemplate {
+    /// Creates a new TalkStyleTemplate with the given name.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: String::new(),
+            guidelines: Vec::new(),
+            expected_behaviors: Vec::new(),
+        }
+    }
+
+    /// Sets the description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    /// Adds a guideline.
+    pub fn with_guideline(mut self, guideline: impl Into<String>) -> Self {
+        self.guidelines.push(guideline.into());
+        self
+    }
+
+    /// Adds multiple guidelines.
+    pub fn with_guidelines(
+        mut self,
+        guidelines: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.guidelines
+            .extend(guidelines.into_iter().map(Into::into));
+        self
+    }
+
+    /// Adds an expected behavior.
+    pub fn with_expected_behavior(mut self, behavior: impl Into<String>) -> Self {
+        self.expected_behaviors.push(behavior.into());
+        self
+    }
+
+    /// Adds multiple expected behaviors.
+    pub fn with_expected_behaviors(
+        mut self,
+        behaviors: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.expected_behaviors
+            .extend(behaviors.into_iter().map(Into::into));
+        self
+    }
+}
+
+impl ToPrompt for TalkStyleTemplate {
+    fn to_prompt(&self) -> String {
+        let mut prompt = format!("## Dialogue Style: {}\n\n", self.name);
+
+        if !self.description.is_empty() {
+            prompt.push_str(&self.description);
+            prompt.push_str("\n\n");
+        }
+
+        if !self.guidelines.is_empty() {
+            prompt.push_str("## Guidelines\n");
+            for guideline in &self.guidelines {
+                prompt.push_str(&format!("- {}\n", guideline));
+            }
+            prompt.push('\n');
+        }
+
+        if !self.expected_behaviors.is_empty() {
+            prompt.push_str("## Expected Behavior\n");
+            for behavior in &self.expected_behaviors {
+                prompt.push_str(&format!("- {}\n", behavior));
+            }
+        }
+
+        prompt.trim_end().to_string()
+    }
+}
+
 /// Default talk styles for dialogues.
 ///
 /// These represent common conversation modes with predefined characteristics.
-/// Users can also create custom talk styles by implementing `ToPrompt` on their own types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Users can also create custom talk styles using `TalkStyle::Template` with
+/// a `TalkStyleTemplate`, or by implementing `ToPrompt` on their own types.
+///
+/// # Example: Using a predefined style
+///
+/// ```rust
+/// use llm_toolkit::agent::dialogue::{DialogueContext, TalkStyle};
+///
+/// let context = DialogueContext::default()
+///     .with_talk_style(TalkStyle::Brainstorm);
+/// ```
+///
+/// # Example: Using a custom template
+///
+/// ```rust
+/// use llm_toolkit::agent::dialogue::{TalkStyle, TalkStyleTemplate};
+///
+/// let custom = TalkStyleTemplate::new("Security Audit")
+///     .with_description("Review code for security vulnerabilities.")
+///     .with_guideline("Check for injection vulnerabilities")
+///     .with_guideline("Verify input validation");
+///
+/// let style = TalkStyle::Template(custom);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TalkStyle {
     /// Brainstorming session - creative, exploratory, building on ideas.
     Brainstorm,
@@ -218,6 +354,13 @@ pub enum TalkStyle {
 
     /// Research session - fact-based, source-aware, expertise-driven investigation.
     Research,
+
+    /// Custom template-based talk style.
+    ///
+    /// Use this variant when predefined styles don't fit your needs.
+    /// Provide a `TalkStyleTemplate` with custom name, description,
+    /// guidelines, and expected behaviors.
+    Template(TalkStyleTemplate),
 }
 
 impl ToPrompt for TalkStyle {
@@ -378,6 +521,8 @@ Each participant selects sources aligned with their domain:
 - Cross-reference multiple sources when possible
 - Clearly state confidence levels in findings"#
                 .to_string(),
+
+            Self::Template(template) => template.to_prompt(),
         }
     }
 }
@@ -554,7 +699,8 @@ mod tests {
         ];
 
         for (style, expected_header, expected_keyword) in styles {
-            let context: DialogueContext = DialogueContext::default().with_talk_style(style);
+            let context: DialogueContext =
+                DialogueContext::default().with_talk_style(style.clone());
             let prompt = context.to_prompt();
 
             assert!(
@@ -570,5 +716,97 @@ mod tests {
                 expected_keyword
             );
         }
+    }
+
+    #[test]
+    fn test_talk_style_template_basic() {
+        let template = TalkStyleTemplate::new("Code Review")
+            .with_description("A focused code review session.");
+
+        assert_eq!(template.name, "Code Review");
+        assert_eq!(template.description, "A focused code review session.");
+        assert!(template.guidelines.is_empty());
+        assert!(template.expected_behaviors.is_empty());
+    }
+
+    #[test]
+    fn test_talk_style_template_full() {
+        let template = TalkStyleTemplate::new("Security Audit")
+            .with_description("Review code for security vulnerabilities.")
+            .with_guideline("Check for injection vulnerabilities")
+            .with_guideline("Verify input validation")
+            .with_expected_behavior("Provide CVE references when applicable")
+            .with_expected_behavior("Suggest remediation steps");
+
+        assert_eq!(template.name, "Security Audit");
+        assert_eq!(template.guidelines.len(), 2);
+        assert_eq!(template.expected_behaviors.len(), 2);
+    }
+
+    #[test]
+    fn test_talk_style_template_to_prompt() {
+        let template = TalkStyleTemplate::new("Architecture Review")
+            .with_description("Discuss system architecture decisions.")
+            .with_guideline("Consider scalability implications")
+            .with_guideline("Evaluate trade-offs")
+            .with_expected_behavior("Draw diagrams when helpful")
+            .with_expected_behavior("Reference industry patterns");
+
+        let prompt = template.to_prompt();
+
+        assert!(prompt.contains("## Dialogue Style: Architecture Review"));
+        assert!(prompt.contains("Discuss system architecture decisions."));
+        assert!(prompt.contains("## Guidelines"));
+        assert!(prompt.contains("- Consider scalability implications"));
+        assert!(prompt.contains("- Evaluate trade-offs"));
+        assert!(prompt.contains("## Expected Behavior"));
+        assert!(prompt.contains("- Draw diagrams when helpful"));
+        assert!(prompt.contains("- Reference industry patterns"));
+    }
+
+    #[test]
+    fn test_talk_style_template_variant() {
+        let template = TalkStyleTemplate::new("Custom Style")
+            .with_description("A custom dialogue style.")
+            .with_guideline("Be creative");
+
+        let style = TalkStyle::Template(template);
+        let prompt = style.to_prompt();
+
+        assert!(prompt.contains("## Dialogue Style: Custom Style"));
+        assert!(prompt.contains("A custom dialogue style."));
+        assert!(prompt.contains("- Be creative"));
+    }
+
+    #[test]
+    fn test_talk_style_template_in_dialogue_context() {
+        let template = TalkStyleTemplate::new("Performance Review")
+            .with_description("Analyze performance bottlenecks.")
+            .with_guideline("Use profiling data")
+            .with_expected_behavior("Provide benchmark comparisons");
+
+        let context: DialogueContext = DialogueContext::default()
+            .with_talk_style(TalkStyle::Template(template))
+            .with_environment("Production analysis");
+
+        let prompt = context.to_prompt();
+
+        assert!(prompt.contains("# Dialogue Context"));
+        assert!(prompt.contains("## Environment"));
+        assert!(prompt.contains("Production analysis"));
+        assert!(prompt.contains("## Dialogue Style: Performance Review"));
+        assert!(prompt.contains("Analyze performance bottlenecks."));
+        assert!(prompt.contains("- Use profiling data"));
+        assert!(prompt.contains("- Provide benchmark comparisons"));
+    }
+
+    #[test]
+    fn test_talk_style_template_with_multiple_guidelines() {
+        let template = TalkStyleTemplate::new("Multi")
+            .with_guidelines(["one", "two", "three"])
+            .with_expected_behaviors(["a", "b"]);
+
+        assert_eq!(template.guidelines, vec!["one", "two", "three"]);
+        assert_eq!(template.expected_behaviors, vec!["a", "b"]);
     }
 }
