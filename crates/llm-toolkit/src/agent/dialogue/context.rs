@@ -313,7 +313,7 @@ impl ToPrompt for TalkStyleTemplate {
 /// ```rust
 /// use llm_toolkit::agent::dialogue::{DialogueContext, TalkStyle};
 ///
-/// let context = DialogueContext::default()
+/// let context: DialogueContext<TalkStyle, &str> = DialogueContext::default()
 ///     .with_talk_style(TalkStyle::Brainstorm);
 /// ```
 ///

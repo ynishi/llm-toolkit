@@ -115,7 +115,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, error, trace};
 
 // Re-export key types
-pub use context::{DialogueContext, TalkStyle};
+pub use context::{DialogueContext, TalkStyle, TalkStyleTemplate};
 pub use message::{
     DialogueMessage, MessageId, MessageMetadata, MessageOrigin, Speaker, format_messages_to_prompt,
 };
