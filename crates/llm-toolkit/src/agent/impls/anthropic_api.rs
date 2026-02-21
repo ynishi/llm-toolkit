@@ -15,10 +15,10 @@
 //! let response = agent.execute("Hello, world!".into()).await?;
 //!
 //! // Direct API key
-//! let agent = AnthropicApiAgent::new("your-api-key", "claude-sonnet-4-20250514");
+//! let agent = AnthropicApiAgent::new("your-api-key", "claude-sonnet-4-6");
 //!
 //! // With options
-//! let agent = AnthropicApiAgent::new("your-api-key", "claude-sonnet-4-20250514")
+//! let agent = AnthropicApiAgent::new("your-api-key", "claude-sonnet-4-6")
 //!     .with_system("You are a helpful assistant")
 //!     .with_max_tokens(4096);
 //! # Ok(())
@@ -64,7 +64,7 @@ impl AnthropicApiAgent {
     ///
     /// Environment variables:
     /// - `ANTHROPIC_API_KEY` (required)
-    /// - `ANTHROPIC_MODEL` (optional, defaults to Claude Sonnet 4.5)
+    /// - `ANTHROPIC_MODEL` (optional, defaults to Claude Sonnet 4.6)
     pub fn try_from_env() -> Result<Self, AgentError> {
         let api_key = env::var("ANTHROPIC_API_KEY").map_err(|_| {
             AgentError::ExecutionFailed(
@@ -353,15 +353,15 @@ mod tests {
 
     #[test]
     fn test_anthropic_api_agent_creation() {
-        let agent = AnthropicApiAgent::new("test-key", "claude-sonnet-4-20250514");
-        assert_eq!(agent.model, "claude-sonnet-4-20250514");
+        let agent = AnthropicApiAgent::new("test-key", "claude-sonnet-4-6");
+        assert_eq!(agent.model, "claude-sonnet-4-6");
         assert!(agent.system.is_none());
         assert_eq!(agent.max_tokens, 4096);
     }
 
     #[test]
     fn test_builder_methods() {
-        let agent = AnthropicApiAgent::new("test-key", "claude-sonnet-4-20250514")
+        let agent = AnthropicApiAgent::new("test-key", "claude-sonnet-4-6")
             .with_model("claude-opus-4-20250514")
             .with_system("You are a helpful assistant")
             .with_max_tokens(8192);
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn test_request_serialization() {
         let request = CreateMessageRequest {
-            model: "claude-sonnet-4-20250514".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
                 content: vec![ContentBlock::Text {
@@ -389,7 +389,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&request).unwrap();
-        assert!(json.contains("\"model\":\"claude-sonnet-4-20250514\""));
+        assert!(json.contains("\"model\":\"claude-sonnet-4-6\""));
         assert!(json.contains("\"role\":\"user\""));
         assert!(json.contains("\"type\":\"text\""));
         assert!(json.contains("\"max_tokens\":4096"));
@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn test_request_serialization_with_system() {
         let request = CreateMessageRequest {
-            model: "claude-sonnet-4-20250514".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
                 content: vec![ContentBlock::Text {
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn test_request_serialization_with_image() {
         let request = CreateMessageRequest {
-            model: "claude-sonnet-4-20250514".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
                 content: vec![

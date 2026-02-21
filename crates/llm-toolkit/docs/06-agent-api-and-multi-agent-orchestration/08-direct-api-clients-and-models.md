@@ -36,52 +36,57 @@ The `models` module provides enum-based model identifiers that prevent typos and
 use llm_toolkit::models::ClaudeModel;
 
 // Use predefined models
-let model = ClaudeModel::Opus45;
-assert_eq!(model.as_api_id(), "claude-opus-4-5-20251124");
-assert_eq!(model.as_cli_name(), "claude-opus-4.5");
+let model = ClaudeModel::Opus46;
+assert_eq!(model.as_api_id(), "claude-opus-4-6");
+assert_eq!(model.as_cli_name(), "claude-opus-4.6");
 
 // Parse from string (shorthand or full name)
-let model: ClaudeModel = "opus".parse().unwrap();
-let model: ClaudeModel = "sonnet-4.5".parse().unwrap();
+let model: ClaudeModel = "opus".parse().unwrap();    // Opus46
+let model: ClaudeModel = "sonnet-4.6".parse().unwrap();
 
 // Custom model (validated - must start with "claude-")
-let model: ClaudeModel = "claude-future-model-2026".parse().unwrap();
+let model: ClaudeModel = "claude-future-model-2027".parse().unwrap();
 
 // Invalid prefix fails
-let result: Result<ClaudeModel, _> = "gpt-4o".parse();
+let result: Result<ClaudeModel, _> = "gpt-5".parse();
 assert!(result.is_err());
 ```
 
 **Available Variants:**
 | Variant | API ID | CLI Name |
 |---------|--------|----------|
-| `Opus45` | `claude-opus-4-5-20251124` | `claude-opus-4.5` |
+| `Opus46` | `claude-opus-4-6` | `claude-opus-4.6` |
+| `Sonnet46` (default) | `claude-sonnet-4-6` | `claude-sonnet-4.6` |
+| `Haiku45` | `claude-haiku-4-5-20251001` | `claude-haiku-4.5` |
+| `Opus45` | `claude-opus-4-5-20251101` | `claude-opus-4.5` |
 | `Sonnet45` | `claude-sonnet-4-5-20250929` | `claude-sonnet-4.5` |
 | `Opus41` | `claude-opus-4-1-20250805` | `claude-opus-4.1` |
 | `Opus4` | `claude-opus-4-20250514` | `claude-opus-4` |
 | `Sonnet4` | `claude-sonnet-4-20250514` | `claude-sonnet-4` |
-| `Haiku35` | `claude-3-5-haiku-20241022` | `claude-haiku-3.5` |
 
 ### GeminiModel
 
 ```rust
 use llm_toolkit::models::GeminiModel;
 
-let model = GeminiModel::Flash3;
-assert_eq!(model.as_api_id(), "gemini-3-flash");
+let model = GeminiModel::Pro31;
+assert_eq!(model.as_api_id(), "gemini-3.1-pro-preview");
 
 // Parse shortcuts
-let model: GeminiModel = "flash".parse().unwrap();  // Flash25 (default)
-let model: GeminiModel = "flash-3".parse().unwrap(); // Flash3
+let model: GeminiModel = "flash".parse().unwrap();    // Flash25 (default)
+let model: GeminiModel = "flash-3".parse().unwrap();   // Flash3
+let model: GeminiModel = "pro-3.1".parse().unwrap();   // Pro31
 ```
 
 **Available Variants:**
 | Variant | API ID | CLI Name |
 |---------|--------|----------|
-| `Flash3` | `gemini-3-flash` | `flash-3` |
-| `Pro3` | `gemini-3-pro` | `pro-3` |
+| `Pro31` | `gemini-3.1-pro-preview` | `pro-3.1` |
+| `Flash3` | `gemini-3-flash-preview` | `flash-3` |
+| `Pro3` | `gemini-3-pro-preview` | `pro-3` |
 | `Flash25` (default) | `gemini-2.5-flash` | `flash` |
 | `Pro25` | `gemini-2.5-pro` | `pro` |
+| `FlashLite25` | `gemini-2.5-flash-lite` | `flash-lite` |
 | `Flash20` | `gemini-2.0-flash` | `flash-2.0` |
 
 ### OpenAIModel
@@ -93,17 +98,17 @@ let model = OpenAIModel::Gpt52;
 assert_eq!(model.as_api_id(), "gpt-5.2");
 
 // Parse shortcuts
-let model: OpenAIModel = "4o".parse().unwrap();
-let model: OpenAIModel = "codex".parse().unwrap(); // Gpt51Codex
+let model: OpenAIModel = "5".parse().unwrap();       // Gpt5 (default)
+let model: OpenAIModel = "codex".parse().unwrap();   // Gpt52Codex
 let model: OpenAIModel = "o3".parse().unwrap();
 ```
 
 **Available Variants:**
 | Category | Variant | API ID |
 |----------|---------|--------|
-| GPT-5 Series | `Gpt52`, `Gpt51`, `Gpt5`, `Gpt5Mini`, `Gpt5Nano` | `gpt-5.2`, `gpt-5.1`, etc. |
-| Codex Series | `Gpt51Codex`, `Gpt51CodexMini`, `Gpt5Codex`, `Gpt5CodexMini` | `gpt-5.1-codex`, etc. |
-| GPT-4 Series | `Gpt41`, `Gpt41Mini`, `Gpt4o` (default), `Gpt4oMini` | `gpt-4.1`, `gpt-4o`, etc. |
+| GPT-5 Series | `Gpt52`, `Gpt52Pro`, `Gpt51`, `Gpt5` (default), `Gpt5Mini` | `gpt-5.2`, `gpt-5.2-pro`, etc. |
+| Codex Series | `Gpt52Codex`, `Gpt51Codex`, `Gpt51CodexMini`, `Gpt5Codex`, `Gpt5CodexMini` | `gpt-5.2-codex`, etc. |
+| GPT-4 Series | `Gpt41`, `Gpt41Mini`, `Gpt4o`, `Gpt4oMini` | `gpt-4.1`, `gpt-4o`, etc. |
 | O-Series | `O3Pro`, `O3`, `O3Mini`, `O1`, `O1Pro` | `o3-pro`, `o3`, etc. |
 
 ### Provider-Agnostic Model
@@ -132,11 +137,11 @@ use llm_toolkit::models::ClaudeModel;
 let agent = AnthropicApiAgent::try_from_env()?;
 
 // Direct API key with model
-let agent = AnthropicApiAgent::new("your-api-key", "claude-sonnet-4-20250514");
+let agent = AnthropicApiAgent::new("your-api-key", "claude-sonnet-4-6");
 
 // Using typed model
-let agent = AnthropicApiAgent::new("your-api-key", ClaudeModel::Sonnet45.as_api_id())
-    .with_claude_model(ClaudeModel::Opus45)  // Override with typed model
+let agent = AnthropicApiAgent::new("your-api-key", ClaudeModel::Sonnet46.as_api_id())
+    .with_claude_model(ClaudeModel::Opus46)  // Override with typed model
     .with_system("You are a helpful assistant")
     .with_max_tokens(4096);
 
@@ -154,12 +159,12 @@ use llm_toolkit::models::GeminiModel;
 // From environment variable (GEMINI_API_KEY)
 let agent = GeminiApiAgent::try_from_env()?;
 
-// With Gemini 3 thinking capabilities
+// With Gemini 3.1 thinking capabilities
 let agent = GeminiApiAgent::try_gemini_3_from_env(true)?  // enable Google Search
     .with_thinking_level("HIGH");
 
 // Using typed model
-let agent = GeminiApiAgent::new("your-api-key", GeminiModel::Pro3.as_api_id())
+let agent = GeminiApiAgent::new("your-api-key", GeminiModel::Pro31.as_api_id())
     .with_gemini_model(GeminiModel::Flash3)
     .with_system_instruction("You are a helpful assistant")
     .with_google_search(true);
@@ -182,7 +187,7 @@ use llm_toolkit::models::OpenAIModel;
 let agent = OpenAIApiAgent::try_from_env()?;
 
 // Using typed model
-let agent = OpenAIApiAgent::new("your-api-key", OpenAIModel::Gpt4o.as_api_id())
+let agent = OpenAIApiAgent::new("your-api-key", OpenAIModel::Gpt5.as_api_id())
     .with_openai_model(OpenAIModel::Gpt52)
     .with_max_tokens(4096);
 

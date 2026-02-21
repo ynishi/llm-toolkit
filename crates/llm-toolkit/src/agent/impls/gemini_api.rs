@@ -21,8 +21,8 @@
 //! // Direct API key
 //! let agent = GeminiApiAgent::new("your-api-key", "gemini-2.5-flash");
 //!
-//! // Gemini 3 with thinking capabilities
-//! let agent_3 = GeminiApiAgent::new("your-api-key", "gemini-3-pro-preview")
+//! // Gemini 3.1 with thinking capabilities
+//! let agent_3 = GeminiApiAgent::new("your-api-key", "gemini-3.1-pro-preview")
 //!     .with_thinking_level("HIGH")
 //!     .with_google_search(true);
 //! # Ok(())
@@ -87,11 +87,11 @@ impl GeminiApiAgent {
         Ok(Self::new(api_key, model))
     }
 
-    /// Creates a Gemini 3 agent with thinking capabilities from environment.
+    /// Creates a Gemini 3.1 agent with thinking capabilities from environment.
     ///
     /// This is a convenience method that:
     /// - Loads API key from GEMINI_API_KEY
-    /// - Sets model to gemini-3-pro-preview
+    /// - Sets model to gemini-3.1-pro-preview
     /// - Enables HIGH thinking level
     /// - Optionally enables Google Search tool
     pub fn try_gemini_3_from_env(enable_search: bool) -> Result<Self, AgentError> {
@@ -99,7 +99,7 @@ impl GeminiApiAgent {
             AgentError::ExecutionFailed("GEMINI_API_KEY environment variable not set".to_string())
         })?;
 
-        let mut agent = Self::new(api_key, "gemini-3-pro-preview").with_thinking_level("HIGH");
+        let mut agent = Self::new(api_key, "gemini-3.1-pro-preview").with_thinking_level("HIGH");
 
         if enable_search {
             agent = agent.with_google_search(true);

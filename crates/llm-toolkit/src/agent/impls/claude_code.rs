@@ -84,7 +84,7 @@ impl ClaudeCodeAgent {
 
     /// Sets the model using a string identifier.
     ///
-    /// Accepts: "sonnet", "sonnet-4.5", "sonnet-4", "opus", "opus-4", etc.
+    /// Accepts: "sonnet", "sonnet-4.6", "sonnet-4.5", "opus", "opus-4.6", etc.
     /// See [`ClaudeModel`] for all supported variants.
     pub fn with_model_str(mut self, model: &str) -> Self {
         self.model = Some(model.parse().unwrap_or_default());

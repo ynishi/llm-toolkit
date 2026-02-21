@@ -15,10 +15,10 @@
 //! let response = agent.execute("Hello, world!".into()).await?;
 //!
 //! // Direct API key
-//! let agent = OpenAIApiAgent::new("your-api-key", "gpt-4o");
+//! let agent = OpenAIApiAgent::new("your-api-key", "gpt-5");
 //!
 //! // With options
-//! let agent = OpenAIApiAgent::new("your-api-key", "gpt-4o")
+//! let agent = OpenAIApiAgent::new("your-api-key", "gpt-5")
 //!     .with_max_tokens(4096);
 //! # Ok(())
 //! # }
@@ -61,7 +61,7 @@ impl OpenAIApiAgent {
     ///
     /// Environment variables:
     /// - `OPENAI_API_KEY` (required)
-    /// - `OPENAI_MODEL` (optional, defaults to GPT-4o)
+    /// - `OPENAI_MODEL` (optional, defaults to GPT-5)
     pub fn try_from_env() -> Result<Self, AgentError> {
         let api_key = env::var("OPENAI_API_KEY").map_err(|_| {
             AgentError::ExecutionFailed("OPENAI_API_KEY environment variable not set".to_string())
@@ -338,14 +338,14 @@ mod tests {
 
     #[test]
     fn test_openai_api_agent_creation() {
-        let agent = OpenAIApiAgent::new("test-key", "gpt-4o");
-        assert_eq!(agent.model, "gpt-4o");
+        let agent = OpenAIApiAgent::new("test-key", "gpt-5");
+        assert_eq!(agent.model, "gpt-5");
         assert!(agent.max_tokens.is_none());
     }
 
     #[test]
     fn test_builder_methods() {
-        let agent = OpenAIApiAgent::new("test-key", "gpt-4o")
+        let agent = OpenAIApiAgent::new("test-key", "gpt-5")
             .with_model("gpt-4o-mini")
             .with_max_tokens(4096);
 
@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn test_request_serialization() {
         let request = ChatCompletionRequest {
-            model: "gpt-4o".to_string(),
+            model: "gpt-5".to_string(),
             messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: vec![MessageContent::Text {
@@ -367,7 +367,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&request).unwrap();
-        assert!(json.contains("\"model\":\"gpt-4o\""));
+        assert!(json.contains("\"model\":\"gpt-5\""));
         assert!(json.contains("\"role\":\"user\""));
         assert!(json.contains("\"type\":\"text\""));
         assert!(json.contains("\"max_tokens\":1000"));
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn test_request_serialization_with_image() {
         let request = ChatCompletionRequest {
-            model: "gpt-4o".to_string(),
+            model: "gpt-5".to_string(),
             messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: vec![
