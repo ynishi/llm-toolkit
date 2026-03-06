@@ -28,8 +28,11 @@
 //! ```
 
 use crate::agent::{Agent, AgentError, Payload};
+use crate::attachment::Attachment;
 use async_trait::async_trait;
-use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use genai::chat::{Binary, ChatMessage, ChatOptions, ChatRequest, ContentPart, MessageContent};
 use genai::Client;
 
 /// Unified multi-provider LLM agent.
@@ -140,7 +143,7 @@ impl GenaiAgent {
         Some(opts)
     }
 
-    fn build_chat_request(&self, payload: &Payload) -> ChatRequest {
+    async fn build_chat_request(&self, payload: &Payload) -> Result<ChatRequest, AgentError> {
         let mut messages = Vec::new();
 
         if let Some(ref system) = self.system {
@@ -148,9 +151,58 @@ impl GenaiAgent {
         }
 
         let text = payload.to_text();
-        messages.push(ChatMessage::user(text));
+        let attachments = payload.attachments();
 
-        ChatRequest::new(messages)
+        if attachments.is_empty() {
+            messages.push(ChatMessage::user(text));
+        } else {
+            let mut parts: Vec<ContentPart> = Vec::new();
+
+            if !text.trim().is_empty() {
+                parts.push(ContentPart::Text(text));
+            }
+
+            for attachment in attachments {
+                let binary = Self::attachment_to_binary(attachment).await?;
+                parts.push(ContentPart::Binary(binary));
+            }
+
+            let content = MessageContent::from_parts(parts);
+            messages.push(ChatMessage::user(content));
+        }
+
+        Ok(ChatRequest::new(messages))
+    }
+
+    async fn attachment_to_binary(attachment: &Attachment) -> Result<Binary, AgentError> {
+        match attachment {
+            Attachment::Local(path) => Binary::from_file(path).map_err(|e| {
+                AgentError::ExecutionFailed(format!(
+                    "Failed to load local attachment for genai: {e}"
+                ))
+            }),
+            Attachment::Remote(url) => {
+                let mime = attachment
+                    .mime_type()
+                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                Ok(Binary::from_url(
+                    mime,
+                    url.as_str(),
+                    attachment.file_name(),
+                ))
+            }
+            Attachment::InMemory {
+                bytes,
+                file_name,
+                mime_type,
+            } => {
+                let mime = mime_type
+                    .clone()
+                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                let b64 = BASE64_STANDARD.encode(bytes);
+                Ok(Binary::from_base64(mime, b64, file_name.clone()))
+            }
+        }
     }
 }
 
@@ -164,7 +216,7 @@ impl Agent for GenaiAgent {
     }
 
     async fn execute(&self, payload: Payload) -> Result<Self::Output, AgentError> {
-        let chat_req = self.build_chat_request(&payload);
+        let chat_req = self.build_chat_request(&payload).await?;
         let chat_options = self.build_chat_options();
 
         let chat_res = self
@@ -234,21 +286,65 @@ mod tests {
         assert!(agent.build_chat_options().is_some());
     }
 
-    #[test]
-    fn test_chat_request_with_system() {
+    #[tokio::test]
+    async fn test_chat_request_with_system() {
         let agent = GenaiAgent::new("gpt-5").with_system("Be concise");
         let payload = Payload::text("Hello");
-        let req = agent.build_chat_request(&payload);
+        let req = agent.build_chat_request(&payload).await.unwrap();
         // ChatRequest should have 2 messages (system + user)
         assert_eq!(req.messages.len(), 2);
     }
 
-    #[test]
-    fn test_chat_request_without_system() {
+    #[tokio::test]
+    async fn test_chat_request_without_system() {
         let agent = GenaiAgent::new("gpt-5");
         let payload = Payload::text("Hello");
-        let req = agent.build_chat_request(&payload);
+        let req = agent.build_chat_request(&payload).await.unwrap();
         // ChatRequest should have 1 message (user only)
         assert_eq!(req.messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_chat_request_with_in_memory_attachment() {
+        let agent = GenaiAgent::new("gpt-5");
+        let payload = Payload::text("What is in this image?").with_attachment(
+            Attachment::in_memory_with_meta(
+                vec![0x89, 0x50, 0x4E, 0x47],
+                Some("test.png".to_string()),
+                Some("image/png".to_string()),
+            ),
+        );
+        let req = agent.build_chat_request(&payload).await.unwrap();
+        assert_eq!(req.messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_chat_request_with_remote_attachment() {
+        let agent = GenaiAgent::new("gpt-5");
+        let payload = Payload::text("Describe this")
+            .with_attachment(Attachment::remote("https://example.com/image.png"));
+        let req = agent.build_chat_request(&payload).await.unwrap();
+        assert_eq!(req.messages.len(), 1);
+    }
+
+    #[test]
+    fn test_attachment_to_binary_in_memory() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let attachment = Attachment::in_memory_with_meta(
+            vec![1, 2, 3],
+            Some("data.bin".to_string()),
+            Some("application/octet-stream".to_string()),
+        );
+        let binary = rt.block_on(GenaiAgent::attachment_to_binary(&attachment)).unwrap();
+        assert_eq!(binary.content_type, "application/octet-stream");
+        assert_eq!(binary.name, Some("data.bin".to_string()));
+    }
+
+    #[test]
+    fn test_attachment_to_binary_remote() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let attachment = Attachment::remote("https://example.com/photo.jpg");
+        let binary = rt.block_on(GenaiAgent::attachment_to_binary(&attachment)).unwrap();
+        assert_eq!(binary.content_type, "application/octet-stream");
     }
 }
