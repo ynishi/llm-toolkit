@@ -32,8 +32,8 @@ use crate::attachment::Attachment;
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use genai::chat::{Binary, ChatMessage, ChatOptions, ChatRequest, ContentPart, MessageContent};
 use genai::Client;
+use genai::chat::{Binary, ChatMessage, ChatOptions, ChatRequest, ContentPart, MessageContent};
 
 /// Unified multi-provider LLM agent.
 ///
@@ -185,11 +185,7 @@ impl GenaiAgent {
                 let mime = attachment
                     .mime_type()
                     .unwrap_or_else(|| "application/octet-stream".to_string());
-                Ok(Binary::from_url(
-                    mime,
-                    url.as_str(),
-                    attachment.file_name(),
-                ))
+                Ok(Binary::from_url(mime, url.as_str(), attachment.file_name()))
             }
             Attachment::InMemory {
                 bytes,
@@ -335,7 +331,9 @@ mod tests {
             Some("data.bin".to_string()),
             Some("application/octet-stream".to_string()),
         );
-        let binary = rt.block_on(GenaiAgent::attachment_to_binary(&attachment)).unwrap();
+        let binary = rt
+            .block_on(GenaiAgent::attachment_to_binary(&attachment))
+            .unwrap();
         assert_eq!(binary.content_type, "application/octet-stream");
         assert_eq!(binary.name, Some("data.bin".to_string()));
     }
@@ -344,7 +342,9 @@ mod tests {
     fn test_attachment_to_binary_remote() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let attachment = Attachment::remote("https://example.com/photo.jpg");
-        let binary = rt.block_on(GenaiAgent::attachment_to_binary(&attachment)).unwrap();
+        let binary = rt
+            .block_on(GenaiAgent::attachment_to_binary(&attachment))
+            .unwrap();
         assert_eq!(binary.content_type, "application/octet-stream");
     }
 }
