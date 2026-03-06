@@ -19,6 +19,8 @@ pub mod llama_cpp_server;
 pub mod ollama_api;
 #[cfg(feature = "openai-api")]
 pub mod openai_api;
+#[cfg(feature = "genai-api")]
+pub mod genai_api;
 
 pub use claude_code::{ClaudeCodeAgent, ClaudeCodeJsonAgent};
 pub use codex_agent::CodexAgent;
@@ -44,3 +46,5 @@ pub use llama_cpp_server::{ChatTemplate, LlamaCppServerAgent, LlamaCppServerConf
 pub use ollama_api::OllamaApiAgent;
 #[cfg(feature = "openai-api")]
 pub use openai_api::OpenAIApiAgent;
+#[cfg(feature = "genai-api")]
+pub use genai_api::GenaiAgent;
