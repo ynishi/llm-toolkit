@@ -1,4 +1,4 @@
-.PHONY: preflight publish publish-expertise test-examples test-examples-offline test test-all
+.PHONY: preflight publish publish-expertise test-examples test-examples-offline test-examples-genai test test-all
 
 # Run specific test with features
 # Usage: make test TARGET=test_full_dialogue_context_simple_format
@@ -64,6 +64,10 @@ EXAMPLES := \
 	test_ordered_builders \
 	rich_error_demo
 
+# GenAI examples (require API keys for respective providers)
+GENAI_EXAMPLES := \
+	genai_basic
+
 # 外部API依存なしのExample（E2Eテストとして実行可能）
 # Note: check_agent_availability と codex_agent_basic は外部CLIチェック用なので除外
 OFFLINE_EXAMPLES := $(filter-out orchestrator_streaming persona_dialogue persona_macro_test check_agent_availability codex_agent_basic,$(EXAMPLES))
@@ -101,6 +105,17 @@ test-examples-offline:
 	done
 	@echo ""
 	@echo "✅ All offline examples passed!"
+
+# GenAI examples (require API keys: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY)
+test-examples-genai:
+	@echo "🌐 Running GenAI examples (requires API keys)..."
+	@for name in $(GENAI_EXAMPLES); do \
+		echo ""; \
+		echo "▶ Running $$name..."; \
+		cargo run --example $$name --package llm-toolkit --features="genai-api" || exit 1; \
+	done
+	@echo ""
+	@echo "✅ All GenAI examples passed!"
 
 # Run checks for all workspace members
 preflight: test-examples-offline

@@ -174,3 +174,7 @@ required-features = ["ollama-api"]
 name = "llama_cpp_server_basic"
 required-features = ["llama-cpp-server"]
 
+[[example]]
+name = "genai_basic"
+required-features = ["genai-api"]
+
