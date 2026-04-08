@@ -43,7 +43,7 @@ ollama-rs = { workspace = true, optional = true }
 
 
 # GenAI (unified multi-provider LLM client)
-genai = { version = "0.6.0-beta.3", optional = true }
+genai = { version = "=0.6.0-beta.15", optional = true }
 
 # Derive macros
 llm-toolkit-macros = { workspace = true, optional = true }
