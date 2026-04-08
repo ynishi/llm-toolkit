@@ -72,18 +72,19 @@ impl Drop for TempAttachmentDir {
 ///
 /// Format: `{timestamp_hex}_{random_hex}`
 fn generate_session_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
 
-    // Generate random component using timestamp-based seed
-    // This avoids needing the `rand` crate dependency
-    let random = (timestamp % 0xFFFFFFFF) as u32;
-
-    format!("{:x}_{:x}", timestamp, random)
+    format!("{:x}_{:x}_{:x}", timestamp, pid, counter)
 }
 
 /// Generates a unique filename for an attachment.
@@ -261,9 +262,10 @@ mod tests {
 
         // Should be hex format
         let parts: Vec<&str> = id1.split('_').collect();
-        assert_eq!(parts.len(), 2);
+        assert_eq!(parts.len(), 3);
         assert!(u128::from_str_radix(parts[0], 16).is_ok());
         assert!(u32::from_str_radix(parts[1], 16).is_ok());
+        assert!(u64::from_str_radix(parts[2], 16).is_ok());
     }
 
     #[test]
