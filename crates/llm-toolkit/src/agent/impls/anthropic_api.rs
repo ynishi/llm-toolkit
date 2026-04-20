@@ -20,7 +20,8 @@
 //! // With options
 //! let agent = AnthropicApiAgent::new("your-api-key", "claude-sonnet-4-6")
 //!     .with_system("You are a helpful assistant")
-//!     .with_max_tokens(4096);
+//!     .with_max_tokens(4096)
+//!     .with_timeout_secs(60);
 //! # Ok(())
 //! # }
 //! ```
@@ -46,6 +47,7 @@ pub struct AnthropicApiAgent {
     model: String,
     system: Option<String>,
     max_tokens: u32,
+    request_timeout: Option<Duration>,
 }
 
 impl AnthropicApiAgent {
@@ -57,6 +59,7 @@ impl AnthropicApiAgent {
             model: model.into(),
             system: None,
             max_tokens: 4096,
+            request_timeout: None,
         }
     }
 
@@ -105,6 +108,12 @@ impl AnthropicApiAgent {
     /// Sets the maximum number of tokens to generate.
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
+        self
+    }
+
+    /// Sets a per-request timeout in seconds for Claude API calls.
+    pub fn with_timeout_secs(mut self, secs: u64) -> Self {
+        self.request_timeout = Some(Duration::from_secs(secs));
         self
     }
 
@@ -160,13 +169,19 @@ impl AnthropicApiAgent {
     }
 
     async fn send_request(&self, body: &CreateMessageRequest) -> Result<String, AgentError> {
-        let response = self
+        let mut request = self
             .client
             .post(BASE_URL)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json")
-            .json(body)
+            .json(body);
+
+        if let Some(timeout) = self.request_timeout {
+            request = request.timeout(timeout);
+        }
+
+        let response = request
             .send()
             .await
             .map_err(|err| AgentError::ProcessError {
@@ -357,6 +372,7 @@ mod tests {
         assert_eq!(agent.model, "claude-sonnet-4-6");
         assert!(agent.system.is_none());
         assert_eq!(agent.max_tokens, 4096);
+        assert!(agent.request_timeout.is_none());
     }
 
     #[test]
@@ -364,7 +380,8 @@ mod tests {
         let agent = AnthropicApiAgent::new("test-key", "claude-sonnet-4-6")
             .with_model("claude-opus-4-20250514")
             .with_system("You are a helpful assistant")
-            .with_max_tokens(8192);
+            .with_max_tokens(8192)
+            .with_timeout_secs(60);
 
         assert_eq!(agent.model, "claude-opus-4-20250514");
         assert_eq!(
@@ -372,6 +389,7 @@ mod tests {
             Some("You are a helpful assistant".to_string())
         );
         assert_eq!(agent.max_tokens, 8192);
+        assert_eq!(agent.request_timeout, Some(Duration::from_secs(60)));
     }
 
     #[test]

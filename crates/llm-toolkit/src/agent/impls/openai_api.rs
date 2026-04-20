@@ -19,7 +19,8 @@
 //!
 //! // With options
 //! let agent = OpenAIApiAgent::new("your-api-key", "gpt-5")
-//!     .with_max_tokens(4096);
+//!     .with_max_tokens(4096)
+//!     .with_timeout_secs(30);
 //! # Ok(())
 //! # }
 //! ```
@@ -44,6 +45,7 @@ pub struct OpenAIApiAgent {
     api_key: String,
     model: String,
     max_tokens: Option<u32>,
+    request_timeout: Option<Duration>,
 }
 
 impl OpenAIApiAgent {
@@ -54,6 +56,7 @@ impl OpenAIApiAgent {
             api_key: api_key.into(),
             model: model.into(),
             max_tokens: None,
+            request_timeout: None,
         }
     }
 
@@ -94,6 +97,12 @@ impl OpenAIApiAgent {
     /// Sets the maximum number of tokens to generate.
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    /// Sets a per-request timeout in seconds for OpenAI API calls.
+    pub fn with_timeout_secs(mut self, secs: u64) -> Self {
+        self.request_timeout = Some(Duration::from_secs(secs));
         self
     }
 
@@ -154,12 +163,18 @@ impl OpenAIApiAgent {
     }
 
     async fn send_request(&self, body: &ChatCompletionRequest) -> Result<String, AgentError> {
-        let response = self
+        let mut request = self
             .client
             .post(BASE_URL)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("content-type", "application/json")
-            .json(body)
+            .json(body);
+
+        if let Some(timeout) = self.request_timeout {
+            request = request.timeout(timeout);
+        }
+
+        let response = request
             .send()
             .await
             .map_err(|err| AgentError::ProcessError {
@@ -341,16 +356,19 @@ mod tests {
         let agent = OpenAIApiAgent::new("test-key", "gpt-5");
         assert_eq!(agent.model, "gpt-5");
         assert!(agent.max_tokens.is_none());
+        assert!(agent.request_timeout.is_none());
     }
 
     #[test]
     fn test_builder_methods() {
         let agent = OpenAIApiAgent::new("test-key", "gpt-5")
             .with_model("gpt-4o-mini")
-            .with_max_tokens(4096);
+            .with_max_tokens(4096)
+            .with_timeout_secs(30);
 
         assert_eq!(agent.model, "gpt-4o-mini");
         assert_eq!(agent.max_tokens, Some(4096));
+        assert_eq!(agent.request_timeout, Some(Duration::from_secs(30)));
     }
 
     #[test]

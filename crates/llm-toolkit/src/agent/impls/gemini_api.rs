@@ -24,7 +24,8 @@
 //! // Gemini 3.1 with thinking capabilities
 //! let agent_3 = GeminiApiAgent::new("your-api-key", "gemini-3.1-pro-preview")
 //!     .with_thinking_level("HIGH")
-//!     .with_google_search(true);
+//!     .with_google_search(true)
+//!     .with_timeout_secs(45);
 //! # Ok(())
 //! # }
 //! ```
@@ -50,6 +51,7 @@ pub struct GeminiApiAgent {
     system_instruction: Option<String>,
     thinking_level: Option<String>,
     enable_google_search: bool,
+    request_timeout: Option<Duration>,
 }
 
 impl GeminiApiAgent {
@@ -62,6 +64,7 @@ impl GeminiApiAgent {
             system_instruction: None,
             thinking_level: None,
             enable_google_search: false,
+            request_timeout: None,
         }
     }
 
@@ -139,6 +142,12 @@ impl GeminiApiAgent {
         self
     }
 
+    /// Sets a per-request timeout in seconds for Gemini API calls.
+    pub fn with_timeout_secs(mut self, secs: u64) -> Self {
+        self.request_timeout = Some(Duration::from_secs(secs));
+        self
+    }
+
     async fn build_parts(&self, payload: &Payload) -> Result<Vec<Part>, AgentError> {
         let mut parts = Vec::new();
         let text = payload.to_text();
@@ -190,10 +199,16 @@ impl GeminiApiAgent {
             api_key = self.api_key
         );
 
-        let response = self
+        let mut request = self
             .client
             .post(url)
-            .json(body)
+            .json(body);
+
+        if let Some(timeout) = self.request_timeout {
+            request = request.timeout(timeout);
+        }
+
+        let response = request
             .send()
             .await
             .map_err(|err| AgentError::ProcessError {
@@ -438,6 +453,7 @@ mod tests {
         assert!(agent.system_instruction.is_none());
         assert!(agent.thinking_level.is_none());
         assert!(!agent.enable_google_search);
+        assert!(agent.request_timeout.is_none());
     }
 
     #[test]
@@ -446,7 +462,8 @@ mod tests {
             .with_model("gemini-3-pro-preview")
             .with_system_instruction("You are a helpful assistant")
             .with_thinking_level("HIGH")
-            .with_google_search(true);
+            .with_google_search(true)
+            .with_timeout_secs(45);
 
         assert_eq!(agent.model, "gemini-3-pro-preview");
         assert_eq!(
@@ -455,6 +472,7 @@ mod tests {
         );
         assert_eq!(agent.thinking_level, Some("HIGH".to_string()));
         assert!(agent.enable_google_search);
+        assert_eq!(agent.request_timeout, Some(Duration::from_secs(45)));
     }
 
     #[test]
